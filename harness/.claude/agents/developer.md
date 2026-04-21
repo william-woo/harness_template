@@ -4,7 +4,7 @@ description: |
   코드 구현 전문 에이전트. feature_list.json에서 하나의 기능을 선택하여 구현하고
   단위 테스트를 작성한다. 항상 한 번에 하나의 기능만 처리한다.
   예: "Use the developer agent to implement F003"
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 tools: Read, Write, Edit, MultiEdit, Glob, Grep, Bash
 ---
 

@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/pre-bash-check.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-check.sh\"",
+            "timeout": 10
           }
         ]
       },
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/pre-write-check.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-write-check.sh\"",
+            "timeout": 10
           }
         ]
       }
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/post-write-check.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-write-check.sh\"",
+            "timeout": 15
           }
         ]
       }
@@ -36,7 +39,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-end.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end.sh\"",
+            "timeout": 10
           }
         ]
       }

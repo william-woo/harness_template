@@ -5,6 +5,8 @@
 # Claude Code stdin 구조:
 # { "tool_input": { "file_path": "...", ... }, ... }
 
+set -eo pipefail
+
 INPUT=$(cat)
 
 if command -v python3 >/dev/null 2>&1; then

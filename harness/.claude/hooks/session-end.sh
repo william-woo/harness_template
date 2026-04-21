@@ -2,6 +2,8 @@
 # .claude/hooks/session-end.sh
 # Stop 훅 — 세션 종료 시 미커밋 변경사항 경고
 
+set -eo pipefail
+
 UNCOMMITTED=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "$UNCOMMITTED" -gt "0" ]; then

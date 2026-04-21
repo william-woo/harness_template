@@ -4,7 +4,7 @@ description: |
   시스템 설계 전문 에이전트. 새로운 컴포넌트 설계, 기술 선택, 구조 변경이 필요할 때 호출하라.
   구현 전에 아키텍처를 명확히 정의하여 Developer 에이전트의 방향을 제시한다.
   예: "Use the architect agent to design the authentication system"
-model: claude-opus-4-5
+model: claude-opus-4-7
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 

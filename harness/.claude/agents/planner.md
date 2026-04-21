@@ -4,7 +4,7 @@ description: |
   프로젝트 기획 전문 에이전트. 요구사항을 분석하고 feature_list.json을 관리하며
   작업 우선순위를 결정한다. 프로젝트 초기화 및 새 기능 추가 요청 시 호출하라.
   예: "Use the planner agent to break down this requirement"
-model: claude-sonnet-4-5
+model: claude-sonnet-4-6
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 

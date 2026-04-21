@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # .claude/hooks/post-write-check.sh
-# PostToolUse(Write|Edit|MultiEdit) 훅 — 파일 작성 후 검증
+# PostToolUse(Write|Edit|MultiEdit) 훅 — 파일 작성 후 무결성 검증
 #
-# Claude Code stdin 구조 (PostToolUse):
-# {
-#   "tool_name": "Write",
-#   "tool_input": { "file_path": "...", "content": "..." },
-#   ...
-# }
-# 차단: exit 2 + stderr  /  허용: exit 0
+# feature_list.json 보호 정책:
+#   1) 항목 삭제 금지 (cancelled status로만 표시)
+#   2) passes: true → false/null 되돌리기 금지 (QA 재검증 없이)
+#   3) acceptance_criteria 개수 감소 금지 (기준 약화)
+#   4) status 역행 금지 (done→todo 등, review→in-progress만 예외)
+#   5) 필수 필드 누락 금지
+
+set -eo pipefail
 
 INPUT=$(cat)
 
@@ -19,7 +20,6 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     ti = d.get('tool_input', {})
-    # Write: file_path / Edit: path 또는 file_path
     print(ti.get('file_path') or ti.get('path') or '')
 except Exception:
     print('')
@@ -30,37 +30,134 @@ else
   exit 0
 fi
 
-[ -z "$FILE" ] && exit 0
+if [ -z "$FILE" ]; then
+  exit 0
+fi
 
-# ── feature_list.json 항목 삭제 감지 ──────────────
-if echo "$FILE" | grep -q "feature_list.json"; then
-  if git show HEAD:feature_list.json >/dev/null 2>&1; then
-    PREV_COUNT=$(git show HEAD:feature_list.json | python3 -c "
-import sys, json
-try: print(len(json.load(sys.stdin)))
-except: print(0)
-" 2>/dev/null || echo "0")
+# ── feature_list.json 무결성 검증 ──────────────────
+if echo "$FILE" | grep -qE '(^|/)feature_list\.json$'; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    exit 0
+  fi
 
-    CURR_COUNT=$(python3 -c "
-import json
-try: print(len(json.load(open('feature_list.json'))))
-except: print(0)
-" 2>/dev/null || echo "0")
+  PREV_TMP=$(mktemp)
+  CURR_TMP=$(mktemp)
+  trap 'rm -f "$PREV_TMP" "$CURR_TMP"' EXIT
 
-    if [ "$CURR_COUNT" -lt "$PREV_COUNT" ]; then
-      echo "🚫 [harness] feature_list.json 항목 삭제 감지!" >&2
-      echo "   이전: ${PREV_COUNT}개 → 현재: ${CURR_COUNT}개" >&2
-      echo "   feature_list.json 항목은 삭제 금지입니다. passes 필드만 수정하세요." >&2
-      exit 2
-    fi
+  # HEAD 버전 (없으면 빈 파일 = 초기 생성으로 간주)
+  git show HEAD:feature_list.json > "$PREV_TMP" 2>/dev/null || : > "$PREV_TMP"
+
+  if [ ! -f feature_list.json ]; then
+    echo "🚫 [harness] feature_list.json 파일을 찾을 수 없음" >&2
+    exit 2
+  fi
+  cp feature_list.json "$CURR_TMP"
+
+  VIOLATION=$(python3 - "$PREV_TMP" "$CURR_TMP" <<'PYEOF'
+import json, sys, os
+
+prev_path, curr_path = sys.argv[1], sys.argv[2]
+
+def load(path):
+    try:
+        if os.path.getsize(path) == 0:
+            return None
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return "PARSE_ERROR"
+
+curr = load(curr_path)
+if curr == "PARSE_ERROR":
+    print("현재 feature_list.json JSON 파싱 실패")
+    sys.exit(0)
+if curr is None:
+    print("feature_list.json이 비어있음")
+    sys.exit(0)
+if not isinstance(curr, list):
+    print("feature_list.json은 배열이어야 합니다")
+    sys.exit(0)
+
+# 필수 필드 검증
+required = ("id", "status", "passes")
+for i, f in enumerate(curr):
+    if not isinstance(f, dict):
+        print(f"[{i}] 객체가 아님")
+        sys.exit(0)
+    for req in required:
+        if req not in f:
+            print(f"[{i}] '{req}' 필드 누락 (id={f.get('id','?')})")
+            sys.exit(0)
+
+# 중복 id 검증
+ids = [f["id"] for f in curr]
+dups = {x for x in ids if ids.count(x) > 1}
+if dups:
+    print(f"중복 id 감지: {sorted(dups)}")
+    sys.exit(0)
+
+# 이전 버전과 비교 (HEAD 없으면 스킵)
+prev = load(prev_path)
+if prev is None or prev == "PARSE_ERROR":
+    sys.exit(0)
+if not isinstance(prev, list):
+    sys.exit(0)
+
+prev_by_id = {f["id"]: f for f in prev if isinstance(f, dict) and "id" in f}
+curr_by_id = {f["id"]: f for f in curr if isinstance(f, dict) and "id" in f}
+
+# 1) 항목 삭제 감지
+missing = set(prev_by_id) - set(curr_by_id)
+if missing:
+    print(f"항목 삭제 감지: {sorted(missing)} — 삭제 금지, status를 'cancelled'로 표시하세요")
+    sys.exit(0)
+
+status_order = {"todo": 0, "in-progress": 1, "review": 2, "qa": 3, "done": 4}
+
+for fid, prev_f in prev_by_id.items():
+    curr_f = curr_by_id.get(fid)
+    if curr_f is None:
+        continue
+
+    # 2) passes: true → 다른 값 되돌리기
+    if prev_f.get("passes") is True and curr_f.get("passes") is not True:
+        print(f"{fid}: passes 되돌리기 감지 (true → {curr_f.get('passes')}) — QA 재검증 필요")
+        sys.exit(0)
+
+    # 3) acceptance_criteria 개수 감소
+    prev_ac = prev_f.get("acceptance_criteria") or []
+    curr_ac = curr_f.get("acceptance_criteria") or []
+    if isinstance(prev_ac, list) and isinstance(curr_ac, list):
+        if len(curr_ac) < len(prev_ac):
+            print(f"{fid}: acceptance_criteria 감소 감지 ({len(prev_ac)} → {len(curr_ac)}) — 기준 약화 금지")
+            sys.exit(0)
+
+    # 4) status 역행 (done → 다른 상태, review → todo 등)
+    #    예외: review → in-progress (NEEDS REVISION 시 허용)
+    #    예외: * → cancelled (취소는 허용)
+    p_st = prev_f.get("status")
+    c_st = curr_f.get("status")
+    if c_st == "cancelled":
+        continue
+    if p_st in status_order and c_st in status_order:
+        if status_order[c_st] < status_order[p_st]:
+            if not (p_st == "review" and c_st == "in-progress"):
+                print(f"{fid}: status 역행 감지 ({p_st} → {c_st})")
+                sys.exit(0)
+PYEOF
+)
+
+  if [ -n "$VIOLATION" ]; then
+    echo "🚫 [harness] feature_list.json 무결성 위반" >&2
+    echo "   $VIOLATION" >&2
+    exit 2
   fi
 fi
 
 # ── .env 파일 직접 수정 경고 ──────────────────────
-if echo "$FILE" | grep -qE "^\.env$|/\.env$"; then
+if echo "$FILE" | grep -qE '(^|/)\.env(\.[^/]+)?$'; then
   echo "⚠️  [harness] .env 파일이 수정되었습니다." >&2
-  echo "   시크릿 값이 git에 커밋되지 않도록 주의하세요." >&2
-  # 경고만, 차단은 안 함 (exit 0)
+  echo "   시크릿 값이 git에 커밋되지 않도록 .gitignore 확인 필수." >&2
 fi
 
 exit 0
