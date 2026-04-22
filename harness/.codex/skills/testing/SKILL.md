@@ -1,11 +1,7 @@
----
-name: testing
-description: |
-  E2E 테스트 및 인수 검증 스킬. QA 에이전트가 기능 완료 여부를 검증할 때 사용한다.
-  acceptance_criteria를 기반으로 테스트 계획을 수립하고 실행한다.
----
-
 # Testing Skill
+
+> E2E 테스트 및 인수 검증 스킬. **QA 롤**이 기능 완료 여부를 검증할 때 사용한다.
+> `acceptance_criteria`를 기반으로 테스트 계획을 수립하고 실행한다.
 
 ## E2E 검증 전략
 
@@ -41,28 +37,28 @@ fi
 echo "✅ PASS: 잘못된 비밀번호 거부"
 ```
 
-### UI 기능 검증 (Puppeteer MCP)
+### UI 기능 검증 (Playwright/Puppeteer MCP)
 
-```javascript
-// Puppeteer MCP를 통한 브라우저 검증
-// Claude Code에서 mcp__puppeteer__ 도구 사용
+Codex CLI에서는 `~/.codex/config.toml`에 MCP 서버를 등록한 뒤 브라우저 자동화 툴을
+Codex 세션에서 바로 호출할 수 있다.
 
-// 1. 브라우저 실행
-await mcp.puppeteer.launch({ headless: true });
-
-// 2. 로그인 플로우 검증
-await mcp.puppeteer.navigate('http://localhost:3000/login');
-await mcp.puppeteer.fill('#email', 'test@example.com');
-await mcp.puppeteer.fill('#password', 'pass123');
-await mcp.puppeteer.click('button[type="submit"]');
-await mcp.puppeteer.waitForNavigation();
-
-// 3. 결과 확인
-const url = await mcp.puppeteer.getCurrentUrl();
-if (!url.includes('/dashboard')) {
-  throw new Error('로그인 후 대시보드로 이동하지 않음');
-}
+```toml
+# ~/.codex/config.toml
+[mcp_servers.playwright]
+command = "npx"
+args    = ["-y", "@playwright/mcp@latest"]
+enabled = true
 ```
+
+Codex 세션에서는 자연어로 지시하면 등록된 MCP 툴을 선택해서 실행한다.
+
+```
+브라우저로 http://localhost:3000/login 열고,
+#email 필드에 test@example.com, #password에 pass123 입력 후 로그인 버튼 클릭.
+navigation 이후 URL에 /dashboard 포함 여부 확인해줘.
+```
+
+검증 결과 요약을 `tests/e2e/FXXX-*.test.md` 로 저장해서 회귀 기록으로 남긴다.
 
 ## 인수 기준 → 테스트 변환
 

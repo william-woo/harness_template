@@ -1,6 +1,8 @@
-# /project:status — 프로젝트 현황 대시보드
+# /status — 프로젝트 현황 대시보드 (Codex CLI)
 
 프로젝트의 전체 진행 상황을 한눈에 확인한다.
+
+---
 
 ## 실행
 
@@ -52,6 +54,7 @@ if pending:
         'in-progress': '🔄',
         'review':      '👀',
         'qa':          '🧪',
+        'cancelled':   '⛔',
     }
     for f in pending:
         st = f.get('status', 'todo')
@@ -72,5 +75,11 @@ git log --oneline -10
 echo ""
 echo "📝 마지막 인계 내용"
 echo "─────────────────────────────────────────"
-tail -25 claude-progress.txt
+tail -25 codex-progress.txt
+
+# 4. Codex 샌드박스/승인 모드 리마인드
+echo ""
+echo "🔒 Codex 실행 모드"
+echo "─────────────────────────────────────────"
+echo "  현재 세션의 sandbox/approval 상태는 /permissions 로 확인하세요."
 ```

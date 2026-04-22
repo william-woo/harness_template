@@ -40,6 +40,7 @@ htmlcov/
 *.temp
 
 # 하네스 파일은 반드시 git에 포함 (팀 공유)
-# .claude/ 폴더 절대 gitignore 하지 말 것
-# claude-progress.txt 절대 gitignore 하지 말 것
+# .codex/ 폴더 절대 gitignore 하지 말 것
+# AGENTS.md 절대 gitignore 하지 말 것
+# codex-progress.txt 절대 gitignore 하지 말 것
 # feature_list.json 절대 gitignore 하지 말 것

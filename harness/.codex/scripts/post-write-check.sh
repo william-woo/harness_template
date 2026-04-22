@@ -1,59 +1,43 @@
 #!/usr/bin/env bash
-# .claude/hooks/post-write-check.sh
-# PostToolUse(Write|Edit|MultiEdit) 훅 — 파일 작성 후 무결성 검증
+# .codex/scripts/post-write-check.sh
+# feature_list.json 무결성 검증. 에이전트가 feature_list.json을 편집한 직후
+# 반드시 호출해야 합니다 (Codex CLI는 PostToolUse 훅이 없음).
 #
-# feature_list.json 보호 정책:
+# 사용법:
+#   bash .codex/scripts/post-write-check.sh
+#
+# 검증 항목:
 #   1) 항목 삭제 금지 (cancelled status로만 표시)
 #   2) passes: true → false/null 되돌리기 금지 (QA 재검증 없이)
 #   3) acceptance_criteria 개수 감소 금지 (기준 약화)
 #   4) status 역행 금지 (done→todo 등, review→in-progress만 예외)
-#   5) 필수 필드 누락 금지
+#   5) 필수 필드 누락 / 중복 id / 배열 타입 검증
+#
+# 반환:
+#   - 위반:  exit 2 + stderr 메시지  → 에이전트는 즉시 `git checkout -- feature_list.json`으로 되돌려야 함
+#   - 정상:  exit 0
 
 set -eo pipefail
 
-INPUT=$(cat)
+if [ ! -f feature_list.json ]; then
+  echo "🚫 [harness] feature_list.json 파일을 찾을 수 없음" >&2
+  exit 2
+fi
 
-# tool_input.file_path 추출
-if command -v python3 >/dev/null 2>&1; then
-  FILE=$(echo "$INPUT" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    ti = d.get('tool_input', {})
-    print(ti.get('file_path') or ti.get('path') or '')
-except Exception:
-    print('')
-")
-elif command -v jq >/dev/null 2>&1; then
-  FILE=$(echo "$INPUT" | jq -r '(.tool_input.file_path // .tool_input.path) // ""')
-else
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "⚠️  [harness] python3가 없어 feature_list.json 심층 검증을 건너뜁니다." >&2
   exit 0
 fi
 
-if [ -z "$FILE" ]; then
-  exit 0
-fi
+PREV_TMP=$(mktemp)
+CURR_TMP=$(mktemp)
+trap 'rm -f "$PREV_TMP" "$CURR_TMP"' EXIT
 
-# ── feature_list.json 무결성 검증 ──────────────────
-if echo "$FILE" | grep -qE '(^|/)feature_list\.json$'; then
-  if ! command -v python3 >/dev/null 2>&1; then
-    exit 0
-  fi
+# HEAD 버전 (없으면 빈 파일 = 초기 생성으로 간주)
+git show HEAD:feature_list.json > "$PREV_TMP" 2>/dev/null || : > "$PREV_TMP"
+cp feature_list.json "$CURR_TMP"
 
-  PREV_TMP=$(mktemp)
-  CURR_TMP=$(mktemp)
-  trap 'rm -f "$PREV_TMP" "$CURR_TMP"' EXIT
-
-  # HEAD 버전 (없으면 빈 파일 = 초기 생성으로 간주)
-  git show HEAD:feature_list.json > "$PREV_TMP" 2>/dev/null || : > "$PREV_TMP"
-
-  if [ ! -f feature_list.json ]; then
-    echo "🚫 [harness] feature_list.json 파일을 찾을 수 없음" >&2
-    exit 2
-  fi
-  cp feature_list.json "$CURR_TMP"
-
-  VIOLATION=$(python3 - "$PREV_TMP" "$CURR_TMP" <<'PYEOF'
+VIOLATION=$(python3 - "$PREV_TMP" "$CURR_TMP" <<'PYEOF'
 import json, sys, os
 
 prev_path, curr_path = sys.argv[1], sys.argv[2]
@@ -147,17 +131,12 @@ for fid, prev_f in prev_by_id.items():
 PYEOF
 )
 
-  if [ -n "$VIOLATION" ]; then
-    echo "🚫 [harness] feature_list.json 무결성 위반" >&2
-    echo "   $VIOLATION" >&2
-    exit 2
-  fi
+if [ -n "$VIOLATION" ]; then
+  echo "🚫 [harness] feature_list.json 무결성 위반" >&2
+  echo "   $VIOLATION" >&2
+  echo "   되돌리기: git checkout -- feature_list.json" >&2
+  exit 2
 fi
 
-# ── .env 파일 직접 수정 경고 ──────────────────────
-if echo "$FILE" | grep -qE '(^|/)\.env(\.[^/]+)?$'; then
-  echo "⚠️  [harness] .env 파일이 수정되었습니다." >&2
-  echo "   시크릿 값이 git에 커밋되지 않도록 .gitignore 확인 필수." >&2
-fi
-
+echo "✅ [harness] feature_list.json 무결성 OK"
 exit 0

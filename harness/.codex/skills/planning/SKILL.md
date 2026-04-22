@@ -1,11 +1,7 @@
----
-name: planning
-description: |
-  프로젝트 기획 및 feature_list.json 관리 스킬. Planner 에이전트가 사용한다.
-  요구사항을 검증 가능한 기능 목록으로 변환하는 방법을 안내한다.
----
-
 # Planning Skill
+
+> 프로젝트 기획 및 `feature_list.json` 관리 스킬. **Planner 롤**이 참조한다.
+> 요구사항을 검증 가능한 기능 목록으로 변환하는 방법을 안내한다.
 
 ## 요구사항 → 기능 분해 방법
 
@@ -53,10 +49,10 @@ F001 (환경 설정)
 ## feature_list.json 관리 규칙
 
 ```json
-// ✅ QA 에이전트만 변경 가능
+// ✅ QA 롤만 변경 가능
 { "passes": false }  →  { "passes": true }
 
-// ✅ 각 에이전트가 작업 흐름에 따라 변경
+// ✅ 각 롤이 작업 흐름에 따라 변경
 { "status": "todo" }
   → "in-progress"  (Developer/Architect 시작 시)
   → "review"       (Developer 구현 완료 시)
@@ -64,8 +60,18 @@ F001 (환경 설정)
   → "done"         (QA PASS 시, passes: true와 동시에)
 
 // ❌ 절대 금지
-- 기존 항목 삭제
+- 기존 항목 삭제 (취소는 status: "cancelled"로)
 - id 변경
 - acceptance_criteria 약화
-- passes: true 직접 설정 (QA 에이전트 전용)
+- passes: true 직접 설정 (QA 롤 전용)
 ```
+
+## 편집 후 필수 검증
+
+`feature_list.json`을 수정한 직후에는 반드시:
+
+```bash
+bash .codex/scripts/post-write-check.sh
+```
+
+실패 시 즉시 `git checkout -- feature_list.json` 으로 되돌리고 다시 작성합니다.

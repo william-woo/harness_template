@@ -65,5 +65,5 @@ echo "🌐 개발 서버 시작..."
 # ── 완료 ─────────────────────────────────────────────
 echo ""
 echo "✅ 환경 준비 완료!"
-echo "   다음 단계: cat claude-progress.txt 로 이전 작업 파악"
+echo "   다음 단계: cat codex-progress.txt 로 이전 작업 파악"
 echo ""
