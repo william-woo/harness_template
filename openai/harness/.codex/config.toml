@@ -1,0 +1,98 @@
+# .codex/config.toml
+# OpenAI Codex CLI 프로젝트 설정 파일
+# 사용자 전역 설정(~/.codex/config.toml)은 이 파일과 병합됩니다.
+#
+# 공식 레퍼런스: https://developers.openai.com/codex/config-reference
+#
+# ⚠️ 주의: Codex CLI에는 Claude Code 스타일의 PreToolUse / PostToolUse 훅이
+# 없습니다. 따라서 "차단"은 sandbox_mode + approval_policy 조합과
+# .codex/scripts/ 내부 검증 스크립트(에이전트가 스스로 호출)로 이루어집니다.
+
+# ───────────────────────────────────────────────
+# 모델 & 추론
+# ───────────────────────────────────────────────
+# 필요 시 프로젝트별로 모델을 고정할 수 있습니다.
+# model                  = "gpt-5.4"
+# model_provider         = "openai"
+model_reasoning_effort   = "medium"
+model_reasoning_summary  = "auto"
+
+# ───────────────────────────────────────────────
+# 승인 & 샌드박스
+# ───────────────────────────────────────────────
+# workspace-write: 워크스페이스 내부 쓰기만 허용. 네트워크/외부 디렉토리 차단.
+# on-request: 잠재적 위험 작업(네트워크, 샌드박스 이탈 등)에서 사용자 승인 요청.
+sandbox_mode     = "workspace-write"
+approval_policy  = "on-request"
+
+# ───────────────────────────────────────────────
+# 쉘 환경 정책
+# ───────────────────────────────────────────────
+[shell_environment_policy]
+inherit = "core"
+# 시크릿이 들어 있는 변수는 기본적으로 상속하지 않도록 한다.
+exclude = ["*TOKEN*", "*SECRET*", "*API_KEY*", "*PRIVATE*"]
+
+# ───────────────────────────────────────────────
+# AGENTS.md 로딩
+# ───────────────────────────────────────────────
+# AGENTS.md 최대 크기(바이트). 기본 32KiB.
+project_doc_max_bytes = 65536
+
+# ───────────────────────────────────────────────
+# 파일 링크
+# ───────────────────────────────────────────────
+# 출력 안에 파일 참조가 생기면 지정된 편집기 URI로 링크.
+file_opener = "vscode"
+
+# ───────────────────────────────────────────────
+# 터미널 UI
+# ───────────────────────────────────────────────
+[tui]
+notifications      = true
+alternate_screen   = "auto"
+# theme            = "dracula"
+
+# ───────────────────────────────────────────────
+# 히스토리 (세션 로그)
+# ───────────────────────────────────────────────
+[history]
+persistence = "save-all"
+max_bytes   = 10485760   # 10 MiB
+
+# ───────────────────────────────────────────────
+# MCP 서버 (선택)
+# ───────────────────────────────────────────────
+# 전역 설정(~/.codex/config.toml)에 두는 것이 일반적이지만,
+# 이 프로젝트에서만 사용할 MCP 서버는 여기에 정의할 수 있습니다.
+#
+# [mcp_servers.puppeteer]
+# command = "npx"
+# args    = ["-y", "@modelcontextprotocol/server-puppeteer"]
+# enabled = true
+#
+# [mcp_servers.postgres]
+# command = "npx"
+# args    = ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+# enabled = false
+
+# ───────────────────────────────────────────────
+# 프로파일
+# ───────────────────────────────────────────────
+# `codex --profile review` 식으로 상황별 설정 전환 가능.
+
+[profiles.review]
+# 리뷰·조사 세션: 실수로 파일을 수정하지 못하도록 읽기 전용.
+sandbox_mode     = "read-only"
+approval_policy  = "on-request"
+web_search       = "live"
+
+[profiles.exec]
+# 자동화된 배치 실행(CI 등). 절대 대화 없이 돌리고 싶을 때.
+approval_policy  = "never"
+sandbox_mode     = "workspace-write"
+
+[profiles.danger]
+# 위험 작업(예: 마이그레이션 스크립트 실행). 명시적으로만 전환.
+sandbox_mode     = "danger-full-access"
+approval_policy  = "on-request"

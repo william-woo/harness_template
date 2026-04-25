@@ -1,0 +1,46 @@
+# 환경 설정
+.env
+.env.local
+.env.*.local
+
+# 의존성
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 빌드 결과물
+dist/
+build/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 로그
+*.log
+logs/
+
+# 테스트 커버리지
+coverage/
+.nyc_output/
+htmlcov/
+
+# 임시 파일
+*.tmp
+*.temp
+
+# 하네스 파일은 반드시 git에 포함 (팀 공유)
+# .codex/ 폴더 절대 gitignore 하지 말 것
+# AGENTS.md 절대 gitignore 하지 말 것
+# codex-progress.txt 절대 gitignore 하지 말 것
+# feature_list.json 절대 gitignore 하지 말 것
