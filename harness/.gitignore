@@ -43,3 +43,8 @@ htmlcov/
 # .claude/ 폴더 절대 gitignore 하지 말 것
 # claude-progress.txt 절대 gitignore 하지 말 것
 # feature_list.json 절대 gitignore 하지 말 것
+# .claude/state/learnings.jsonl — 팀 학습 공유 (커밋 대상)
+# .claude/state/checkpoints/ — 세션 인계 체크포인트 (커밋 대상)
+
+# 하네스 세션 로컬 상태 (git에 포함하지 않음)
+.claude/state/freeze-dir.txt

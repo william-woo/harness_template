@@ -80,6 +80,49 @@ project-root/
 /project:status
 ```
 
+### 구조화된 세션 저장/복원 (Phase 1 업그레이드)
+```
+/project:context-save "<제목>"   # 현재 상태를 checkpoint 파일로 저장
+/project:context-restore         # 가장 최근 checkpoint 복원
+```
+
+### 프로젝트 학습 누적 (Phase 1 업그레이드)
+```
+/project:learn                   # 최근 학습 20개 표시
+/project:learn search <키워드>    # 학습 검색
+/project:learn add               # 수동 학습 추가
+/project:learn prune             # stale/conflict 정리
+/project:learn stats             # 통계
+/project:learn export            # CLAUDE.md 형식으로 내보내기
+```
+
+### 안전 모드 (Phase 1 업그레이드)
+```
+/project:freeze                  # 편집을 특정 디렉토리로 제한
+/project:unfreeze                # 편집 경계 해제
+/project:guard                   # 파괴 명령 차단 + 편집 경계 (통합)
+```
+
+### 자동화 파이프라인 (Phase 2 업그레이드)
+```
+/project:plan-full <요구사항>    # Planner→Architect→Reviewer 설계 체인
+/project:ship                    # diff 분석 → 필요한 리뷰만 제안
+/project:retro [--week|--month|--since FXXX]  # 회고 + 통계 + 학습 요약
+```
+
+---
+
+## 📂 상태 파일 (.claude/state/)
+
+Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
+
+| 파일/디렉토리 | 용도 | git 포함 여부 |
+|---|---|---|
+| `.claude/state/checkpoints/*.md` | 구조화된 세션 인계 (`/project:context-save` 생성) | ✅ 커밋 대상 |
+| `.claude/state/learnings.jsonl` | 프로젝트 학습 누적 로그 (JSONL) | ✅ 커밋 대상 |
+| `.claude/state/analytics.jsonl` | handoff·session_end·review 이벤트 로그 (`/project:retro` 분석용) | ✅ 커밋 대상 |
+| `.claude/state/freeze-dir.txt` | `/project:freeze` 경계 (세션 로컬) | ❌ gitignore |
+
 ---
 
 ## 🤖 에이전트 역할 분담

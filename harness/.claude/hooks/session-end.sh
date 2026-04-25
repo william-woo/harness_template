@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # .claude/hooks/session-end.sh
-# Stop 훅 — 세션 종료 시 미커밋 변경사항 경고
+# Stop 훅 — 세션 종료 시 미커밋 변경사항 경고 + analytics 이벤트 append
 
 set -eo pipefail
 
@@ -12,6 +12,18 @@ if [ "$UNCOMMITTED" -gt "0" ]; then
   echo "   - 미커밋 변경사항 ${UNCOMMITTED}개 존재" >&2
   echo "   - /project:handoff 실행을 권장합니다" >&2
   echo "   - 최소한 wip 커밋: git commit -am 'wip: 작업 내용'" >&2
+fi
+
+# analytics 이벤트 append (실패해도 세션 종료 막지 않음)
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+ANALYTICS_FILE="$PROJECT_DIR/.claude/state/analytics.jsonl"
+if [ -d "$PROJECT_DIR/.claude/state" ]; then
+  python3 -c "
+import json, datetime
+entry = {'ts': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+         'event': 'session_end', 'uncommitted': $UNCOMMITTED}
+print(json.dumps(entry, ensure_ascii=False))
+" >> "$ANALYTICS_FILE" 2>/dev/null || true
 fi
 
 # Stop 훅은 exit 0으로 종료 허용, exit 2로 종료 차단 가능

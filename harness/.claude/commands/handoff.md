@@ -1,32 +1,53 @@
 # /project:handoff — 세션 인계
 
 작업 세션을 마무리하고 다음 에이전트/세션에 깔끔하게 인계한다.
+구조화된 체크포인트 + `claude-progress.txt` 히스토리 로그를 모두 생성한다.
 
 ## 실행 순서
 
+### Step 1. 코드 상태 확인
+
 ```bash
-# 1. 코드 상태 확인
-npm test              # 테스트 모두 통과 확인
-npm run lint          # 린트 오류 없음 확인
+npm test              # 테스트 통과 (프로젝트 CLAUDE.md의 실제 명령어로 대체)
+npm run lint          # 린트 통과
 git status            # 커밋되지 않은 변경사항 확인
-
-# 2. 모든 변경사항 커밋 (미완성이면 wip 커밋)
-git add -A
-git commit -m "wip(FXXX): [현재까지 작업 내용]"
-# 또는 완료 시:
-# git commit -m "feat(FXXX): [구현 내용]"
-
-# 3. feature_list.json의 status 업데이트
-# 상황에 따라 적절한 status로 변경:
-# "in-progress" → 구현 중
-# "review"      → 구현 완료, Reviewer 대기
-# "qa"          → 리뷰 통과, QA 대기
-# "done"        → QA 통과 (passes: true와 동시에)
-
-# 4. claude-progress.txt 업데이트 (아래 형식 사용)
 ```
 
-## claude-progress.txt 업데이트 형식
+### Step 2. 변경사항 커밋
+
+```bash
+git add -A
+# 미완성 상태면 wip, 완료면 feat/fix
+git commit -m "wip(FXXX): [현재까지 작업 내용]"
+# 또는
+# git commit -m "feat(FXXX): [구현 내용]"
+```
+
+### Step 3. feature_list.json status 업데이트
+
+상황에 맞는 status로 변경:
+
+| 상황 | status |
+|---|---|
+| 구현 중 | `in-progress` |
+| 구현 완료, Reviewer 대기 | `review` |
+| 리뷰 통과, QA 대기 | `qa` |
+| QA 통과 | `done` (동시에 `passes: true`) |
+
+### Step 4. 구조화된 체크포인트 저장
+
+```
+/project:context-save "<현재 작업의 짧은 제목>"
+```
+
+이 커맨드가 자동으로 `.claude/state/checkpoints/<timestamp>-<title>.md` 를 생성하고 다음을 기록한다:
+- git 상태 스냅샷 (branch, files_modified, recent log)
+- Summary / Decisions Made / Remaining Work / Notes 4개 섹션
+- frontmatter에 `branch`, `feature_id`, `agent` 포함
+
+### Step 5. claude-progress.txt 에 요약 append
+
+체크포인트 파일의 **경로와 한 줄 요약**을 `claude-progress.txt`에 다음 형식으로 append:
 
 ```
 ============================================================
@@ -40,6 +61,8 @@ git commit -m "wip(FXXX): [현재까지 작업 내용]"
 현재 상태: [in-progress | review | qa | done]
 feature status: [변경 전] → [변경 후]
 
+체크포인트: .claude/state/checkpoints/<timestamp>-<title>.md
+
 파일 변경:
   - 추가: [파일 목록]
   - 수정: [파일 목록]
@@ -52,27 +75,74 @@ feature status: [변경 전] → [변경 후]
 ============================================================
 ```
 
+### Step 6. 학습 기록 (해당 시)
+
+이 세션에서 발견한 비자명한 패턴·함정·결정이 있으면:
+
+```
+/project:learn add
+```
+
+자동 기록 예:
+- Reviewer가 MUST 이슈 발견 → type: `pitfall`
+- QA가 엣지케이스 회귀 발견 → type: `pitfall`
+- Architect가 ADR 확정 → type: `architecture`
+- Developer가 비자명한 구현 패턴 발견 → type: `pattern`
+
+### Step 7. analytics 이벤트 append (자동)
+
+회고(`/project:retro`)에서 통계로 활용할 수 있도록 핸드오프 이벤트를 기록:
+
+```bash
+mkdir -p .claude/state
+# 환경변수에서 채울 수 있는 만큼 채우고, 없으면 생략
+FEATURE_ID="${FEATURE_ID:-}"
+AGENT="${AGENT:-}"
+STATUS_FROM="${STATUS_FROM:-}"
+STATUS_TO="${STATUS_TO:-}"
+FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+
+python3 - <<PY >> .claude/state/analytics.jsonl
+import json, datetime
+entry = {
+  "ts": datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+  "event": "handoff",
+  "feature_id": "$FEATURE_ID",
+  "agent": "$AGENT",
+  "status_from": "$STATUS_FROM",
+  "status_to": "$STATUS_TO",
+  "files_changed": int("$FILES_CHANGED" or 0),
+}
+print(json.dumps({k:v for k,v in entry.items() if v not in (None,"",0)}, ensure_ascii=False))
+PY
+```
+
+장기적으로 누적되어 `/project:retro` 가 분석한다.
+
 ## 인계 조건
 
 | 상황 | feature status | 다음 에이전트 |
 |---|---|---|
-| 구현 완료, 테스트 통과 | `review` | Reviewer 에이전트 |
-| 리뷰 APPROVED | `qa` | QA 에이전트 |
-| QA PASS | `done` + passes:true | Planner (다음 기능) |
-| 설계 필요 | `in-progress` | Architect 에이전트 |
-| 리뷰 NEEDS REVISION | `in-progress` | Developer 에이전트 |
+| 구현 완료, 테스트 통과 | `review` | Reviewer |
+| 리뷰 APPROVED | `qa` | QA |
+| QA PASS | `done` + passes:true | Planner (다음 Feature) |
+| 설계 필요 | `in-progress` | Architect |
+| 리뷰 NEEDS REVISION | `in-progress` | Developer |
 
-## 리뷰 반복 에스컬레이션 규칙
+## 리뷰 반복 에스컬레이션
 
-같은 Feature에서 NEEDS REVISION이 **3회 이상** 반복되면:
-- `claude-progress.txt`에 `ESCALATION` 태그 기록
+같은 Feature에서 NEEDS REVISION **3회 이상** 반복되면:
+- `claude-progress.txt`에 `[ESCALATION]` 태그 기록
 - Planner + Architect 에이전트를 호출하여 설계 재검토
 - Feature를 더 작은 단위로 분해할지 검토
+- 동시에 `/project:learn add` 로 `pitfall` 등록 권장
 
 ## 체크리스트
 
 - [ ] 모든 변경사항 커밋됨
 - [ ] 테스트 실패 없음
 - [ ] feature_list.json status 업데이트 완료
-- [ ] claude-progress.txt 업데이트 완료
+- [ ] `/project:context-save` 로 구조화된 체크포인트 저장 완료
+- [ ] `claude-progress.txt` 한 줄 요약 append 완료
 - [ ] 다음 작업 명확히 기술됨
+- [ ] (선택) 새 학습 `/project:learn add`

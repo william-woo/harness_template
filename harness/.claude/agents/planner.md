@@ -24,10 +24,30 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 
 ## 작업 프로세스
 
+### 0단계: 과거 학습 조회 (필수)
+
+요구사항 분석 전에 반드시 `.claude/state/learnings.jsonl`을 읽어 다음을 확인:
+
+```bash
+# 사용할 키워드를 사용자 요구사항에서 추출한 뒤
+/project:learn search <키워드>
+# 또는 전체 스캔
+/project:learn show
+```
+
+매칭되는 학습이 있으면:
+- **pitfall** 이 있으면 해당 실수를 반복하지 않도록 Feature 설계에 반영 (예: "이전에 `bcrypt-salt-hardcoded` 함정 — 환경변수화 필수")
+- **pattern** 이 있으면 해당 패턴을 acceptance_criteria 또는 description 에 암시
+- **architecture** 결정이 있으면 해당 결정을 따르는 Feature로 분해
+- **preference** 가 있으면 팀 선호를 반영 (예: "모든 API는 Pydantic 응답")
+
+학습이 없으면(초기 프로젝트) 이 단계는 건너뛰어도 무방.
+
 ### 1단계: 요구사항 분석
 - 사용자/팀의 요구사항 전체 파악
 - 불명확한 부분 질문으로 명확화
 - 기술적 제약 조건 파악
+- 0단계에서 조회한 학습과 충돌·중복이 있는지 확인
 
 ### 2단계: 기능 분해
 각 기능을 다음 형식으로 정의:
@@ -64,6 +84,22 @@ tools: Read, Write, Edit, Glob, Grep, Bash
 - critical → high → medium → low 순서로 정렬
 - `claude-progress.txt`에 계획 요약 작성
 - Developer/Architect 에이전트에 첫 번째 태스크 인계
+
+### 5단계: 재분해 시 학습 기록
+
+기존 Feature가 너무 크다고 판단해 더 작게 분해했다면 **반드시** 학습 기록:
+
+```
+/project:learn add
+```
+
+- type: `preference`
+- key: 예) `split-auth-from-authz`
+- insight: "인증과 권한 체크는 별도 Feature로 분해해야 테스트 커버리지가 올라감"
+- source: `planner`
+- confidence: 7 이상
+
+같은 실수(과도하게 큰 Feature)를 반복하지 않도록 기록해 둔다.
 
 ## 출력물
 
