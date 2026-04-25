@@ -110,6 +110,18 @@ project-root/
 /project:retro [--week|--month|--since FXXX]  # 회고 + 통계 + 학습 요약
 ```
 
+### Cross-project 영구 지식 (Phase 3 업그레이드 — F005 Brain)
+```
+/project:brain-sync              # 현재 프로젝트를 ~/.harness/brain.db 에 동기화
+/project:brain-search <질의>      # 모든 프로젝트의 learnings/ADRs/features 검색
+/project:brain-search <질의> --project <slug> --type pitfall
+/project:brain-stats             # 전체/프로젝트별 통계
+/project:brain-list              # 등록된 프로젝트 목록
+```
+
+> Brain DB 는 사용자 홈 (`~/.harness/brain.db`, SQLite, Python stdlib) 에 저장된다.
+> 외부 의존성 0, 옵셔널 — 호출하지 않으면 하네스 동작에 영향 없음.
+
 ---
 
 ## 📂 상태 파일 (.claude/state/)
