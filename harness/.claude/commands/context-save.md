@@ -66,10 +66,12 @@ CHECKPOINT_DIR="$CLAUDE_PROJECT_DIR/.claude/state/checkpoints"
 mkdir -p "$CHECKPOINT_DIR"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RAW="${TITLE_RAW:-untitled}"
-# 소문자화, 공백→하이픈, 허용 문자만, 60자 제한
+# 소문자화, 공백→하이픈, 허용 문자만, 연속 하이픈 단일화, 양끝 하이픈 제거, 60자 제한
 TITLE_SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' \
               | tr -s ' \t' '-' \
               | tr -cd 'a-z0-9.-' \
+              | tr -s '-' \
+              | sed 's/^-//;s/-$//' \
               | cut -c1-60)
 TITLE_SLUG="${TITLE_SLUG:-untitled}"
 FILE="$CHECKPOINT_DIR/${TIMESTAMP}-${TITLE_SLUG}.md"

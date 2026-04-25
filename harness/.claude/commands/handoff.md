@@ -91,32 +91,33 @@ feature status: [변경 전] → [변경 후]
 
 ### Step 7. analytics 이벤트 append (자동)
 
-회고(`/project:retro`)에서 통계로 활용할 수 있도록 핸드오프 이벤트를 기록:
+회고(`/project:retro`)에서 통계로 활용할 수 있도록 핸드오프 이벤트를 기록.
+**bash 환경변수 + Python os.environ 패턴** (heredoc 보간을 쓰지 않음 — 특수문자 안전):
 
 ```bash
 mkdir -p .claude/state
-# 환경변수에서 채울 수 있는 만큼 채우고, 없으면 생략
-FEATURE_ID="${FEATURE_ID:-}"
-AGENT="${AGENT:-}"
-STATUS_FROM="${STATUS_FROM:-}"
-STATUS_TO="${STATUS_TO:-}"
-FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+export FEATURE_ID="${FEATURE_ID:-}"
+export AGENT="${AGENT:-}"
+export STATUS_FROM="${STATUS_FROM:-}"
+export STATUS_TO="${STATUS_TO:-}"
+export FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ' || echo 0)
 
-python3 - <<PY >> .claude/state/analytics.jsonl
-import json, datetime
+python3 - <<'PY' >> .claude/state/analytics.jsonl
+import json, datetime, os
 entry = {
   "ts": datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
   "event": "handoff",
-  "feature_id": "$FEATURE_ID",
-  "agent": "$AGENT",
-  "status_from": "$STATUS_FROM",
-  "status_to": "$STATUS_TO",
-  "files_changed": int("$FILES_CHANGED" or 0),
+  "feature_id": os.environ.get("FEATURE_ID",""),
+  "agent": os.environ.get("AGENT",""),
+  "status_from": os.environ.get("STATUS_FROM",""),
+  "status_to": os.environ.get("STATUS_TO",""),
+  "files_changed": int(os.environ.get("FILES_CHANGED","0") or 0),
 }
 print(json.dumps({k:v for k,v in entry.items() if v not in (None,"",0)}, ensure_ascii=False))
 PY
 ```
 
+환경변수가 비어있어도 `event:handoff` + `ts` 만 있는 최소 이벤트가 기록됨.
 장기적으로 누적되어 `/project:retro` 가 분석한다.
 
 ## 인계 조건

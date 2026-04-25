@@ -104,12 +104,16 @@ else
 fi
 
 # ── main/master 브랜치 직접 커밋 방지 (단어 경계) ────
+# 단, 초기 커밋(아직 HEAD 없음)은 허용 — repo 초기 셋업 시 필요
 if echo "$NORMALIZED" | grep -qE '(^|[[:space:];|&])git[[:space:]]+commit([[:space:]]|$)'; then
   CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
   if [ "$CURRENT_BRANCH" = "main" ] || [ "$CURRENT_BRANCH" = "master" ]; then
-    echo "🚫 [harness] main/master 직접 커밋 차단" >&2
-    echo "   feature 브랜치 생성 후 커밋하세요: git checkout -b feature/FXXX-기능명" >&2
-    exit 2
+    # HEAD 존재 여부 확인. 없으면(초기 커밋) 허용
+    if git rev-parse --verify HEAD >/dev/null 2>&1; then
+      echo "🚫 [harness] main/master 직접 커밋 차단" >&2
+      echo "   feature 브랜치 생성 후 커밋하세요: git checkout -b feature/FXXX-기능명" >&2
+      exit 2
+    fi
   fi
 fi
 

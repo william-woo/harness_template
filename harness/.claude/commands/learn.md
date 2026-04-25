@@ -124,31 +124,39 @@ AskUserQuestion으로 다음을 순차 수집:
 5. **feature_id** — 선택 (생략 가능)
 6. **files** — 선택 (쉼표로 구분된 경로, 생략 가능)
 
-수집 후 JSONL 한 줄 append:
+수집 후 JSONL 한 줄 append. 사용자 입력에 따옴표·줄바꿈 등 특수문자가 있어도
+안전하도록 **bash 환경변수 + Python `os.environ` 패턴** 사용 (heredoc 보간 금지):
 
 ```bash
 LEARN_FILE="$CLAUDE_PROJECT_DIR/.claude/state/learnings.jsonl"
 mkdir -p "$(dirname "$LEARN_FILE")"
 
-# Python으로 안전하게 JSON 생성 (이스케이프 처리)
-python3 - <<PY >> "$LEARN_FILE"
-import json, datetime
+# AskUserQuestion 답변을 환경변수로 export 한 뒤 호출
+export TYPE KEY INSIGHT CONFIDENCE FEATURE_ID FILES
+
+python3 - <<'PY' >> "$LEARN_FILE"
+import json, datetime, os
+files = os.environ.get("FILES","")
 entry = {
   "ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-  "type": "$TYPE",
-  "key": "$KEY",
-  "insight": """$INSIGHT""",
-  "confidence": $CONFIDENCE,
+  "type": os.environ.get("TYPE",""),
+  "key": os.environ.get("KEY",""),
+  "insight": os.environ.get("INSIGHT",""),
+  "confidence": int(os.environ.get("CONFIDENCE","0") or 0),
   "source": "user-stated",
-  "feature_id": "$FEATURE_ID" if "$FEATURE_ID" else None,
-  "files": "$FILES".split(",") if "$FILES" else []
+  "feature_id": os.environ.get("FEATURE_ID") or None,
+  "files": [s.strip() for s in files.split(",")] if files else []
 }
-entry = {k:v for k,v in entry.items() if v is not None}
+entry = {k:v for k,v in entry.items() if v not in (None,"",0)}
+# confidence=0 은 의미 없는 값 — 제거된 채로 저장됨
 print(json.dumps(entry, ensure_ascii=False))
 PY
 
 echo "✅ 학습 추가됨: $KEY"
 ```
+
+`<<'PY'` (단일 인용 heredoc)는 bash 보간을 끄고, Python 안에서 `os.environ` 으로 값을
+읽으므로 `INSIGHT="he said \"hi\""` 같은 입력도 안전하다.
 
 ## prune (중복·상충 정리)
 

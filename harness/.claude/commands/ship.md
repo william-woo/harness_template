@@ -22,18 +22,26 @@ gstack의 `/ship` 의 "Review Readiness Dashboard" 아이디어에서 영감을 
 BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
 BASE="${BASE:-main}"
 
-# diff 대상 결정
-if [ "$1" = "--staged" ]; then
-  DIFF_FILES=$(git diff --cached --name-only)
-elif [ -n "$1" ] && [ "$1" != "--staged" ]; then
-  BASE="$1"
-  DIFF_FILES=$(git diff --name-only "$BASE...HEAD")
-else
-  DIFF_FILES=$(git diff --name-only "$BASE...HEAD"; git diff --name-only)
-fi
+# diff 대상 결정 — base 와의 diff + 미스테이지 + untracked 모두 포함
+collect_files() {
+  if [ "$1" = "--staged" ]; then
+    git diff --cached --name-only
+  elif [ -n "$1" ] && [ "$1" != "--staged" ]; then
+    git diff --name-only "$1...HEAD" 2>/dev/null
+  else
+    {
+      git diff --name-only "$BASE...HEAD" 2>/dev/null
+      git diff --name-only 2>/dev/null
+      git ls-files --others --exclude-standard 2>/dev/null  # untracked 포함
+    }
+  fi
+}
 
-echo "=== 변경 파일 (${BASE}과 비교) ==="
-echo "$DIFF_FILES" | sort -u
+# 하네스 내부 상태 파일은 분석 대상에서 제외
+DIFF_FILES=$(collect_files "$1" | sort -u | grep -vE '^\.claude/state/' || true)
+
+echo "=== 변경 파일 (${BASE}과 비교, .claude/state 제외) ==="
+echo "$DIFF_FILES"
 ```
 
 ### Step 2: 카테고리 분류 (자동)
@@ -51,13 +59,14 @@ echo "$DIFF_FILES" | sort -u
 | **문서** | `*.md`, `docs/`, `README*` | (리뷰 스킵 가능) |
 | **설정/빌드** | `package.json`, `tsconfig*`, `*.config.*` | 기본 리뷰만 |
 
-Python으로 분류 로직 실행:
+Python으로 분류 로직 실행 (Step 1에서 수집한 `$DIFF_FILES` 환경변수 사용):
 
 ```bash
+export DIFF_FILES
 python3 - <<'PY'
-import subprocess, re, sys
-files = subprocess.check_output(['git','diff','--name-only','HEAD'], text=True).strip().split('\n')
-files = [f for f in files if f]
+import os, re
+raw = os.environ.get("DIFF_FILES","")
+files = [f for f in raw.strip().split('\n') if f and not f.startswith('.claude/state/')]
 
 rules = [
   ('UI',          r'\.(tsx|jsx|vue|svelte|css|scss|sass|less)$|tailwind|components/'),
