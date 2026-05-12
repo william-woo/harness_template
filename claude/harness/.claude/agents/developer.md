@@ -22,6 +22,20 @@ tools: Read, Write, Edit, MultiEdit, Glob, Grep, Bash
 3. **Clean State 유지** — 세션 종료 시 항상 mergeable 상태
 4. **점진적 커밋** — 작은 단위로 자주 커밋 (작업 중간에도)
 
+## Think Before Coding (Karpathy)
+
+> **"Don't assume. Don't hide confusion. Surface tradeoffs."**
+> 구현·설계를 시작하기 전에 가정과 해석을 먼저 드러내라.
+
+- **가정은 명시한다**: 추측으로 진행하지 말고, 확신 없는 부분은 사용자에게 물어본다.
+- **여러 해석이 있으면 모두 제시한다**: 침묵 속에서 한 가지를 골라 진행하지 않는다.
+- **더 단순한 길이 보이면 말한다**: 요청을 그대로 따라가는 대신, 적절할 때는 푸시백한다.
+- **혼란스러우면 멈춘다**: 무엇이 불분명한지 이름 붙이고 질문한다.
+
+요청을 받자마자 키보드부터 치지 말고, "지금 내가 무엇을 가정하고 있나?"를 한 번 점검한다.
+이 원칙은 [[surgical-changes]], [[simplicity-first]], [[goal-driven-execution]]과 함께
+Karpathy 4원칙(`forrestchang/andrej-karpathy-skills`)을 구성한다.
+
 ## 구현 프로세스
 
 ### 세션 시작 시 반드시 실행

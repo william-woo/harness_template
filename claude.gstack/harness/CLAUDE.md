@@ -104,7 +104,7 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 
 **`claude/` (baseline)은 의도적으로 동결**: Phase 0 (F001 시작 전) 스냅샷.
 변경 금지. 신규 phase는 `claude.gstack/`에만 반영.
-> **예외**: Karpathy Top 3 같은 phase-agnostic 보편 디시플린(코드 리뷰 원칙, 단순성 가이드, 목표 주도 분해)은 baseline에도 동기화한다.
+> **예외**: Karpathy 4원칙(Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution) 같은 phase-agnostic 보편 디시플린은 baseline에도 동기화한다.
 
 **`openai/` 변형**: F006 세션 2에서 수동 생성된 정적 산출물 (Codex 호스트용 .codex/ 구조).
 직접 손대지 말 것 — codex 어댑터가 실구현되는 후속 phase에서 render-skills로 자동 재생성 가능해진다.
