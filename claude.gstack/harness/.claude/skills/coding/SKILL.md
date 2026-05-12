@@ -3,9 +3,43 @@ name: coding
 description: |
   코드 구현 시 참조하는 스킬. Developer 에이전트가 기능을 구현할 때 사용한다.
   패턴: 구현 → 테스트 → 커밋 → 인계
+  호스트: claude-code
 ---
 
 # Coding Skill
+
+> 이 파일은 `claude-code` 호스트 기준으로 렌더된 SKILL.md입니다.
+> 원본 템플릿: `coding/SKILL.md.template`
+
+## 도구 사용 안내 (claude-code)
+
+이 하네스에서 코드를 구현할 때 다음 도구를 사용하세요:
+
+| 용도 | 도구명 |
+|---|---|
+| 셸 명령 실행 | `Bash` |
+| 파일 읽기 | `Read` |
+| 파일 쓰기 | `Write` |
+| 파일 수정 | `Edit` |
+| 다중 파일 수정 | `MultiEdit` |
+| 파일 검색 | `Glob` |
+| 텍스트 검색 | `Grep` |
+
+## 커맨드 호출 안내 (claude-code)
+
+구현 완료 후 다음 커맨드로 인계하세요:
+
+```
+/project:handoff
+```
+
+세션 시작 시:
+
+```
+/project:start-session
+```
+
+프로젝트 루트는 `$CLAUDE_PROJECT_DIR` 환경변수에서 읽을 수 있습니다.
 
 ## 구현 패턴
 
@@ -31,7 +65,7 @@ async function createUser(req: CreateUserRequest): Promise<CreateUserResponse> {
   // 입력 검증
   validateEmail(req.email);
   validatePassword(req.password);
-  
+
   // 비즈니스 로직
   const hashedPassword = await hashPassword(req.password);
   const user = await db.users.create({
@@ -39,7 +73,7 @@ async function createUser(req: CreateUserRequest): Promise<CreateUserResponse> {
     passwordHash: hashedPassword,
     name: req.name,
   });
-  
+
   return {
     id: user.id,
     email: user.email,
@@ -87,7 +121,7 @@ describe('createUser', () => {
 
   it('이미 존재하는 이메일로 생성 시 에러를 반환한다', async () => {
     await createUser({ email: 'test@example.com', ... });
-    
+
     await expect(
       createUser({ email: 'test@example.com', ... })
     ).rejects.toThrow(DuplicateEmailError);

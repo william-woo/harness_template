@@ -1,49 +1,45 @@
-<!-- 자동 생성 파일 — 직접 수정 금지 -->
-<!-- 원본: src/harness_template/claude.gstack/harness/.claude/skills/coding/SKILL.md -->
-<!-- 생성 컨텍스트: F006 세션 2 (codex 호스트용 정적 산출물) -->
-<!-- codex 어댑터가 실구현되는 후속 phase에서 render-skills 로 자동 재생성 가능 -->
 ---
 name: coding
 description: |
   코드 구현 시 참조하는 스킬. Developer 에이전트가 기능을 구현할 때 사용한다.
   패턴: 구현 → 테스트 → 커밋 → 인계
-  호스트: codex
+  호스트: {{HOST.NAME}}
 ---
 
 # Coding Skill
 
-> 이 파일은 `codex` 호스트 기준으로 렌더된 SKILL.md입니다.
+> 이 파일은 `{{HOST.NAME}}` 호스트 기준으로 렌더된 SKILL.md입니다.
 > 원본 템플릿: `coding/SKILL.md.template`
 
-## 도구 사용 안내 (codex)
+## 도구 사용 안내 ({{HOST.NAME}})
 
 이 하네스에서 코드를 구현할 때 다음 도구를 사용하세요:
 
 | 용도 | 도구명 |
 |---|---|
-| 셸 명령 실행 | `shell` |
-| 파일 읽기 | `read_file` |
-| 파일 쓰기 | `write_file` |
-| 파일 수정 | `edit_file` |
-| 다중 파일 수정 | `edit_file` |
-| 파일 검색 | `list_files` |
-| 텍스트 검색 | `grep` |
+| 셸 명령 실행 | `{{HOST.TOOL.bash}}` |
+| 파일 읽기 | `{{HOST.TOOL.read}}` |
+| 파일 쓰기 | `{{HOST.TOOL.write}}` |
+| 파일 수정 | `{{HOST.TOOL.edit}}` |
+| 다중 파일 수정 | `{{HOST.TOOL.multiedit}}` |
+| 파일 검색 | `{{HOST.TOOL.glob}}` |
+| 텍스트 검색 | `{{HOST.TOOL.grep}}` |
 
-## 커맨드 호출 안내 (codex)
+## 커맨드 호출 안내 ({{HOST.NAME}})
 
 구현 완료 후 다음 커맨드로 인계하세요:
 
 ```
-@harness.handoff
+{{HOST.CMD.handoff}}
 ```
 
 세션 시작 시:
 
 ```
-@harness.start-session
+{{HOST.CMD.start-session}}
 ```
 
-프로젝트 루트는 `$CODEX_PROJECT_ROOT` 환경변수에서 읽을 수 있습니다.
+프로젝트 루트는 `{{HOST.ENV.project_dir}}` 환경변수에서 읽을 수 있습니다.
 
 ## 구현 패턴
 

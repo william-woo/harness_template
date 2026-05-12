@@ -1,3 +1,7 @@
+<!-- 자동 생성 파일 — 직접 수정 금지 -->
+<!-- 원본: src/harness_template/claude.gstack/harness/.claude/skills/testing/SKILL.md -->
+<!-- 생성 컨텍스트: F006 세션 2 (codex 호스트용 정적 산출물) -->
+<!-- codex 어댑터가 실구현되는 후속 phase에서 render-skills 로 자동 재생성 가능 -->
 # Testing Skill
 
 > E2E 테스트 및 인수 검증 스킬. **QA 롤**이 기능 완료 여부를 검증할 때 사용한다.

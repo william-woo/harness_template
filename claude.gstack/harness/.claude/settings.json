@@ -1,4 +1,11 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(python3 .claude/bin/host.py *)",
+      "Bash(python3 .claude/bin/brain.py *)",
+      "Bash(flutter analyze *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
