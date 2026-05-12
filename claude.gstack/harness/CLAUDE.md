@@ -108,6 +108,7 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 
 **`openai/` 변형**: F006 세션 2에서 수동 생성된 정적 산출물 (Codex 호스트용 .codex/ 구조).
 직접 손대지 말 것 — codex 어댑터가 실구현되는 후속 phase에서 render-skills로 자동 재생성 가능해진다.
+> **예외**: Karpathy 4원칙처럼 phase-agnostic 보편 디시플린은 openai/.codex/에도 수동 동기화 (코드 어댑터 실구현 전까지 일관성 확보).
 
 ---
 
