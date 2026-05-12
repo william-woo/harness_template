@@ -79,6 +79,7 @@ SLOT_CATALOG = [
         "pattern": re.compile(
             r"페이지.*진입|화면.*진입|라우팅|goto|navigate|이동", re.IGNORECASE
         ),
+        # SLOT-GOTO 코드 조각은 자체 goto 포함 — generate_spec에서 외부 goto 삽입 생략
         "code": (
             "    // [SLOT-GOTO] 페이지 진입 / 라우팅\n"
             "    // acceptance: \"{ACCEPTANCE}\"\n"
@@ -129,8 +130,10 @@ SLOT_CATALOG = [
     },
     {
         "id": "SLOT-VISIBLE",
+        # SHOULD 3: 단독 '표시' 키워드 제거 — SLOT-TEXT 와 중복 해소
+        # '표시' 는 SLOT-TEXT (텍스트.*표시|메시지.*표시) 에서만 처리
         "pattern": re.compile(
-            r"가시성|렌더|렌더됨|render|표시", re.IGNORECASE
+            r"렌더|렌더됨|가시성|visible|render", re.IGNORECASE
         ),
         "code": (
             "    // [SLOT-VISIBLE] 가시성 / 렌더링 확인\n"
@@ -139,6 +142,20 @@ SLOT_CATALOG = [
             "    await expect(page.locator('[data-testid=\"target-component\"]')).toBeVisible();\n"
             "    await page.screenshot({ path: `${SCREENSHOT_DIR}/visible-pass.png` });"
         ),
+    },
+    {
+        "id": "SLOT-SCREENSHOT",
+        "pattern": re.compile(r"스크린샷|screenshot", re.IGNORECASE),
+        "code": (
+            "    // [SLOT-SCREENSHOT] 스크린샷 — 자동 첨부\n"
+            "    // acceptance: \"{ACCEPTANCE}\"\n"
+            "    const stepName = 'step-name';  // TODO: 단계 이름 수정\n"
+            "    await page.screenshot({\n"
+            "      path: `${SCREENSHOT_DIR}/${stepName}-pass.png`,\n"
+            "      fullPage: true\n"
+            "    });"
+        ),
+        "description": "스크린샷 캡처",
     },
 ]
 
@@ -266,12 +283,16 @@ def generate_spec(
         if slot:
             matched += 1
             code = slot["code"].replace("{ACCEPTANCE}", ac)
+            # MUST 1: SLOT-GOTO 는 자체 goto 포함 — 래퍼 goto 삽입 생략
+            if slot["id"] == "SLOT-GOTO":
+                test_body = f"{code}\n"
+            else:
+                test_body = f"    await page.goto(TARGET_URL);\n{code}\n"
             test_blocks.append(
                 f"\n  // AC-{i}: {ac}\n"
                 f"  // [{slot['id']}] 매칭\n"
                 f"  test('AC-{i}: {ac}', async ({{ page }}) => {{\n"
-                f"    await page.goto(TARGET_URL);\n"
-                f"{code}\n"
+                f"{test_body}"
                 f"  }});"
             )
         else:
@@ -291,11 +312,13 @@ def generate_spec(
     match_rate = (matched / total * 100) if total > 0 else 0.0
     is_dry_run = dry_run_override or (match_rate < 50)
 
-    dry_run_comment = (
-        "// [DRY-RUN] 매칭률 50% 미만 — 자동 실행하지 않음. 검토 후 수동 실행 권유\n"
-        if is_dry_run
-        else ""
-    )
+    # MUST 4: --dry-run 플래그 명시 vs 자동 dry-run(낮은 매칭률) 구분
+    if dry_run_override:
+        dry_run_comment = "// [DRY-RUN] --dry-run 플래그 지정 — 자동 실행하지 않음\n"
+    elif match_rate < 50:
+        dry_run_comment = "// [DRY-RUN] 매칭률 50% 미만 — 자동 실행하지 않음. 검토 후 수동 실행 권유\n"
+    else:
+        dry_run_comment = ""
 
     spec_content = (
         f"import {{ test, expect }} from '@playwright/test';\n\n"
@@ -384,6 +407,19 @@ def cmd_detect(args: argparse.Namespace) -> None:
         print(f"[qa-browser] detect 오류 (계속 진행): {e}")
 
 
+def _validate_feature_id(feature_id: str) -> bool:
+    """
+    feature_id 경로 주입 방어 검증 (MUST 2).
+
+    Args:
+        feature_id: 검증할 feature ID 문자열
+
+    Returns:
+        True 면 안전 (영문/숫자/_/- 만 허용), False 면 위험
+    """
+    return bool(re.match(r'^[A-Za-z0-9_-]+$', feature_id))
+
+
 def cmd_convert(args: argparse.Namespace) -> None:
     """
     acceptance_criteria → Playwright spec.ts 변환.
@@ -396,6 +432,11 @@ def cmd_convert(args: argparse.Namespace) -> None:
         feature_id = args.feature_id
         target_url = getattr(args, "target", DEFAULT_TARGET_URL) or DEFAULT_TARGET_URL
         dry_run_override = getattr(args, "dry_run", False)
+
+        # MUST 2: feature_id 경로 주입 방어
+        if not _validate_feature_id(feature_id):
+            print(f"[qa-browser] 잘못된 feature_id (허용: 영문/숫자/_/-): {feature_id}")
+            return
 
         # acceptance 목록 결정
         if getattr(args, "acceptance", None):
@@ -435,7 +476,10 @@ def cmd_convert(args: argparse.Namespace) -> None:
         print(f"[qa-browser] 스크립트 생성: {spec_path}")
 
         if is_dry_run:
-            print(f"[qa-browser] [DRY-RUN] 매칭률 50% 미만 — 자동 실행하지 않음")
+            if dry_run_override:
+                print(f"[qa-browser] [DRY-RUN] --dry-run 플래그 지정 — 자동 실행하지 않음")
+            else:
+                print(f"[qa-browser] [DRY-RUN] 매칭률 50% 미만 — 자동 실행하지 않음")
             print(f"[qa-browser] 파일을 확인하고 수동으로 실행하거나 에이전트에게 보강 요청하세요.")
         else:
             print(f"[qa-browser] 매칭률 50% 이상 — 자동 실행 가능")

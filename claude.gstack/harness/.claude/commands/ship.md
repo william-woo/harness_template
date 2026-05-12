@@ -50,11 +50,12 @@ echo "$DIFF_FILES"
 
 | 카테고리 | 패턴 (파일 경로) | 트리거되는 리뷰 |
 |---|---|---|
-| **UI/디자인** | `*.tsx`, `*.jsx`, `*.vue`, `*.svelte`, `*.css`, `*.scss`, `tailwind*`, `components/` | design-review |
+| **UI/디자인** | `*.tsx`, `*.jsx`, `*.vue`, `*.svelte`, `*.css`, `*.scss`, `tailwind*`, `components/` | design-review (정적 먼저) → qa-browser (동적 보강) |
 | **보안** | `auth/`, `authz/`, `*permission*`, `*session*`, `*token*`, `*.key`, `*.pem`, `.env*` | security audit |
 | **DB/마이그레이션** | `migrations/`, `schema*`, `prisma/`, `*.sql`, `models/` | DB review |
 | **API/백엔드** | `routes/`, `api/`, `controllers/`, `handlers/`, `*Service.*` | API review |
 | **인프라** | `Dockerfile*`, `*.tf`, `k8s/`, `deploy/`, `.github/workflows/`, `.gitlab-ci.yml` | infra review |
+| **E2E/동작검증** | `tests/e2e/`, `*.spec.ts`, `acceptance_criteria` 변경 | qa-browser (design-review 통과 후 호출) |
 | **테스트** | `*.test.*`, `*.spec.*`, `tests/`, `__tests__/` | (리뷰 스킵 가능) |
 | **문서** | `*.md`, `docs/`, `README*` | (리뷰 스킵 가능) |
 | **설정/빌드** | `package.json`, `tsconfig*`, `*.config.*` | 기본 리뷰만 |
@@ -74,6 +75,7 @@ rules = [
   ('DB',          r'migrations/|schema|prisma/|\.sql$|/models/'),
   ('API',         r'routes/|/api/|controllers/|handlers/|Service\.'),
   ('INFRA',       r'Dockerfile|\.tf$|k8s/|deploy/|\.github/workflows/|\.gitlab-ci\.yml'),
+  ('E2E',         r'tests/e2e/|\.spec\.ts$'),
   ('TEST',        r'\.(test|spec)\.|tests/|__tests__/'),
   ('DOCS',        r'\.md$|^docs/|README'),
   ('CONFIG',      r'package\.json|tsconfig|\.config\.|Makefile'),
@@ -87,7 +89,7 @@ for f in files:
     if not tagged: tagged = ['OTHER']
     for t in tagged: cats.setdefault(t, []).append(f)
 
-for cat in ['UI','SECURITY','DB','API','INFRA','CONFIG','TEST','DOCS','OTHER']:
+for cat in ['UI','SECURITY','DB','API','INFRA','E2E','CONFIG','TEST','DOCS','OTHER']:
     if cat in cats:
         print(f"\n[{cat}] {len(cats[cat])}개")
         for f in cats[cat]:
@@ -108,8 +110,9 @@ PY
   [ ] 1. Reviewer 에이전트 (기본 코드 품질)
        → Use the reviewer agent to review this branch
   [ ] 2. 디자인 리뷰 (UI 변경 있음)
-       → Use the reviewer agent with focus: design
-       → (또는 /project:design-review — F007 완료 후)
+       → /project:design-review (정적 — 먼저 실행)
+       → (통과 후) /project:qa-browser --feature=<Feature ID> (동적 E2E)
+       ★ 호출 순서: design-review 먼저 → qa-browser 나중
   [ ] 3. API 리뷰 (routes/api 변경 있음)
        → Use the reviewer agent with focus: api-contracts
   [ ] 4. DB 마이그레이션 리뷰 (schema 변경 있음)
@@ -122,6 +125,7 @@ PY
 
 선택적:
   ? QA 에이전트 (E2E 검증) — acceptance_criteria 확인 필요 시
+  ? qa-browser — /project:qa-browser (Playwright 설치 후 또는 미설치 시 템플릿만)
 ════════════════════════════════════════
 ```
 
