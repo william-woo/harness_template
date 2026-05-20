@@ -15,7 +15,7 @@
 /project:lint --only=LINT-FL,LINT-AC             # 복수 지정
 /project:lint --json                             # 머신용 JSON 출력
 /project:lint report                             # 마지막 실행 결과 표시
-/project:lint regenerate-index                   # docs/index.md 갱신 (세션 2)
+/project:lint regenerate-index                   # docs/index.md 갱신
 ```
 
 직접 Python 실행:
@@ -38,8 +38,6 @@ python3 .claude/bin/lint.py report
 | LINT-ADR | ADR ↔ feature 연결성 | AC가 ADR 참조하는데 파일 없음 | ADR 본문 파일 경로 무효 | ADR 번호 gap |
 | LINT-LEARN | learnings 모순 | tombstone 없이 정반대 insight 동일 key | confidence/source 미설정 | tombstone 비율 > 50% |
 | LINT-MIRROR | 미러링 diff (4변형) | .claude/ vs claude.gstack/ diff 발생 | baseline Karpathy 파일 누락 | openai/.codex/ 변형 diff |
-
-> **LINT-ADR / LINT-LEARN / LINT-MIRROR**: 세션 2에서 구현 예정.
 
 ## 라벨 의미 (F007 design-review 일관)
 
@@ -77,7 +75,7 @@ python3 .claude/bin/lint.py check
 python3 .claude/bin/lint.py check --strict && echo "OK" || echo "BLOCK 있음"
 ```
 
-## BLOCK 처리 루프 (세션 2에서 상세화 예정)
+## BLOCK 처리 루프
 
 ```
 BLOCK 이슈가 있으면:
@@ -138,7 +136,7 @@ LINT-AC (acceptance_criteria 누락·모호)
 ## 캐시
 
 - 실행 결과는 `.claude/state/lint-last.json` 에 자동 저장 (atomic write)
-- `report` 서브커맨드로 마지막 결과 요약 확인 가능 (세션 2에서 완전 구현)
+- `report` 서브커맨드로 마지막 결과 요약 확인 가능
 
 ## 파일 위치
 

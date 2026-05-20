@@ -4,7 +4,7 @@
 # 프로젝트 산출물 인덱스
 
 자동 생성됨. 손으로 수정하지 말 것 — `python3 .claude/bin/lint.py regenerate-index` 로 재생성.
-마지막 갱신: 2026-05-21T01:08:13+09:00
+마지막 갱신: 2026-05-21T01:55:35+09:00
 
 ## Features
 
@@ -18,7 +18,7 @@
 | F006 | done | low | Phase 3 — 멀티 호스트 아키텍처 준비 |
 | F007 | done | low | Phase 4 — Design Review 강화 (단계 1) |
 | F008 | done | low | Phase 4 — QA 브라우저 자동화 스킬 |
-| F009 | in-progress | medium | Phase 5 — LLM Wiki 패턴 (lint + index) |
+| F009 | review | medium | Phase 5 — LLM Wiki 패턴 (lint + index) |
 
 ## ADR (Architecture Decision Records)
 
@@ -45,11 +45,11 @@ architect / developer / planner / qa / reviewer (5종)
 
 | 이름 | 설명 |
 |---|---|
-| coding | 코드 구현 |
-| design-review | 디자인 감사 (F007) |
-| planning | 프로젝트 기획 |
-| qa-browser | QA 브라우저 자동화 (F008) |
-| testing | E2E 테스트 |
+| coding | 코드 구현 시 참조하는 스킬. Developer 에이전트가 기능을 구현할 때 사용한다. |
+| design-review | 디자인 감사 스킬. 다운스트림 프로젝트의 UI/문서 또는 하네스 자체의 정합성을 |
+| planning | 프로젝트 기획 및 feature_list.json 관리 스킬. Planner 에이전트가 사용한다. |
+| qa-browser | QA 브라우저 자동화 스킬. acceptance_criteria 자연어를 Playwright 스크립트 템플릿으로 |
+| testing | E2E 테스트 및 인수 검증 스킬. QA 에이전트가 기능 완료 여부를 검증할 때 사용한다. |
 
 ## Commands
 

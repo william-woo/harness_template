@@ -423,7 +423,9 @@ def check_adr() -> list:
             results.append(_issue(checker, INFO, "docs/adr/", "ADR 디렉토리 없음 — 검사 스킵"))
             return results
 
-        adr_files = sorted(_DOCS_ADR.glob("ADR-*.md"))
+        # ADR-000-template.md 제외 (_load_adrs와 일관성 유지)
+        adr_files = [f for f in sorted(_DOCS_ADR.glob("ADR-*.md"))
+                     if "template" not in f.name.lower()]
         if not adr_files:
             results.append(_issue(checker, INFO, "docs/adr/", "ADR 파일 없음 — 검사 스킵"))
             return results
@@ -623,7 +625,8 @@ def check_learn() -> list:
             key = entry.get("key", f"line{entry['_lineno']}")
 
             is_neg = any(kw in text for kw in _NEGATIVE_KEYWORDS)
-            is_pos = any(kw in text for kw in _POSITIVE_KEYWORDS)
+            # 부정 맥락이면 긍정 매칭 제외 — false positive 감소
+            is_pos = (any(kw in text for kw in _POSITIVE_KEYWORDS) and not is_neg)
 
             if not (is_neg or is_pos):
                 continue
@@ -1076,6 +1079,9 @@ def _load_skills() -> list:
     """
     .claude/skills/*/SKILL.md 목록을 반환한다.
 
+    각 SKILL.md 의 YAML frontmatter에서 description 필드를 추출한다.
+    frontmatter가 없거나 파싱 실패 시 빈 문자열로 대체한다.
+
     Returns:
         list[dict]: [{"name", "description"}, ...]
     """
@@ -1083,18 +1089,25 @@ def _load_skills() -> list:
     if not skills_dir.exists():
         return []
     skills = []
-    skill_descriptions = {
-        "planning": "프로젝트 기획",
-        "coding": "코드 구현",
-        "testing": "E2E 테스트",
-        "design-review": "디자인 감사 (F007)",
-        "qa-browser": "QA 브라우저 자동화 (F008)",
-    }
     for skill_dir in sorted(skills_dir.iterdir()):
         if not skill_dir.is_dir():
             continue
         skill_name = skill_dir.name
-        desc = skill_descriptions.get(skill_name, "")
+        skill_md = skill_dir / "SKILL.md"
+        desc = ""
+        if skill_md.is_file():
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                # frontmatter description 추출 (YAML block scalar '|' 또는 단일 라인)
+                m = re.search(
+                    r'^description:\s*(?:\|\s*\n)?\s*(.+?)(?=\n[a-z]|\n---|\n\n)',
+                    content,
+                    re.MULTILINE | re.DOTALL,
+                )
+                if m:
+                    desc = m.group(1).strip().split('\n')[0]
+            except Exception:
+                desc = ""
         skills.append({"name": skill_name, "description": desc})
     return skills
 
