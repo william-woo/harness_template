@@ -3,6 +3,9 @@
     "allow": [
       "Bash(python3 .claude/bin/host.py *)",
       "Bash(python3 .claude/bin/brain.py *)",
+      "Bash(python3 .claude/bin/lint.py *)",
+      "Bash(python3 .claude/bin/qa_browser.py *)",
+      "Edit(/home/obigo/project/oss/harness_update_agent/.claude/bin/lint.py)",
       "Bash(flutter analyze *)"
     ]
   },

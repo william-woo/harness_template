@@ -4,7 +4,7 @@
 # 프로젝트 산출물 인덱스
 
 자동 생성됨. 손으로 수정하지 말 것 — `python3 .claude/bin/lint.py regenerate-index` 로 재생성.
-마지막 갱신: 2026-05-21T01:55:35+09:00
+마지막 갱신: 2026-05-21T07:09:30+09:00
 
 ## Features
 
@@ -18,7 +18,7 @@
 | F006 | done | low | Phase 3 — 멀티 호스트 아키텍처 준비 |
 | F007 | done | low | Phase 4 — Design Review 강화 (단계 1) |
 | F008 | done | low | Phase 4 — QA 브라우저 자동화 스킬 |
-| F009 | review | medium | Phase 5 — LLM Wiki 패턴 (lint + index) |
+| F009 | done | medium | Phase 5 — LLM Wiki 패턴 (lint + index) |
 
 ## ADR (Architecture Decision Records)
 
