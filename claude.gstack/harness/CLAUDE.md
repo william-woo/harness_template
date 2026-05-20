@@ -207,6 +207,22 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 > 스크린샷: `.claude/state/qa-browser/screenshots/` (gitignore)
 > 실행 로그: `.claude/state/qa-browser/runs/` (gitignore)
 
+### 산출물 정합성 헬스체크 (Phase 5 — F009)
+
+```
+/project:lint                              # 모든 검사기 실행
+/project:lint --only=LINT-FL               # 특정 검사기만
+/project:lint --strict                     # BLOCK 1건이라도 있으면 exit 1
+/project:lint regenerate-index             # docs/index.md 갱신
+/project:lint report                       # 마지막 실행 결과 재출력
+```
+
+> **호출 시점**: handoff 직전, 또는 새 feature 추가 후, 또는 ADR 작성 후.
+> lint는 **거버넌스 정합성** (메타데이터·연결성) 만 검사. design-review (IA/A11Y/CON) 와 qa-browser (E2E) 와 책임 분리됨.
+> 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
+
+---
+
 ### 멀티 호스트 관리 (Phase 3 업그레이드 — F006)
 
 ```
@@ -239,6 +255,26 @@ Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
 | `.claude/state/qa-browser/runs/` | qa-browser 실행 로그 (F008) | ❌ gitignore |
 | `.claude/state/qa-browser/screenshots/.gitkeep` | 스크린샷 디렉토리 보존 마커 | ✅ 커밋 대상 |
 | `.claude/state/qa-browser/runs/.gitkeep` | 실행 로그 디렉토리 보존 마커 | ✅ 커밋 대상 |
+| `.claude/state/lint-last.json` | `/project:lint check` 결과 캐시 (`/project:lint report` 재출력용) | ❌ gitignore |
+
+---
+
+## 📝 claude-progress.txt 로그 컨벤션 (F009)
+
+**신규 항목부터** 다음 prefix 형식을 권장:
+
+```
+## [YYYY-MM-DD HH:MM] <agent> | <짧은 제목>
+... 본문 ...
+```
+
+예: `## [2026-05-21 14:30] developer | F009 세션 2 — 검사기 3종 + index`
+
+이렇게 하면:
+- `grep "^## \[" claude-progress.txt | tail -10` 으로 최근 10건 추출
+- `/project:retro` 통계 향상
+
+기존 `============================================================` 블록 형식도 호환 (마이그레이션 불필요).
 
 ---
 
