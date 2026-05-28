@@ -1,0 +1,5 @@
+{
+  "agent_type": "claude-code",
+  "harness_version": 1,
+  "notes": "기본값. openclaw/codex로 변경 시 /project:host 안내 메시지가 안내합니다."
+}
