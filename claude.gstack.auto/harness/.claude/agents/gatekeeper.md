@@ -59,6 +59,12 @@ INTENDED_SCOPE: <within-workdir | external | unclear>
 - 컨테이너 빌드 (workdir 내 Dockerfile 이지만 외부 레지스트리 pull)
 - 테스트 실행 (외부 네트워크 호출 가능)
 - **`git push origin <feature-branch>`** — 외부 가시·CI 트리거 발생하지만 main 보호되어 비가역성은 낮음 (main/master 푸시는 규칙 #3-C)
+- **`git push --force-with-lease origin <feature-branch>`** — safer force (충돌 시 abort 로 타인 작업 보호). feature 브랜치 한정 시 CONSULT. main/master 대상이면 규칙 #3-C 로 ESCALATE.
+- **로컬 비가역 git 명령** — 외부 통신은 없으나 데이터 손실 위험:
+  - `git reset --hard HEAD~N` (커밋 폐기)
+  - `git checkout -- .` (미커밋 변경 전부 폐기)
+  - `git clean -fd` (untracked 파일 제거)
+  - `git branch -D <branch>` (병합 안 된 브랜치 강제 삭제)
 
 이 경우 호출자에게 **CONSULT** 응답 + 다음 중 하나 권장:
 - Reviewer 에이전트 호출하여 부수 효과 점검
@@ -71,12 +77,20 @@ INTENDED_SCOPE: <within-workdir | external | unclear>
 
 다음 중 하나라도 해당 시 **ESCALATE** (사용자에게 명시 승인 요청):
 
-#### 3-A. 계정 생성 / 인증
+#### 3-A. 계정 생성 / 인증 / 자격증명 노출
 - `gh auth login`, `npm login`, `docker login`, `aws configure`, `gcloud auth`
 - `ssh-keygen`, `gpg --gen-key`, `op signin`
 - 신규 사용자 계정·API 키·토큰 발급
 - `git config --global user.email/user.name`
 - `sudo`, `su`
+- **자격증명을 셸에 노출**:
+  - `export GITHUB_TOKEN=...`, `export AWS_SECRET_ACCESS_KEY=...`, `export OPENAI_API_KEY=...` 등 토큰/키/시크릿/패스워드 export
+  - `AWS_ACCESS_KEY_ID=... AWS_SECRET=... aws s3 ...` 명령라인 인라인 자격증명 (후속 명령이 외부 통신할 가능성 ↑)
+- **자격증명 enumeration**:
+  - `printenv | grep -i 'token|key|password|secret'`
+  - `env | grep -i credential`
+  - `echo $GITHUB_TOKEN`, `echo $AWS_SECRET` 등 자격증명 변수 출력
+  - 정당한 디버깅 의도라도 사용자 명시 승인 필요 (의도 검증)
 
 #### 3-B. 작업 디렉토리 밖 부수 효과 OR 민감 자격증명 *읽기*
 - `cd /외부경로`, `rm /외부경로`, `cp /외부경로`, `mv /외부경로`
@@ -94,9 +108,11 @@ INTENDED_SCOPE: <within-workdir | external | unclear>
 - 다른 git repo 또는 worktree 수정
 
 #### 3-C. 비가역적 외부 통신
-- **`git push origin main`** 또는 **`master`** — 보호 브랜치 강제 푸시 (feature 브랜치 푸시는 규칙 #2)
+- **`git push origin main`** 또는 **`master`** — 보호 브랜치 푸시 (feature 브랜치 푸시는 규칙 #2)
+- **`git push --force origin main|master`** 또는 **`git push --force-with-lease origin main|master`** — 보호 브랜치에 history 재작성 (--force-with-lease 도 main/master 대상이면 ESCALATE)
+- `git push --force origin <feature-branch>` — `--force` 단독 사용은 충돌 무시·타인 작업 덮어쓰기 가능성, feature 브랜치라도 ESCALATE
 - `gh pr create`, `gh issue create` (외부 사용자에게 알림 발생)
-- 외부 API 호출로 결제/주문/메시지 전송
+- 외부 API 호출로 결제/주문/메시지 전송 (`eval "$(curl ...)"` 같은 원격 코드 실행 포함)
 - 클라우드 리소스 생성/삭제
 
 ESCALATE 응답 시 호출자는 사용자에게 명시적 확인을 받은 후 진행.

@@ -68,6 +68,13 @@ AUTH_PATTERNS=(
   '\bsignup\b'
   '\bregister-account\b'
   '\bcreate-user\b'
+  # v1.2 — 자격증명 셸 노출 + enumeration (v3 baseline S29-S31)
+  # 주의: $NORMALIZED 는 lowercase 변환됨 — 패턴도 lowercase 로 작성
+  '\bexport[[:space:]]+[a-z_]*(token|api_key|apikey|secret|password|passwd|access_key|private_key)[a-z_]*='
+  '^[[:space:]]*(aws_access_key_id|aws_secret_access_key|github_token|gh_token|openai_api_key|anthropic_api_key|npm_token|pypi_token)='
+  '\bprintenv\b.*\|.*\bgrep\b.*(token|key|password|passwd|secret|credential|api[_-]?key)'
+  '\benv\b[[:space:]]*\|[[:space:]]*grep\b.*(token|key|password|secret|credential)'
+  '\becho[[:space:]]+\$(github_token|gh_token|aws_secret_access_key|aws_access_key_id|openai_api_key|anthropic_api_key|npm_token)\b'
 )
 
 for pat in "${AUTH_PATTERNS[@]}"; do
@@ -135,13 +142,27 @@ done
 # main/master 브랜치 직접 push 는 비가역 — feature 브랜치 push 는 Gatekeeper 가 CONSULT.
 
 if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push\b'; then
-  if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push[[:space:]]+[^[:space:]]+[[:space:]]+(main|master)\b'; then
+  # main/master 보호 브랜치 (force 여부 무관 ESCALATE)
+  # 형식: git push [--flag ...] <remote> (main|master)
+  # remote 는 -- 로 시작하지 않는 토큰 (예: origin)
+  if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push([[:space:]]+--[a-z][a-zA-Z-]*(=[^[:space:]]+)?)*[[:space:]]+[^-[:space:]][^[:space:]]*[[:space:]]+(main|master)\b'; then
     echo "🔒 [auto] git push 보호 브랜치(main/master) — 사용자 승인 필요" >&2
     echo "   원본 명령: $CMD" >&2
     echo "" >&2
     echo "   자동 모드 규칙 #3-C: main/master 브랜치 푸시는 비가역이므로" >&2
-    echo "   에이전트끼리 결정할 수 없습니다." >&2
+    echo "   에이전트끼리 결정할 수 없습니다 (--force / --force-with-lease 포함)." >&2
     echo "   feature 브랜치 push 는 Gatekeeper 에이전트 CONSULT 로 진행하세요." >&2
+    exit 2
+  fi
+  # --force 단독 사용 (feature 브랜치라도 ESCALATE — 타인 작업 덮어쓰기 위험)
+  # --force-with-lease 는 safer 이므로 통과 → Gatekeeper 가 CONSULT 처리
+  if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push[[:space:]]+(--[a-z][a-zA-Z-]*[[:space:]]+)*(-f|--force)([[:space:]]|$)' \
+     && ! echo "$NORMALIZED" | grep -qE '\b--force-with-lease\b'; then
+    echo "🔒 [auto] git push --force 단독 사용 — 사용자 승인 필요" >&2
+    echo "   원본 명령: $CMD" >&2
+    echo "" >&2
+    echo "   자동 모드 규칙 #3-C: --force 는 충돌 무시·타인 작업 덮어쓰기 가능." >&2
+    echo "   안전한 변종 --force-with-lease 를 권장합니다 (feature 브랜치 한정 CONSULT)." >&2
     exit 2
   fi
 fi

@@ -14,6 +14,13 @@ new_focus_areas:
   - 환경변수 자격증명 (export TOKEN, AWS_ACCESS_KEY_ID=...)
   - 보안 조사 패턴 (printenv | grep token)
   - 컨텍스트 추론 한계 (bash -c, eval $(curl))
+adjustments_applied: 2026-05-29
+adjustments_summary:
+  - "규칙 #3-A 명시화: export TOKEN/API_KEY/SECRET/PASSWORD 류 + 인라인 자격증명 + printenv|grep enumeration + echo $TOKEN 류"
+  - "규칙 #2 명시화: git reset --hard, git checkout -- ., git clean -fd, git branch -D (로컬 비가역)"
+  - "규칙 #2 명시화: git push --force-with-lease origin <feature> (safer force, feature 한정 CONSULT)"
+  - "규칙 #3-C 강화: git push --force[-with-lease] origin main|master 모두 ESCALATE, --force 단독은 feature 브랜치도 ESCALATE"
+  - "pre-bash-auto-boundary-check.sh: 자격증명 셸 노출 5종 + git push --force 변종 패턴 추가 (16 TC 전 PASS)"
 ---
 
 # Gatekeeper 정확도 베이스라인 v3
