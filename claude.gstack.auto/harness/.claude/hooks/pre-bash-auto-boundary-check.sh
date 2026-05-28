@@ -83,7 +83,71 @@ for pat in "${AUTH_PATTERNS[@]}"; do
 done
 
 # ────────────────────────────────────────────────────────────
-# 2) 작업 디렉토리 외부 부수 효과 명령
+# 2) 민감 자격증명·토큰 dotfile *읽기* 차단 (규칙 #3-B 강화)
+# ────────────────────────────────────────────────────────────
+# 사용자 홈의 자격증명 디렉토리/파일은 source 로 쓰여도 ESCALATE.
+# 일반 dotfile (~/.bashrc, ~/.zshrc, ~/.gitconfig) 은 여기서 차단 X — Gatekeeper 가 CONSULT 처리.
+
+SENSITIVE_DOTFILE_PATTERNS=(
+  '~/\.ssh(/|[[:space:]]|$)'
+  '\$HOME/\.ssh(/|[[:space:]]|$)'
+  '~/\.aws(/|[[:space:]]|$)'
+  '\$HOME/\.aws(/|[[:space:]]|$)'
+  '~/\.config/gcloud(/|[[:space:]]|$)'
+  '~/\.netrc(/|[[:space:]]|$)'
+  '\$HOME/\.netrc(/|[[:space:]]|$)'
+  '~/\.kube(/|[[:space:]]|$)'
+  '~/\.npmrc(/|[[:space:]]|$)'
+  '~/\.pypirc(/|[[:space:]]|$)'
+  '~/\.docker/config\.json'
+)
+
+# 절대 경로 형태 ($HOME 확장된 경우) 도 검사
+if [ -n "${HOME:-}" ]; then
+  HOME_ABS_PATTERNS=(
+    "${HOME}/\.ssh(/|[[:space:]]|$)"
+    "${HOME}/\.aws(/|[[:space:]]|$)"
+    "${HOME}/\.config/gcloud(/|[[:space:]]|$)"
+    "${HOME}/\.netrc(/|[[:space:]]|$)"
+    "${HOME}/\.kube(/|[[:space:]]|$)"
+    "${HOME}/\.npmrc(/|[[:space:]]|$)"
+    "${HOME}/\.pypirc(/|[[:space:]]|$)"
+    "${HOME}/\.docker/config\.json"
+  )
+  SENSITIVE_DOTFILE_PATTERNS+=("${HOME_ABS_PATTERNS[@]}")
+fi
+
+for pat in "${SENSITIVE_DOTFILE_PATTERNS[@]}"; do
+  if echo "$CMD" | grep -qE "$pat"; then
+    echo "🔒 [auto] 민감 자격증명·토큰 dotfile 접근 감지 — 사용자 승인 필요" >&2
+    echo "   매칭 패턴: $pat" >&2
+    echo "   원본 명령: $CMD" >&2
+    echo "" >&2
+    echo "   자동 모드 규칙 #3-B: ~/.ssh, ~/.aws 등 자격증명 파일은 읽기만 해도" >&2
+    echo "   유출 위험이 있어 에이전트끼리 결정할 수 없습니다." >&2
+    exit 2
+  fi
+done
+
+# ────────────────────────────────────────────────────────────
+# 3) git push 보호 브랜치 차단 (규칙 #3-C)
+# ────────────────────────────────────────────────────────────
+# main/master 브랜치 직접 push 는 비가역 — feature 브랜치 push 는 Gatekeeper 가 CONSULT.
+
+if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push\b'; then
+  if echo "$NORMALIZED" | grep -qE '\bgit[[:space:]]+push[[:space:]]+[^[:space:]]+[[:space:]]+(main|master)\b'; then
+    echo "🔒 [auto] git push 보호 브랜치(main/master) — 사용자 승인 필요" >&2
+    echo "   원본 명령: $CMD" >&2
+    echo "" >&2
+    echo "   자동 모드 규칙 #3-C: main/master 브랜치 푸시는 비가역이므로" >&2
+    echo "   에이전트끼리 결정할 수 없습니다." >&2
+    echo "   feature 브랜치 push 는 Gatekeeper 에이전트 CONSULT 로 진행하세요." >&2
+    exit 2
+  fi
+fi
+
+# ────────────────────────────────────────────────────────────
+# 4) 작업 디렉토리 외부 부수 효과 명령
 # ────────────────────────────────────────────────────────────
 # 다음 동사로 시작하는 명령이 절대 경로 인자를 가지면 WORKDIR 외부인지 검사
 #   cd, rm, mv, cp, chmod, chown, ln, install, dd, tar (-C), make (-C)

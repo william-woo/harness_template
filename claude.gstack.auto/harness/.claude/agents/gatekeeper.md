@@ -41,15 +41,24 @@ INTENDED_SCOPE: <within-workdir | external | unclear>
 다음 모두 만족 시 **PROCEED**:
 - 모든 경로가 `$CLAUDE_PROJECT_DIR` 하위
 - `/tmp`, `/var/tmp` read/write 도 허용
-- git 명령은 워크트리 내부 (다만 `git push` 는 외부 효과 → 규칙 #3 적용)
+- git 명령은 워크트리 내부 (다만 `git push` 는 외부 효과 → 규칙 #2 또는 #3 적용)
+
+**예외 PROCEED — `INTENDED_SCOPE=within-workdir` 명시 + 컨텍스트가 명확한 경우**:
+호출자가 다음 컨텍스트를 명시하면 모호함이 해소되어 PROCEED 가능:
+- venv 활성화 상태의 `pip install <pkg>` — `VIRTUAL_ENV` 환경변수가 workdir 의 `.venv/` 가리킴 명시 시
+- workdir 의 `node_modules/` 만 수정하는 `npm install` (workspace 외 영향 없음 명시 시)
+- workdir 내부의 sqlite/JSON 파일에만 작용하는 migration 스크립트 (대상 경로 명시 시)
+
+컨텍스트가 모호하면 (`INTENDED_SCOPE=unclear`) 기본대로 CONSULT 로 분류.
 
 ### 규칙 #2: 모호한 경우 = 에이전트 검토 (CONSULT)
 
 판단이 모호한 케이스:
-- 패키지 매니저 호출 (`npm install`, `pip install`) — 외부 fetch 발생하지만 결과는 workdir
+- 패키지 매니저 호출 (`npm install`, `pip install`) — 외부 fetch 발생하지만 결과는 workdir (단, 규칙 #1 예외 적용 시 PROCEED)
 - 데이터베이스 마이그레이션 (workdir 내 sqlite vs 외부 PostgreSQL)
 - 컨테이너 빌드 (workdir 내 Dockerfile 이지만 외부 레지스트리 pull)
 - 테스트 실행 (외부 네트워크 호출 가능)
+- **`git push origin <feature-branch>`** — 외부 가시·CI 트리거 발생하지만 main 보호되어 비가역성은 낮음 (main/master 푸시는 규칙 #3-C)
 
 이 경우 호출자에게 **CONSULT** 응답 + 다음 중 하나 권장:
 - Reviewer 에이전트 호출하여 부수 효과 점검
@@ -69,14 +78,23 @@ INTENDED_SCOPE: <within-workdir | external | unclear>
 - `git config --global user.email/user.name`
 - `sudo`, `su`
 
-#### 3-B. 작업 디렉토리 밖 부수 효과
+#### 3-B. 작업 디렉토리 밖 부수 효과 OR 민감 자격증명 *읽기*
 - `cd /외부경로`, `rm /외부경로`, `cp /외부경로`, `mv /외부경로`
 - 시스템 패키지 설치 (`apt`, `brew`, `yum`)
-- 사용자 홈 디렉토리(`~`, `$HOME`) 의 dotfile 변경
+- 사용자 홈 디렉토리(`~`, `$HOME`) 의 dotfile **변경**
+- **사용자 홈의 민감 자격증명·토큰 dotfile *읽기* 자체도 ESCALATE** — 다음 경로는 source 로만 쓰여도 유출 위험:
+  - `~/.ssh/` — SSH 비밀키
+  - `~/.aws/` — AWS 자격증명
+  - `~/.config/gcloud/` — GCloud 토큰
+  - `~/.netrc` — HTTP basic auth 자격증명
+  - `~/.kube/` — Kubernetes 토큰
+  - `~/.npmrc`, `~/.pypirc` — 패키지 레지스트리 토큰
+  - `~/.docker/config.json` — Docker 레지스트리 자격증명
+- 일반 dotfile *읽기* (`~/.bashrc`, `~/.zshrc`, `~/.gitconfig` 등) — 사용자 설정 확인 목적이면 CONSULT 가능 (변경은 ESCALATE)
 - 다른 git repo 또는 worktree 수정
 
 #### 3-C. 비가역적 외부 통신
-- `git push` (특히 main/master 브랜치)
+- **`git push origin main`** 또는 **`master`** — 보호 브랜치 강제 푸시 (feature 브랜치 푸시는 규칙 #2)
 - `gh pr create`, `gh issue create` (외부 사용자에게 알림 발생)
 - 외부 API 호출로 결제/주문/메시지 전송
 - 클라우드 리소스 생성/삭제
