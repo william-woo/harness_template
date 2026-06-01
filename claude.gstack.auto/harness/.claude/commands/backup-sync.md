@@ -26,7 +26,7 @@
 
 ```bash
 python3 .claude/bin/backup.py sync
-python3 .claude/bin/backup.py sync --dry-run
+python3 .claude/bin/backup.py --dry-run sync
 python3 .claude/bin/backup.py self          # 의존성 빠른 확인
 ```
 
