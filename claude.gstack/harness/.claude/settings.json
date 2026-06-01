@@ -5,6 +5,7 @@
       "Bash(python3 .claude/bin/brain.py *)",
       "Bash(python3 .claude/bin/lint.py *)",
       "Bash(python3 .claude/bin/qa_browser.py *)",
+      "Bash(python3 .claude/bin/backup.py *)",
       "Edit(/home/obigo/project/oss/harness_update_agent/.claude/bin/lint.py)",
       "Bash(flutter analyze *)"
     ]
