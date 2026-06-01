@@ -323,7 +323,7 @@ F009 lint 의 BLOCK 발견 시 exit 0 (`--strict` 옵션) 패턴 100% 일관.
 |---|---|---|
 | **사용자 코드** | `src/` | 다운스트림 자기 코드 — 절대 백업 대상 X |
 | **빌드 산출물** | `node_modules/`, `__pycache__/`, `*.pyc`, `.venv/`, `venv/`, `dist/`, `build/`, `target/`, `.next/`, `out/` | 재생성 가능 + 사이즈 ↑ |
-| **보안 (BLOCK)** | `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `.aws/credentials` | **자격증명 노출 방지 — 누락 시 즉시 차단 (결정 5 예외)** |
+| **보안 (BLOCK)** | `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `.aws/credentials` | **자격증명 노출 방지 — 누락 시 즉시 차단 (결정 5 예외). 단, `.example/.template/.sample` 접미사는 화이트리스트 (양식 파일 — BLOCK 면제)** |
 | **IDE / OS** | `.vscode/`, `.idea/`, `.DS_Store`, `Thumbs.db`, `*.swp`, `*.swo` | 환경별 차이 |
 | **로그** | `*.log`, `logs/`, `npm-debug.log*` | 세션 로컬 |
 | **세션 로컬 상태** | `.claude/state/freeze-dir.txt`, `.claude/state/lint-last.json` | gitignore 와 동기 (CLAUDE.md 상태 파일 표 참조) |

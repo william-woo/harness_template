@@ -147,3 +147,4 @@ PY
 - [ ] `claude-progress.txt` 한 줄 요약 append 완료
 - [ ] 다음 작업 명확히 기술됨
 - [ ] (선택) 새 학습 `/project:learn add`
+- [ ] (선택) `python3 .claude/bin/backup.py sync` 로 산출물을 백업 리포에 동기화

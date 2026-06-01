@@ -87,6 +87,7 @@ _EXCLUDE_PATTERNS: list[str] = [
 ]
 
 # 보안 BLOCK 패턴 — 누락 시 exit 1 (결정 5 예외, 결정 6 보안)
+# 단, *.example / *.template / *.sample 접미사는 화이트리스트 (ADR-005 결정 6 보강)
 _SECURITY_BLOCK_PATTERNS: list[str] = [
     ".env",
     ".env.*",
@@ -96,6 +97,13 @@ _SECURITY_BLOCK_PATTERNS: list[str] = [
     ".aws/credentials",
     ".aws/",
 ]
+
+# 보안 BLOCK 화이트리스트 접미사 — 자격증명이 아닌 양식 파일 (ADR-005 결정 6 보강)
+_SECURITY_WHITELIST_SUFFIXES: tuple[str, ...] = (
+    ".example",
+    ".template",
+    ".sample",
+)
 
 # 메타 하네스 전용 추가 제외 — is_meta_harness() == True 일 때만 적용
 _META_HARNESS_EXTRA_EXCLUDES: list[str] = [
@@ -138,6 +146,39 @@ def load_host_json() -> dict:
     except Exception as e:
         print(f"[backup] host.json 읽기 실패: {e}", file=sys.stderr)
         return {}
+
+
+def save_host_json(data: dict) -> bool:
+    """host.json 을 원자적으로 저장한다.
+
+    Args:
+        data: 저장할 host.json 전체 딕셔너리
+
+    Returns:
+        True: 저장 성공, False: 저장 실패
+    """
+    try:
+        _HOST_JSON.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(_HOST_JSON.parent),
+            prefix=".host-json-",
+            suffix=".json",
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            os.replace(tmp_path, _HOST_JSON)
+            return True
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            raise
+    except Exception as e:
+        print(f"[backup] host.json 저장 실패: {e}", file=sys.stderr)
+        return False
 
 
 def load_backup_config() -> dict | None:
@@ -192,32 +233,94 @@ def _auto_derive_branch_name() -> str:
     return _PROJECT_ROOT.name
 
 
+# ─── harness_version 마이그레이션 (ADR-005 결정 1) ───────────────────────────
+
+def migrate_harness_version(data: dict) -> tuple[dict, bool]:
+    """host.json 의 harness_version 을 1 → 2 로 마이그레이션한다.
+
+    harness_version 이 명시되지 않은 경우 1 로 가정하여 처리한다.
+
+    Args:
+        data: host.json 전체 딕셔너리
+
+    Returns:
+        (갱신된 data, 마이그레이션 발생 여부)
+    """
+    current_version = data.get("harness_version", 1)
+    if current_version < 2:
+        data["harness_version"] = 2
+        return data, True
+    return data, False
+
+
 # ─── 보안 검사 (ADR-005 결정 5/6) ────────────────────────────────────────────
+
+def _is_security_whitelisted(path: str) -> bool:
+    """보안 화이트리스트 접미사(.example/.template/.sample)인지 확인한다.
+
+    ADR-005 결정 6 보강 — 이 접미사 파일은 자격증명이 아닌 양식 파일로 간주하여
+    BLOCK 면제한다.
+
+    Args:
+        path: 검사할 파일 경로 (상대 경로)
+
+    Returns:
+        True: 화이트리스트 접미사 → BLOCK 면제
+    """
+    path_lower = path.lower()
+    return any(path_lower.endswith(suffix) for suffix in _SECURITY_WHITELIST_SUFFIXES)
+
 
 def scan_security_blocks(root: Path) -> list[str]:
     """보안 BLOCK 패턴에 해당하는 파일 경로 목록을 반환한다.
 
     rsync 실행 전 사전 검사. 발견 시 백업 중단 + exit 1.
+    단, .example / .template / .sample 접미사 파일은 화이트리스트 처리하여 제외한다.
+    (ADR-005 결정 6 보강)
+
+    지원 패턴 유형:
+      - 정확한 파일명: ".env", "credentials.json"
+      - glob 패턴: ".env.*", "*.pem", "*.key"
+      - 디렉토리 접두사: ".aws/credentials", ".aws/"
     """
     blocked: list[str] = []
     try:
         for pattern in _SECURITY_BLOCK_PATTERNS:
-            # 단순 glob 패턴 지원 (재귀)
             pat = pattern.rstrip("/")
+
             if "*" in pat:
-                # glob 패턴
-                suffix = pat.lstrip("*.")
-                for p in root.rglob(f"*.{suffix}"):
-                    rel = str(p.relative_to(root))
-                    # .git/ 하위 제외
-                    if ".git/" not in rel and not rel.startswith(".git"):
+                # glob 패턴 — rglob 으로 재귀 탐색
+                for p in root.rglob(pat):
+                    if p.is_file():
+                        rel = str(p.relative_to(root))
+                        if ".git" not in rel.split("/") and not rel.startswith(".git"):
+                            if not _is_security_whitelisted(rel):
+                                blocked.append(rel)
+            elif "/" in pat:
+                # 경로 포함 패턴 (예: .aws/credentials, .aws/)
+                # 루트 기준 상대 경로로 매핑
+                target = root / pat
+                if target.is_file():
+                    rel = str(target.relative_to(root))
+                    if not _is_security_whitelisted(rel):
                         blocked.append(rel)
+                elif target.is_dir():
+                    # 디렉토리면 하위 모든 파일 BLOCK
+                    for p in target.rglob("*"):
+                        if p.is_file():
+                            rel = str(p.relative_to(root))
+                            if not _is_security_whitelisted(rel):
+                                blocked.append(rel)
             else:
-                # 정확한 이름 또는 디렉토리
-                for p in root.rglob(pat.lstrip("./").replace("/", "")):
-                    rel = str(p.relative_to(root))
-                    if ".git/" not in rel and not rel.startswith(".git"):
-                        blocked.append(rel)
+                # 정확한 파일명 패턴 (예: .env, credentials.json)
+                # rglob 으로 모든 하위 디렉토리에서 해당 이름의 파일 탐색
+                for p in root.rglob(pat):
+                    if p.is_file():
+                        rel = str(p.relative_to(root))
+                        # .git/ 하위 제외
+                        if ".git" not in rel.split("/") and not rel.startswith(".git"):
+                            if not _is_security_whitelisted(rel):
+                                blocked.append(rel)
     except Exception:
         pass
     return blocked
@@ -282,21 +385,7 @@ def update_host_json_last_sync(commit_sha: str) -> None:
         data["backup"]["last_sync_commit"] = commit_sha
         # harness_version 2 로 업그레이드
         data["harness_version"] = 2
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(_HOST_JSON.parent),
-            prefix=".host-json-",
-            suffix=".json",
-        )
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            os.replace(tmp_path, _HOST_JSON)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
+        save_host_json(data)
     except Exception as e:
         print(f"[backup] host.json 갱신 실패 (무시): {e}", file=sys.stderr)
 
@@ -349,8 +438,7 @@ def cmd_sync(args) -> int:
         if not cfg:
             print("[backup] backup 설정이 없습니다.", file=sys.stderr)
             print(
-                "[backup] 먼저 host.json 에 backup 객체를 추가하거나 "
-                "`python3 .claude/bin/backup.py init` 을 실행하세요 (세션 2 예정).",
+                "[backup] 먼저 `python3 .claude/bin/backup.py init` 을 실행하세요.",
                 file=sys.stderr,
             )
             print(
@@ -409,7 +497,7 @@ def cmd_sync(args) -> int:
                     file=sys.stderr,
                 )
                 for b in blocked[:10]:
-                    print(f"  ❌ {b}", file=sys.stderr)
+                    print(f"  BLOCK {b}", file=sys.stderr)
                 print(
                     "[backup] 동작: 백업 중단 (자격증명 노출 위험).\n"
                     "[backup] 해결: 해당 파일을 .gitignore 에 추가하거나 다른 위치로 이동하세요.",
@@ -597,71 +685,593 @@ def cmd_sync(args) -> int:
         return 0  # hook-failure-tolerance
 
 
-# ─── 미구현 서브커맨드 (세션 2 예정) ─────────────────────────────────────────
+# ─── init 서브커맨드 (ADR-005 결정 3) ────────────────────────────────────────
 
 def cmd_init(args) -> int:
-    """host.json 의 backup 필드 초기 설정. (세션 2 구현 예정)"""
-    print("[backup] `init` 서브커맨드는 세션 2 에서 구현됩니다.")
-    print("[backup] 지금은 host.json 을 직접 편집하세요:")
-    print(
-        '  "backup": {\n'
-        '    "repo": "git@github.com:USER/REPO.git",\n'
-        '    "branch": "PROJECT-SLUG"\n'
-        "  }"
-    )
+    """host.json 의 backup 필드 초기 설정.
+
+    대화형 입력(input()) 또는 --repo/--branch 플래그 병행 지원.
+    이미 설정된 경우 현재 값 표시 + 변경 여부 질문 (idempotent).
+    harness_version 1 → 2 마이그레이션 자동 처리.
+
+    Args:
+        args: argparse.Namespace (repo, branch, non_interactive 포함)
+    """
+    try:
+        data = load_host_json()
+        existing_backup = data.get("backup") or {}
+        existing_repo = existing_backup.get("repo", "")
+        existing_branch = existing_backup.get("branch", "")
+        has_existing = bool(existing_repo)
+
+        non_interactive = getattr(args, "non_interactive", False)
+        repo_flag = getattr(args, "repo", "") or ""
+        branch_flag = getattr(args, "branch", "") or ""
+
+        # 이미 설정된 경우 — idempotent 처리
+        if has_existing and not non_interactive and not repo_flag:
+            print("[backup] 현재 backup 설정:")
+            print(f"  repo  : {existing_repo}")
+            print(f"  branch: {existing_branch or '(자동 추출)'}")
+            last_sync = existing_backup.get("last_sync", "")
+            if last_sync:
+                print(f"  마지막 sync: {last_sync}")
+            print()
+            try:
+                answer = input("[backup] 설정을 변경하시겠습니까? (y/N): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[backup] 입력 중단 — 기존 설정 유지")
+                return 0
+            if answer not in ("y", "yes"):
+                print("[backup] 기존 설정을 유지합니다.")
+                return 0
+
+        # repo URL 결정
+        if repo_flag:
+            new_repo = repo_flag
+        elif non_interactive:
+            # 비대화형 + --repo 플래그 없음 → 빈 값 (백업 미사용)
+            new_repo = ""
+        else:
+            # 대화형 입력
+            auto_branch = _auto_derive_branch_name()
+            print(f"[backup] 백업 리포 URL 을 입력하세요.")
+            print(f"  예: git@github.com:user/harness_backup.git")
+            print(f"  빈 값 입력 시 백업 미사용.")
+            try:
+                new_repo = input("[backup] backup_repo URL: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[backup] 입력 중단 — 설정 취소")
+                return 0
+
+        # HTTPS URL 경고 (차단 X — ADR-005 결정 4)
+        if new_repo and detect_auth_mode(new_repo) == "https":
+            print("[backup] HTTPS URL 이 입력되었습니다.")
+            print("  SSH URL 권장: git@github.com:user/repo.git")
+            print("  HTTPS 사용 시 인증 방법:")
+            print("    1) ~/.netrc 파일에 credential 등록")
+            print("    2) GH_TOKEN 환경변수 (또는 git credential helper)")
+            print("  자동 모드에서 자격증명 노출에 주의하세요.")
+
+        # 빈 repo — 백업 미사용
+        if not new_repo:
+            print("[backup] backup_repo 가 설정되지 않았습니다. 백업을 사용하지 않습니다.")
+            # backup 객체 제거 (또는 유지)
+            if has_existing:
+                try:
+                    if not non_interactive:
+                        answer = input("[backup] 기존 backup 설정을 제거하시겠습니까? (y/N): ").strip().lower()
+                    else:
+                        answer = "n"
+                except (EOFError, KeyboardInterrupt):
+                    answer = "n"
+                if answer in ("y", "yes"):
+                    data.pop("backup", None)
+                    save_host_json(data)
+                    print("[backup] backup 설정을 제거했습니다.")
+            return 0
+
+        # branch 결정
+        auto_branch = _auto_derive_branch_name()
+        if branch_flag:
+            new_branch = branch_flag
+        elif non_interactive:
+            # 비대화형 + --branch 없음 → 자동 추출
+            new_branch = auto_branch
+        else:
+            print(f"[backup] 백업 브랜치명을 입력하세요.")
+            print(f"  Enter 입력 시 자동 추출값 사용: {auto_branch}")
+            try:
+                branch_input = input("[backup] backup_branch (Enter = 자동): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[backup] 입력 중단 — 설정 취소")
+                return 0
+            new_branch = branch_input if branch_input else auto_branch
+
+        # host.json 갱신 + harness_version 마이그레이션
+        if "backup" not in data or not isinstance(data.get("backup"), dict):
+            data["backup"] = {}
+
+        data["backup"]["repo"] = new_repo
+        data["backup"]["branch"] = new_branch
+
+        # harness_version 1 → 2 마이그레이션
+        data, migrated = migrate_harness_version(data)
+        if migrated:
+            print("[backup] host.json schema 1 → 2 마이그레이션 됨")
+
+        if save_host_json(data):
+            print("[backup] host.json 의 backup 필드를 업데이트했습니다.")
+            print(f"  repo  : {new_repo}")
+            print(f"  branch: {new_branch}")
+            print()
+            print("[backup] 다음: `python3 .claude/bin/backup.py sync` 로 첫 백업을 실행하세요.")
+        else:
+            print("[backup] host.json 저장 실패 — 수동으로 편집하세요.", file=sys.stderr)
+            return 0
+
+        return 0
+
+    except Exception as e:
+        print(f"[backup] init 오류: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 0  # hook-failure-tolerance
+
+
+# ─── status 서브커맨드 (ADR-005 결정 7) ──────────────────────────────────────
+
+def cmd_status(args) -> int:
+    """마지막 sync 정보 + host.json backup 설정 표시.
+
+    캐시(.claude/state/backup-last.json) 가 없으면 "아직 sync 실행 안 됨" 안내.
+    --preview 플래그 시 rsync dry-run 으로 변경 예정 파일 미리보기.
+    """
+    try:
+        # host.json backup 설정 표시
+        cfg = load_backup_config()
+        data = load_host_json()
+
+        print("[backup] ── backup 설정 ──────────────────────────────")
+        if cfg:
+            repo_url = get_backup_repo(cfg) or "(미설정)"
+            branch = cfg.get("branch") or f"(자동 추출: {_auto_derive_branch_name()})"
+            print(f"  backup_repo  : {repo_url}")
+            print(f"  backup_branch: {branch}")
+            last_sync = cfg.get("last_sync", "")
+            last_commit = cfg.get("last_sync_commit", "")
+            if last_sync:
+                print(f"  last_sync    : {last_sync}")
+            if last_commit:
+                print(f"  last_commit  : {last_commit}")
+        else:
+            print("  (backup 미설정 — `python3 .claude/bin/backup.py init` 을 먼저 실행하세요)")
+
+        harness_version = data.get("harness_version", 1)
+        print(f"  harness_version: {harness_version}")
+
+        print()
+        print("[backup] ── 마지막 sync 이력 ──────────────────────────")
+        if _BACKUP_CACHE.exists():
+            try:
+                cache = json.loads(_BACKUP_CACHE.read_text(encoding="utf-8"))
+                ts = cache.get("ts", "없음")
+                status = cache.get("status", "?")
+                commit = cache.get("commit", "")
+                branch_cache = cache.get("branch", "?")
+                repo_cache = cache.get("repo", "?")
+
+                status_icon = {
+                    "success": "PASS",
+                    "no-changes": "SKIP",
+                    "clone-failed": "FAIL",
+                    "push-failed": "FAIL",
+                    "rsync-failed": "FAIL",
+                    "branch-failed": "FAIL",
+                    "commit-failed": "FAIL",
+                }.get(status, status.upper())
+
+                print(f"  시각  : {ts}")
+                print(f"  상태  : {status_icon} ({status})")
+                print(f"  repo  : {repo_cache}")
+                print(f"  branch: {branch_cache}")
+                if commit:
+                    print(f"  commit: {commit}")
+            except Exception as e:
+                print(f"  (캐시 파일 읽기 실패: {e})")
+        else:
+            print("  아직 sync 를 실행한 적이 없습니다.")
+            print("  `python3 .claude/bin/backup.py sync` 로 첫 백업을 실행하세요.")
+
+        # --preview: rsync dry-run 으로 변경 예정 파일 미리보기
+        preview = getattr(args, "preview", False)
+        if preview and cfg:
+            repo_url = get_backup_repo(cfg)
+            if repo_url:
+                print()
+                print("[backup] ── 변경 예정 파일 미리보기 (--preview) ────────")
+                print("  (임시 clone 없이 로컬 기준 파일 목록만 표시)")
+                excludes = get_effective_excludes()
+                # 간단히 find 로 예정 파일 목록 (rsync 는 clone 필요해서 skip)
+                try:
+                    r = subprocess.run(
+                        ["git", "status", "--short"],
+                        cwd=_PROJECT_ROOT,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if r.stdout.strip():
+                        print("  로컬 git 변경 파일:")
+                        for line in r.stdout.strip().splitlines()[:20]:
+                            print(f"    {line}")
+                    else:
+                        print("  git 변경 파일 없음 (clean working tree)")
+                except Exception as e:
+                    print(f"  git status 실패: {e}")
+            else:
+                print()
+                print("[backup] --preview: backup_repo 미설정 — 미리보기 불가")
+
+        return 0
+
+    except Exception as e:
+        print(f"[backup] status 오류: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 0
+
+
+# ─── config 서브커맨드 (ADR-005 결정 7) ──────────────────────────────────────
+
+def cmd_config(args) -> int:
+    """backup 필드 조회/수정.
+
+    서브 액션:
+      show              현재 backup_repo / backup_branch / harness_version 표시
+      get <key>         특정 키 값만 출력 (스크립트 파싱용)
+      set <key> <value> backup_repo / backup_branch 갱신. host.json atomic write.
+      unset <key>       필드 제거 (백업 비활성화)
+    """
+    try:
+        action = getattr(args, "config_action", None) or "show"
+
+        if action == "show":
+            return _config_show()
+        elif action == "get":
+            key = getattr(args, "config_key", "") or ""
+            return _config_get(key)
+        elif action == "set":
+            key = getattr(args, "config_key", "") or ""
+            value = getattr(args, "config_value", "") or ""
+            return _config_set(key, value)
+        elif action == "unset":
+            key = getattr(args, "config_key", "") or ""
+            return _config_unset(key)
+        else:
+            print(f"[backup] config: 알 수 없는 액션 '{action}'", file=sys.stderr)
+            print("[backup] 사용법: config show | get <key> | set <key> <value> | unset <key>")
+            return 0
+
+    except Exception as e:
+        print(f"[backup] config 오류: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return 0
+
+
+def _config_show() -> int:
+    """현재 backup 설정 전체를 표시한다."""
+    data = load_host_json()
+    cfg = data.get("backup") or {}
+    harness_version = data.get("harness_version", 1)
+
+    print("[backup] ── config show ─────────────────────────────")
+    print(f"  harness_version: {harness_version}")
+
+    if cfg:
+        repo = cfg.get("repo", "(미설정)")
+        branch = cfg.get("branch", "(자동 추출)")
+        last_sync = cfg.get("last_sync", "(없음)")
+        last_commit = cfg.get("last_sync_commit", "(없음)")
+        print(f"  backup.repo         : {repo}")
+        print(f"  backup.branch       : {branch}")
+        print(f"  backup.last_sync    : {last_sync}")
+        print(f"  backup.last_sync_commit: {last_commit}")
+    else:
+        print("  backup: (미설정)")
+        print("  `python3 .claude/bin/backup.py init` 으로 설정하세요.")
+
     return 0
 
 
-def cmd_status(args) -> int:
-    """마지막 sync 정보 + 변경 미리보기. (세션 2 구현 예정)"""
-    print("[backup] `status` 서브커맨드는 세션 2 에서 구현됩니다.")
+def _config_get(key: str) -> int:
+    """특정 키 값만 출력한다 (스크립트 파싱용).
+
+    Args:
+        key: 조회할 키 이름 (backup_repo, backup_branch, harness_version 등)
+    """
+    if not key:
+        print("[backup] config get: 키를 지정하세요.", file=sys.stderr)
+        print("  사용법: config get <backup_repo|backup_branch|harness_version>")
+        return 0
+
+    data = load_host_json()
+    cfg = data.get("backup") or {}
+
+    # 키 별칭 정규화
+    key_map = {
+        "backup_repo": "repo",
+        "backup_branch": "branch",
+        "repo": "repo",
+        "branch": "branch",
+        "last_sync": "last_sync",
+        "last_sync_commit": "last_sync_commit",
+    }
+
+    if key == "harness_version":
+        print(data.get("harness_version", 1))
+    elif key in key_map:
+        normalized = key_map[key]
+        value = cfg.get(normalized, "")
+        if value:
+            print(value)
+        else:
+            # 빈 값도 출력 (스크립트에서 비어있으면 미설정으로 처리)
+            print("")
+    else:
+        print(f"[backup] config get: 알 수 없는 키 '{key}'", file=sys.stderr)
+        print("  지원 키: backup_repo, backup_branch, harness_version, last_sync, last_sync_commit")
+
+    return 0
+
+
+def _config_set(key: str, value: str) -> int:
+    """backup_repo 또는 backup_branch 를 갱신한다.
+
+    Args:
+        key: 설정할 키 (backup_repo 또는 backup_branch)
+        value: 설정할 값
+    """
+    if not key:
+        print("[backup] config set: 키를 지정하세요.", file=sys.stderr)
+        print("  사용법: config set <backup_repo|backup_branch> <값>")
+        return 0
+
+    if value is None:
+        value = ""
+
+    data = load_host_json()
+    if "backup" not in data or not isinstance(data.get("backup"), dict):
+        data["backup"] = {}
+
+    key_map = {
+        "backup_repo": "repo",
+        "backup_branch": "branch",
+        "repo": "repo",
+        "branch": "branch",
+    }
+
+    if key not in key_map:
+        print(f"[backup] config set: 설정 불가 키 '{key}'", file=sys.stderr)
+        print("  설정 가능 키: backup_repo (또는 repo), backup_branch (또는 branch)")
+        return 0
+
+    normalized = key_map[key]
+    data["backup"][normalized] = value
+
+    # HTTPS URL 경고
+    if normalized == "repo" and value and detect_auth_mode(value) == "https":
+        print("[backup] HTTPS URL 감지 — SSH URL 권장: git@github.com:user/repo.git")
+
+    # harness_version 마이그레이션
+    data, migrated = migrate_harness_version(data)
+    if migrated:
+        print("[backup] host.json schema 1 → 2 마이그레이션 됨")
+
+    if save_host_json(data):
+        display_key = "backup.repo" if normalized == "repo" else "backup.branch"
+        print(f"[backup] {display_key} = {value!r}")
+    else:
+        print("[backup] host.json 저장 실패", file=sys.stderr)
+
+    return 0
+
+
+def _config_unset(key: str) -> int:
+    """backup 필드에서 특정 키를 제거한다.
+
+    Args:
+        key: 제거할 키 이름
+    """
+    if not key:
+        print("[backup] config unset: 키를 지정하세요.", file=sys.stderr)
+        print("  사용법: config unset <backup_repo|backup_branch>")
+        return 0
+
+    data = load_host_json()
+    cfg = data.get("backup") or {}
+
+    key_map = {
+        "backup_repo": "repo",
+        "backup_branch": "branch",
+        "repo": "repo",
+        "branch": "branch",
+    }
+
+    if key not in key_map:
+        print(f"[backup] config unset: 알 수 없는 키 '{key}'", file=sys.stderr)
+        return 0
+
+    normalized = key_map[key]
+    if normalized in cfg:
+        del cfg[normalized]
+        data["backup"] = cfg
+        if save_host_json(data):
+            display_key = "backup.repo" if normalized == "repo" else "backup.branch"
+            print(f"[backup] {display_key} 제거됨")
+        else:
+            print("[backup] host.json 저장 실패", file=sys.stderr)
+    else:
+        print(f"[backup] backup.{normalized} 이미 설정되지 않은 상태입니다.")
+
+    return 0
+
+
+# ─── self 서브커맨드 (ADR-005 결정 7, F007/F009 라벨 일관) ───────────────────
+
+def cmd_self(args) -> int:
+    """셀프 dry-run — 의존성 체크 및 환경 점검.
+
+    점검 항목:
+      - git CLI 존재 + 버전
+      - rsync CLI 존재 + 버전
+      - ssh-agent / ~/.ssh/ 키 등록 여부
+      - backup_repo 가 SSH URL 이면 ssh -T <host> 연결 가능 여부
+      - is_meta_harness() 결과 + effective_excludes 카운트
+      - .claude/state/backup-last.json 캐시 존재 여부
+
+    출력 양식: F009 lint.py self 와 일관된 마크다운 표.
+    """
+    results: list[tuple[str, str, str]] = []  # (항목, 상태, 내용)
+
+    # 1. git CLI 확인
+    try:
+        r = subprocess.run(
+            ["git", "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            version = r.stdout.strip()
+            results.append(("git CLI", "PASS", version))
+        else:
+            results.append(("git CLI", "BLOCK", "git 명령어를 찾을 수 없습니다"))
+    except FileNotFoundError:
+        results.append(("git CLI", "BLOCK", "git 미설치 — sudo apt install git"))
+    except Exception as e:
+        results.append(("git CLI", "CONCERN", f"확인 실패: {e}"))
+
+    # 2. rsync CLI 확인
+    try:
+        r = subprocess.run(
+            ["rsync", "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            first_line = r.stdout.splitlines()[0] if r.stdout else "?"
+            results.append(("rsync CLI", "PASS", first_line))
+        else:
+            results.append(("rsync CLI", "BLOCK", "rsync 명령어를 찾을 수 없습니다"))
+    except FileNotFoundError:
+        results.append(("rsync CLI", "BLOCK", "rsync 미설치 — sudo apt install rsync"))
+    except Exception as e:
+        results.append(("rsync CLI", "CONCERN", f"확인 실패: {e}"))
+
+    # 3. ssh-agent + 키 등록 확인
+    try:
+        r = subprocess.run(
+            ["ssh-add", "-l"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            key_count = len(r.stdout.strip().splitlines()) if r.stdout.strip() else 0
+            results.append(("ssh-agent + 키", "PASS", f"{key_count}개 키 등록됨"))
+        elif r.returncode == 1:
+            # ssh-agent 실행 중이나 키 없음
+            results.append(("ssh-agent + 키", "CONCERN", "ssh-agent 실행 중이나 키 미등록 — ssh-add ~/.ssh/id_ed25519"))
+        else:
+            # ssh-agent 미실행
+            results.append(("ssh-agent + 키", "CONCERN", "ssh-agent 미실행 — eval $(ssh-agent) && ssh-add"))
+    except FileNotFoundError:
+        results.append(("ssh-agent + 키", "CONCERN", "ssh-add 없음 — SSH 클라이언트 미설치"))
+    except Exception as e:
+        results.append(("ssh-agent + 키", "CONCERN", f"확인 실패: {e}"))
+
+    # 4. backup_repo SSH 연결 테스트
+    cfg = load_backup_config()
+    if cfg:
+        repo_url = get_backup_repo(cfg) or ""
+        if repo_url and detect_auth_mode(repo_url) == "ssh":
+            # git@github.com:user/repo.git → github.com
+            m = re.match(r"git@([^:]+):", repo_url)
+            if m:
+                ssh_host = m.group(1)
+                try:
+                    r = subprocess.run(
+                        ["ssh", "-T", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
+                         f"git@{ssh_host}"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    # GitHub 등은 exit 1 이지만 stderr 에 "successfully authenticated" 포함
+                    output = (r.stdout + r.stderr).lower()
+                    if "successfully authenticated" in output or "welcome" in output:
+                        results.append((f"SSH {ssh_host}", "PASS", "연결 및 인증 성공"))
+                    elif r.returncode == 255:
+                        results.append((f"SSH {ssh_host}", "CONCERN", "연결 실패 — SSH 키 등록 확인 필요"))
+                    else:
+                        results.append((f"SSH {ssh_host}", "CONCERN", f"응답 있음 (exit {r.returncode}) — 수동 확인 권장"))
+                except subprocess.TimeoutExpired:
+                    results.append((f"SSH {ssh_host}", "CONCERN", "연결 타임아웃 — 네트워크 확인"))
+                except Exception as e:
+                    results.append((f"SSH {ssh_host}", "CONCERN", f"테스트 실패: {e}"))
+            else:
+                results.append(("SSH 연결 테스트", "CONCERN", f"호스트 파싱 실패: {repo_url}"))
+        elif repo_url and detect_auth_mode(repo_url) == "https":
+            results.append(("SSH 연결 테스트", "CONCERN", "HTTPS URL — SSH 연결 테스트 불가. SSH URL 권장."))
+        else:
+            results.append(("SSH 연결 테스트", "CONCERN", "backup_repo 미설정 — 연결 테스트 스킵"))
+    else:
+        results.append(("SSH 연결 테스트", "CONCERN", "backup 미설정 — init 먼저 실행하세요"))
+
+    # 5. is_meta_harness + effective_excludes
+    meta = is_meta_harness()
+    excludes = get_effective_excludes()
+    meta_label = "메타 하네스" if meta else "다운스트림"
+    results.append(("환경 감지", "PASS", f"{meta_label} — 제외 패턴 {len(excludes)}개"))
+
+    # 6. 캐시 파일 존재 확인
     if _BACKUP_CACHE.exists():
         try:
             cache = json.loads(_BACKUP_CACHE.read_text(encoding="utf-8"))
-            print(f"[backup] 마지막 sync: {cache.get('ts', '없음')}")
-            print(f"[backup] 상태: {cache.get('status', '?')}")
-            print(f"[backup] commit: {cache.get('commit', '?')}")
-            print(f"[backup] branch: {cache.get('branch', '?')}")
+            ts = cache.get("ts", "?")
+            status = cache.get("status", "?")
+            results.append(("sync 캐시", "PASS", f"존재 — 마지막: {ts} ({status})"))
         except Exception:
-            print("[backup] 캐시 파일을 읽을 수 없습니다.")
+            results.append(("sync 캐시", "CONCERN", "캐시 파일 파싱 실패"))
     else:
-        print("[backup] 아직 sync 이력이 없습니다.")
-    return 0
+        results.append(("sync 캐시", "CONCERN", "캐시 없음 — 아직 sync 실행 전"))
 
+    # 출력 — F009 lint.py self 와 일관된 마크다운 표
+    print("[backup] ── self check ──────────────────────────────")
+    print()
+    print("| 항목 | 상태 | 내용 |")
+    print("|------|------|------|")
+    for item, status, detail in results:
+        status_marker = {"PASS": "PASS", "CONCERN": "WARN", "BLOCK": "BLOCK"}.get(status, status)
+        print(f"| {item} | {status_marker} | {detail} |")
 
-def cmd_config(args) -> int:
-    """backup 필드 조회/수정. (세션 2 구현 예정)"""
-    print("[backup] `config` 서브커맨드는 세션 2 에서 구현됩니다.")
-    cfg = load_backup_config()
-    if cfg:
-        print("[backup] 현재 backup 설정:")
-        print(json.dumps(cfg, ensure_ascii=False, indent=2))
+    print()
+
+    # 요약
+    blocks = [r for r in results if r[1] == "BLOCK"]
+    concerns = [r for r in results if r[1] == "CONCERN"]
+    passes = [r for r in results if r[1] == "PASS"]
+
+    print(f"[backup] PASS {len(passes)}  /  CONCERN {len(concerns)}  /  BLOCK {len(blocks)}")
+
+    if blocks:
+        print()
+        print("[backup] BLOCK 항목이 있습니다 — 아래 내용을 해결 후 sync 를 실행하세요:")
+        for item, _, detail in blocks:
+            print(f"  BLOCK {item}: {detail}")
+    elif concerns:
+        print()
+        print("[backup] CONCERN 항목이 있습니다 (sync 는 가능하나 점검 권장):")
+        for item, _, detail in concerns:
+            print(f"  WARN {item}: {detail}")
     else:
-        print("[backup] backup 설정이 없습니다. `init` 을 먼저 실행하세요 (세션 2 예정).")
-    return 0
+        print("[backup] 모든 항목 PASS — sync 준비 완료.")
 
-
-def cmd_self(args) -> int:
-    """셀프 dry-run — 의존성 체크. (세션 2 구현 예정)"""
-    print("[backup] `self` 서브커맨드는 세션 2 에서 구현됩니다.")
-    print("[backup] 기본 의존성 확인:")
-    # git 존재 확인
-    try:
-        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
-        print(f"  git: {'OK — ' + r.stdout.strip() if r.returncode == 0 else 'MISSING'}")
-    except Exception:
-        print("  git: ERROR")
-    # rsync 존재 확인
-    try:
-        r = subprocess.run(["rsync", "--version"], capture_output=True, text=True, timeout=5)
-        first_line = r.stdout.splitlines()[0] if r.stdout else "?"
-        print(f"  rsync: {'OK — ' + first_line if r.returncode == 0 else 'MISSING'}")
-    except Exception:
-        print("  rsync: ERROR")
-    # host.json 확인
-    cfg = load_backup_config()
-    print(f"  backup config: {'설정됨' if cfg else '미설정 (init 필요)'}")
-    print(f"  meta_harness: {is_meta_harness()}")
     return 0
 
 
@@ -699,11 +1309,57 @@ def main() -> int:
     )
 
     sub = parser.add_subparsers(dest="cmd", metavar="<서브커맨드>")
-    sub.add_parser("sync", help="백업 리포에 현재 산출물 동기화 (세션 1 구현)")
-    sub.add_parser("init", help="backup 설정 초기화 (세션 2 예정)")
-    sub.add_parser("status", help="마지막 sync 정보 표시 (세션 2 예정)")
-    sub.add_parser("config", help="backup 설정 조회/수정 (세션 2 예정)")
-    sub.add_parser("self", help="셀프 dry-run 의존성 체크 (세션 2 예정)")
+
+    # sync 서브커맨드
+    sub.add_parser("sync", help="백업 리포에 현재 산출물 동기화")
+
+    # init 서브커맨드
+    init_p = sub.add_parser("init", help="backup 설정 초기화 (host.json 의 backup 필드)")
+    init_p.add_argument(
+        "--repo",
+        default="",
+        help="백업 리포 URL (비대화형 모드용)",
+    )
+    init_p.add_argument(
+        "--branch",
+        default="",
+        help="백업 브랜치명 (비대화형 모드용, 기본 자동 추출)",
+    )
+    init_p.add_argument(
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        default=False,
+        help="대화형 입력 없이 플래그만으로 설정",
+    )
+
+    # status 서브커맨드
+    status_p = sub.add_parser("status", help="마지막 sync 정보 + 설정 표시")
+    status_p.add_argument(
+        "--preview",
+        action="store_true",
+        default=False,
+        help="다음 sync 시 변경될 파일 미리보기 (git status 기반)",
+    )
+
+    # config 서브커맨드
+    config_p = sub.add_parser("config", help="backup 설정 조회/수정")
+    config_sub = config_p.add_subparsers(dest="config_action", metavar="<액션>")
+
+    config_sub.add_parser("show", help="현재 backup 설정 전체 표시")
+
+    config_get_p = config_sub.add_parser("get", help="특정 키 값 출력")
+    config_get_p.add_argument("config_key", nargs="?", default="", help="키 이름")
+
+    config_set_p = config_sub.add_parser("set", help="backup_repo 또는 backup_branch 갱신")
+    config_set_p.add_argument("config_key", nargs="?", default="", help="키 이름")
+    config_set_p.add_argument("config_value", nargs="?", default="", help="설정할 값")
+
+    config_unset_p = config_sub.add_parser("unset", help="필드 제거 (백업 비활성화)")
+    config_unset_p.add_argument("config_key", nargs="?", default="", help="키 이름")
+
+    # self 서브커맨드
+    sub.add_parser("self", help="셀프 dry-run — 의존성 체크 (git/rsync/ssh/host.json)")
 
     args = parser.parse_args()
 
@@ -722,7 +1378,6 @@ def main() -> int:
             parser.print_help()
             print()
             print("[backup] 사용법: python3 .claude/bin/backup.py <sync|init|status|config|self>")
-            print("[backup] 세션 1: sync 구현 완료. init/status/config/self 는 세션 2 예정.")
             return 0
     except Exception as e:
         print(f"[backup] 최상위 예외: {e}", file=sys.stderr)
