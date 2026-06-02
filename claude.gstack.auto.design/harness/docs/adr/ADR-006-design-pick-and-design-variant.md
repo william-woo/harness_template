@@ -605,15 +605,25 @@ F005~F010 의 baseline + codex 비미러 패턴 100% 일관. F011 도 운영 도
 | **(B) `lint.py` 에 LINT-MR 검사기 추가** | F009 단일 헬퍼 확장 (신규 파일 0), `/project:lint` 호출만으로 모든 변형 정합 검증, design-review 셀프 모드 CON-S3 와 분리 (lint = 거버넌스, design-review = 디자인), 사용자 시간 ≫ 코드 작성 시간 가치 | lint.py 코드 줄수 ↑ (50~80 줄 추가) | **채택** |
 | (C) 신규 mirror.py 헬퍼 + 신규 `/project:mirror` 커맨드 | 책임 분리 명확 | 산출물 폭증 (F005~F010 패턴 깨짐), 호출자 부담 ↑ | 과도 |
 
-#### LINT-MR 검사 항목 (5 개)
+#### LINT-MR 검사 항목 (5 개) — F011 세션 3 구현 기준
+
+> **노트 (2026-06-02 갱신)**: F011 세션 3 구현 단계에서 ADR 표 정의가 너무 광범위
+> (전체 디렉토리 정합 비교 — 변형별 제외 목록 필요) 함을 발견. F010 회귀 2 케이스
+> (gatekeeper.md 잘못 미러 / Bash(*) 잘못 적용) 의 **자동 가드** 라는 메타 목적에
+> 맞춰 5 항목을 결정론적·실용적 점검으로 재설계. 전체 디렉토리 정합 비교는 후속
+> phase 의 `LINT-MR-FULL` 로 분리 예정.
 
 | # | 항목 | 검사 방법 | BLOCK / CONCERN |
 |---|---|---|---|
-| MR-1 | ⓑ, ⓑ′, ⓑ″ 의 `.claude/agents/*.md` 정합 | 메인 .claude/agents/ 와 각 변형 비교 + 변형별 제외 목록 (ⓑ 는 gatekeeper/designer 없음, ⓑ′ 는 designer 없음) | 누락/추가 시 BLOCK |
-| MR-2 | ⓑ, ⓑ′, ⓑ″ 의 `.claude/commands/*.md` 정합 | 메인 .claude/commands/ 와 각 변형 비교 + 변형별 제외 (ⓑ/ⓑ′ 는 design-pick 없음) | 누락/추가 시 BLOCK |
-| MR-3 | ⓑ, ⓑ′, ⓑ″ 의 `.claude/bin/*.py` 정합 | 메인 .claude/bin/ 과 각 변형 비교 + 변형별 제외 (ⓑ/ⓑ′ 는 design_pick.py 없음) | 누락/추가 시 BLOCK |
-| MR-4 | ⓑ″ 의 `docs/design-references/*.md` 4 파일 정합 | 메인 src/docs/design/ui/*.md 4 파일 ↔ 변형 docs/design-references/*.md md5 비교 | 불일치 시 BLOCK |
-| MR-5 | ⓑ, ⓑ′, ⓑ″ 의 `.claude/settings.json` 분리 보존 | 각 변형의 settings.json 이 변형별 정체성 유지 (자율 오버레이는 ⓑ′/ⓑ″ 만, ⓑ 는 표준) | 회귀 시 BLOCK |
+| MR-1 | ⓑ 표준 변형에 자율 오버레이 부재 | `claude.gstack/.claude/agents/gatekeeper.md`, `hooks/pre-bash-auto-boundary-check.sh` 존재 여부 | 존재 시 BLOCK |
+| MR-2 | ⓑ 표준 변형의 `settings.json` Bash(*) 미사용 | `Bash(*)` / `Bash("*")` 패턴 (JSON 이스케이프 변종 포함) | 발견 시 BLOCK |
+| MR-3 | ⓑ 표준 변형의 `CLAUDE.md` Autonomous Mode 헤딩 부재 | 정규식 `^#{1,6}\s+.*Autonomous Mode` (헤딩만, 본문 인용은 거짓 양성 회피) | 발견 시 BLOCK |
+| MR-4 | ⓑ, ⓑ′, ⓐ 3 변형에 디자인 오버레이 부재 | `designer.md` / `design-pick.md` / `design_pick.py` / `docs/design-references/` 존재 여부 | 존재 시 BLOCK |
+| MR-5 | ⓑ″ 디자인 변형에 디자인 오버레이 모두 존재 | 위 4 파일 모두 존재 여부 | 누락 시 CONCERN |
+
+F010 미러 회귀 2 케이스는 MR-1 (gatekeeper.md) + MR-2 (Bash(*)) 로 자동 감지된다.
+신규 변형 도입 시 MR-1~5 가 핵심 회귀 (오버레이 잘못 미러) 를 잡지만, 변형 내부
+파일 추가·삭제 같은 점진적 drift 는 `LINT-MR-FULL` 후속 phase 에서 다룬다.
 
 #### 변형별 제외 목록 (lint.py 내부 상수)
 

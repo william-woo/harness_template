@@ -89,8 +89,8 @@ python3 .claude/bin/design_pick.py self --strict
 
   [토큰 카운트]
   apple    : colors=18  typography=12  radius=5  spacing=6  shadows=1
-  claude   : colors=23  typography=12  radius=4  spacing=6  shadows=0
-  spotify  : colors=17  typography=15  radius=7  spacing=7  shadows=3
+  claude   : colors=25  typography=13  radius=4  spacing=6  shadows=0
+  spotify  : colors=19  typography=16  radius=7  spacing=7  shadows=3
   tesla    : colors=11  typography= 9  radius=4  spacing=6  shadows=0
 ```
 

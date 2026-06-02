@@ -909,7 +909,12 @@ def check_mirror_regression() -> list:
         if gstack_settings.exists():
             try:
                 content = gstack_settings.read_text(encoding="utf-8")
-                if 'Bash("*")' in content or "Bash(*)" in content:
+                # 다양한 이스케이프 변종 모두 감지 (Reviewer SHOULD-3):
+                #   Bash(*)          — 표준
+                #   Bash("*")        — 큰따옴표 변종
+                #   Bash(\"*\")      — json.dumps 이스케이프 경로
+                bash_wildcard_patterns = ['Bash(*)', 'Bash("*")', 'Bash(\\"*\\")', "Bash('*')"]
+                if any(pat in content for pat in bash_wildcard_patterns):
                     results.append(_issue(
                         checker, BLOCK,
                         "claude.gstack/.claude/settings.json",

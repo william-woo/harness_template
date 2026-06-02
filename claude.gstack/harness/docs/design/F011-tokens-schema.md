@@ -26,8 +26,8 @@
 | `generated_by` | string | 자동 | 생성 명령어 (감사 추적용 — `design_pick.py apply --brand=<brand>`) |
 | `colors` | object | 필수 | 색상 토큰. 키는 의미 기반 (primary/canvas/ink 등) |
 | `typography` | object | 필수 | 폰트 패밀리 + 타이포 스케일 |
-| `radius` | object | 필수 | 반경 토큰 (sm/md/lg/pill 최소 4개) |
-| `spacing` | object | 필수 | 간격 토큰 (section/xl/lg/md/sm/xs 최소 6개) |
+| `radius` | object | 필수 | 반경 토큰. `sm/md/lg/pill` 은 **권장 키 이름** (필수 X) — 브랜드별 커스텀 명칭 허용 (예: Spotify 의 `subtle/standard/comfortable/large/pill/full_pill`, Tesla 의 `flat/sm/card/circle`). 의미적으로 작은→큰 순서 유지 권장. |
+| `spacing` | object | 필수 | 간격 토큰. `section/xl/lg/md/sm/xs` 권장 키 (필수 X). 브랜드별 커스텀 명칭 허용. `null` 값은 "해당 없음 — 풀뷰포트 이미지가 섹션을 대체" 같은 디자인 의도 명시 가능 (다운스트림은 fallback 처리). |
 | `shadows` | object | 선택 | 그림자 토큰 (브랜드별 0~3 개) |
 | `characteristics` | string[] | 권장 | 시그니처 정체성 태그 (design-review D.TOKEN 카테고리가 사용) |
 | `anti_patterns` | string[] | 권장 | 피해야 할 패턴 (design-review CONCERN 감지에 사용) |
