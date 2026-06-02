@@ -100,6 +100,27 @@ WCAG 2.1 AA 일부 차용 + 텍스트 정적 분석 한도 내 핵심 항목.
 
 ---
 
+## D. TOKEN (디자인 토큰 정합 — F011 신설)
+
+`tokens.json` 부재 시 카테고리 전체 **N/A** (점검 안 함).
+`tokens.json` 존재 시 아래 6 항목 추가 점검.
+
+**라벨 체계**: BLOCK 없음. CONCERN / PASS / INFO 만 사용. 점진적 도입 정신 — 거짓 양성 위험 최소화.
+
+| # | 항목 | 검사 방법 (의사코드 / grep 패턴) | 라벨 조건 |
+|---|---|---|---|
+| TOKEN-1 | `tokens.json` `colors` 외 hex 색상 직접 사용 | `grep -rn "#[0-9a-fA-F]\{3,6\}"` → `tokens.json` 의 hex 값과 대조, 미등록값 추출 | CONCERN (미등록 hex 존재) / PASS |
+| TOKEN-2 | `tokens.json` `typography.font_body` 외 폰트 패밀리 직접 사용 | `grep -rn "font-family"` → `tokens.json` 폰트 목록 대조, 미등록 폰트 추출 | CONCERN (미등록 폰트 존재) / PASS |
+| TOKEN-3 | `tokens.json` `radius` 외 임의 `border-radius` 값 | `grep -rn "border-radius"` → `tokens.json` radius 값 대조 | INFO (미등록 radius 존재) / PASS |
+| TOKEN-4 | `tokens.json` `spacing` 외 임의 `padding`/`margin` 값 (8px 그리드 위반) | `grep -rn "padding:\|margin:"` → `tokens.json` spacing 값 대조 | INFO (8px 그리드 외 값 존재) / PASS |
+| TOKEN-5 | `tokens.json` `anti_patterns` 에 명시된 패턴 등장 | `anti_patterns` 목록 추출 → grep 전수 탐색 | CONCERN (anti_pattern 발견) / PASS |
+| TOKEN-6 | `tokens.json` 자체 유효성 (필수 필드 존재) | `colors`, `typography`, `radius`, `spacing` 필드 존재 여부 확인 | CONCERN (필수 필드 누락) / PASS |
+
+**다운스트림·셀프 공통**: 두 모드 모두 `tokens.json` 존재 시 TOKEN 카테고리 추가 점검.
+토큰 기반 점검은 선택된 brand 외 스타일 혼입을 감지하여 디자인 시스템 일관성을 보조한다.
+
+---
+
 ## 결과 양식 템플릿
 
 ```markdown
@@ -131,6 +152,13 @@ WCAG 2.1 AA 일부 차용 + 텍스트 정적 분석 한도 내 핵심 항목.
 |---|---|---|---|
 | CON-1 | 디자인 토큰 | CONCERN | 하드코딩 색상 3건 |
 | CON-3 | 명명 규칙 | PASS | — |
+
+### D. TOKEN (N/M 통과 — tokens.json 없으면 N/A)
+
+| # | 항목 | 라벨 | 발견 |
+|---|---|---|---|
+| TOKEN-1 | hex 색상 직접 사용 | CONCERN | `App.css:14` `#ff0000` |
+| TOKEN-6 | tokens.json 유효성 | PASS | 필수 필드 모두 존재 |
 
 ### 원자적 수정 요청
 

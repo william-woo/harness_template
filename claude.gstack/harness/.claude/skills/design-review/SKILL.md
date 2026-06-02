@@ -142,6 +142,30 @@ description: |
 
 ---
 
+## D. TOKEN (디자인 토큰 정합 — F011 신설)
+
+`tokens.json` 부재 시 카테고리 전체 **N/A** (점검 안 함).
+`tokens.json` 존재 시 아래 6 항목 추가 점검.
+
+검사 항목 (BLOCK 없음 — CONCERN / PASS / INFO 만):
+
+| ID | 검사 | 라벨 |
+|---|---|---|
+| TOKEN-1 | `tokens.json` 의 `colors.primary` 외 hex 색상 직접 사용 (예: `color: #ff0000`) | CONCERN |
+| TOKEN-2 | `tokens.json` `typography.font_body` 외 폰트 패밀리 직접 사용 | CONCERN |
+| TOKEN-3 | `tokens.json` `radius` 외 임의 `border-radius` 값 | INFO |
+| TOKEN-4 | `tokens.json` `spacing` 외 임의 `padding`/`margin` 값 (8px 그리드 위반) | INFO |
+| TOKEN-5 | `tokens.json` `anti_patterns` 에 명시된 패턴 등장 (예: Apple 의 그라디언트, Spotify 의 라이트 모드) | CONCERN |
+| TOKEN-6 | `tokens.json` 자체 유효성 (필수 필드 `colors`/`typography`/`radius`/`spacing` 존재) | PASS or CONCERN |
+
+**BLOCK 라벨 사용 안 함 — 점진적 도입 정신**: 디자인 토큰은 정밀도가 낮은 영역이라 거짓 양성 위험이 있다.
+CONCERN 으로 시작하여 사용자 학습 후 라벨 강화를 검토한다.
+
+`/project:design-review` 호출 시 `tokens.json` 존재하면 TOKEN 카테고리 추가 점검.
+부재 시 IA/A11Y/CON 만 점검 (기존 동작 무회귀).
+
+---
+
 ## 결과 양식
 
 ```markdown
@@ -166,6 +190,12 @@ description: |
 | # | 항목 | 라벨 | 발견 |
 |---|---|---|---|
 | CON-1 | 디자인 토큰 | CONCERN | 하드코딩 색상 3건 |
+
+### D. TOKEN (N/M 통과 — tokens.json 없으면 N/A)
+| # | 항목 | 라벨 | 발견 |
+|---|---|---|---|
+| TOKEN-1 | hex 색상 직접 사용 | CONCERN | `App.css:14` `#ff0000` |
+| TOKEN-6 | tokens.json 유효성 | PASS | 필수 필드 모두 존재 |
 
 ### 원자적 수정 요청
 1. **[BLOCK-IA-6]** `파일명:줄번호` — 에러 분기 누락

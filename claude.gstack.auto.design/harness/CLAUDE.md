@@ -116,8 +116,10 @@ project-root/
 ├── src/                      # 소스 코드
 │   └── harness_template/     # 배포용 하네스 템플릿 (별도 git repo)
 │       ├── claude/           #   ⓐ baseline — Phase 0 스냅샷 (수정 X)
-│       ├── claude.gstack/    #   ⓑ ★ 메인 — 모든 phase 산출물의 정합 사본
-│       └── openai/           #   ⓒ Codex 호스트 변형 (.codex/ 구조)
+│       ├── claude.gstack/    #   ⓑ ★ 메인 — 모든 phase 산출물의 정합 사본 (표준)
+│       ├── claude.gstack.auto/         #   ⓒ 자율 모드 변형 (메인 1:1)
+│       ├── claude.gstack.auto.design/  #   ⓓ 자율+디자인 변형 (F011 신설 — 디자인 오버레이 포함)
+│       └── openai/           #   ⓔ Codex 호스트 변형 (.codex/ 구조)
 ├── tests/                    # 테스트
 │   └── e2e/                  # E2E 테스트 스크립트 (Playwright — F008)
 │       └── _template.spec.ts # qa-browser 스크립트 템플릿 예시
@@ -270,6 +272,25 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 > **호출 시점**: handoff 직전, 또는 새 feature 추가 후, 또는 ADR 작성 후.
 > lint는 **거버넌스 정합성** (메타데이터·연결성) 만 검사. design-review (IA/A11Y/CON) 와 qa-browser (E2E) 와 책임 분리됨.
 > 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
+
+### 디자인 시스템 결정 (Phase 7 — F011)
+
+```
+python3 .claude/bin/design_pick.py compare              # 4 브랜드 비교표 (정적)
+python3 .claude/bin/design_pick.py recommend            # designer 에이전트 안내
+python3 .claude/bin/design_pick.py apply apple          # tokens.json 생성 (선택된 brand)
+python3 .claude/bin/design_pick.py apply claude --force # 기존 tokens.json 덮어쓰기
+python3 .claude/bin/design_pick.py show                 # 현재 tokens.json 표시
+python3 .claude/bin/design_pick.py self                 # 의존성·정합 점검
+```
+
+> **호출 기준**: UI 작업 시작 / 브랜드 스타일 변경 / 디자인 시스템 통합 검토
+> 4 브랜드: Apple / Claude / Spotify / Tesla — `.claude/design/references/*-design.md`
+> 출력: `.claude/design/tokens.json` (color/typography/radius/spacing/shadows/anti_patterns)
+> design-review 가 tokens.json 기반 D. TOKEN 카테고리로 일관성 점검
+> **claude.gstack.auto.design 변형 전용** (다른 변형엔 design_pick.py 없음)
+
+---
 
 ### 다운스트림 백업 동기화 (Phase 6 — F010)
 
@@ -516,6 +537,46 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 해당 없으면 (예: 소규모 수정·실험) backup-sync 스킵 가능.
 **전제 조건**: `init` 으로 `backup_repo` 설정 완료. SSH 키가 ssh-agent 에 등록.
+
+---
+
+## 🎨 design-pick 호출 기준
+
+다음 중 하나에 해당하면 `/project:design-pick` 권장:
+
+- 새 UI 컴포넌트 / 페이지 추가
+- 브랜드 스타일 일관성 검토
+- 디자인 시스템 통합 (기존 컴포넌트 + 신규 토큰)
+- 다운스트림 프로젝트 UI 작업 시작 (initial setup)
+
+해당 없으면 (예: 백엔드 API / CLI 도구) design-pick 스킵.
+**design-review (F007) 와 책임 분리**: design-pick 은 토큰 *선택*, design-review 는 적용된 토큰 *감사*.
+
+---
+
+## 🪞 메인 ↔ 변형 미러 정책 (5 변형 매트릭스)
+
+| 변형 | 미러 정책 | 디자인 오버레이 | 자율 오버레이 |
+|---|---|:-:|:-:|
+| `claude/` (baseline) | Karpathy 예외만 | ❌ | ❌ |
+| `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ |
+| `claude.gstack.auto/` (자율) | 메인과 1:1 | ❌ | ✅ |
+| `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ |
+| `openai/.codex/` (codex stub) | 정적, Karpathy 예외만 | ❌ | ❌ |
+
+**자율 오버레이 4 파일** (claude.gstack 에서 제외):
+- `.claude/agents/gatekeeper.md`
+- `.claude/hooks/pre-bash-auto-boundary-check.sh`
+- `.claude/settings.json` 의 `Bash(*)` 권한
+- `CLAUDE.md` 의 "Autonomous Mode" 섹션
+
+**디자인 오버레이** (claude.gstack.auto.design 에만):
+- `.claude/agents/designer.md`
+- `.claude/design/references/` 4 파일
+- `.claude/bin/design_pick.py`
+- `.claude/commands/design-pick.md`
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (F011 신설).
 
 ---
 

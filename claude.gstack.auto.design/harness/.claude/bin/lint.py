@@ -19,6 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
+  LINT-MR     변형 오버레이 정합 (5변형 — F011 신설)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -832,6 +833,206 @@ def check_mirror() -> list:
 
 
 # ---------------------------------------------------------------------------
+# LINT-MR: 변형 오버레이 정합 (F011 신설)
+# ---------------------------------------------------------------------------
+
+_HT = _PROJECT_ROOT / "src" / "harness_template"
+
+# 자율 오버레이 파일 (claude.gstack 에서 제외되어야 함)
+_AUTO_OVERLAY_FILES = [
+    "harness/.claude/agents/gatekeeper.md",
+    "harness/.claude/hooks/pre-bash-auto-boundary-check.sh",
+]
+
+# 디자인 오버레이 파일 (claude.gstack.auto.design 에만 존재해야 함)
+_DESIGN_OVERLAY_FILES = [
+    "harness/.claude/agents/designer.md",
+    "harness/.claude/commands/design-pick.md",
+    "harness/.claude/bin/design_pick.py",
+]
+
+# 디자인 오버레이 디렉토리 (존재 여부만 확인)
+# ADR-006 결정 1: 변형 내 경로는 docs/design-references/ (메인의 .claude/design/references/ 와 다름)
+_DESIGN_OVERLAY_DIRS = [
+    "harness/docs/design-references",
+]
+
+# 디자인 오버레이가 없어야 하는 변형
+_VARIANTS_NO_DESIGN = ["claude", "claude.gstack", "claude.gstack.auto"]
+
+
+def check_mirror_regression() -> list:
+    """LINT-MR: 5 변형 미러 정합 점검 (F011 신설).
+
+    F010 미러 회귀 2 회 학습 반영 — 자동 가드.
+
+    검사 항목:
+    - MR-1: claude.gstack 에 자율 오버레이 파일 부재
+    - MR-2: claude.gstack/settings.json 에 Bash(*) 미사용
+    - MR-3: claude.gstack/CLAUDE.md 에 Autonomous Mode 섹션 부재
+    - MR-4: claude.gstack.auto.design 외 변형에 디자인 오버레이 부재
+    - MR-5: claude.gstack.auto.design 에 디자인 오버레이 모두 존재
+
+    Returns:
+        list[dict]: 검사 결과 목록 (각 dict는 id/label/target/message 키 보유)
+    """
+    results = []
+    checker = "LINT-MR"
+
+    try:
+        # MR-1: claude.gstack 에 자율 오버레이 파일 없어야 함
+        gstack = _HT / "claude.gstack"
+        if gstack.exists():
+            for rel_path in _AUTO_OVERLAY_FILES:
+                target_path = gstack / rel_path
+                if target_path.exists():
+                    results.append(_issue(
+                        checker, BLOCK,
+                        f"claude.gstack/{rel_path}",
+                        "표준 변형에 자율 오버레이 파일 잘못 미러됨 — 제거 필요",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        f"claude.gstack/{rel_path}",
+                        "표준 변형에 자율 오버레이 부재 OK",
+                    ))
+        else:
+            results.append(_issue(
+                checker, INFO,
+                "claude.gstack",
+                "claude.gstack 변형 디렉토리 부재 — 건너뜀",
+            ))
+
+        # MR-2: claude.gstack/settings.json 에 Bash(*) 없어야 함
+        gstack_settings = gstack / "harness" / ".claude" / "settings.json"
+        if gstack_settings.exists():
+            try:
+                content = gstack_settings.read_text(encoding="utf-8")
+                if 'Bash("*")' in content or "Bash(*)" in content:
+                    results.append(_issue(
+                        checker, BLOCK,
+                        "claude.gstack/.claude/settings.json",
+                        "표준 변형에 자율 모드 Bash(*) 권한 잘못 적용됨",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        "claude.gstack/.claude/settings.json",
+                        "Bash(*) 부재 OK",
+                    ))
+            except Exception as exc:
+                results.append(_issue(
+                    checker, INFO,
+                    "claude.gstack/.claude/settings.json",
+                    f"파일 읽기 실패 — {exc}",
+                ))
+        else:
+            results.append(_issue(
+                checker, INFO,
+                "claude.gstack/.claude/settings.json",
+                "파일 부재 — 건너뜀",
+            ))
+
+        # MR-3: claude.gstack/CLAUDE.md 에 Autonomous Mode 헤딩 없어야 함
+        # (표 등에서 "Autonomous Mode" 텍스트 참조는 허용 — 섹션 헤딩 `## *Autonomous Mode` 만 금지)
+        gstack_claude_md = gstack / "harness" / "CLAUDE.md"
+        if gstack_claude_md.exists():
+            try:
+                content = gstack_claude_md.read_text(encoding="utf-8")
+                # 헤딩 형식만 검사: ^## ... Autonomous Mode (라인 시작)
+                auto_mode_heading = re.search(
+                    r"^#{1,6}\s+.*Autonomous Mode", content, re.MULTILINE
+                )
+                if auto_mode_heading:
+                    results.append(_issue(
+                        checker, BLOCK,
+                        "claude.gstack/harness/CLAUDE.md",
+                        "표준 변형에 Autonomous Mode 헤딩 섹션 잘못 미러됨",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        "claude.gstack/harness/CLAUDE.md",
+                        "Autonomous Mode 헤딩 섹션 부재 OK",
+                    ))
+            except Exception as exc:
+                results.append(_issue(
+                    checker, INFO,
+                    "claude.gstack/harness/CLAUDE.md",
+                    f"파일 읽기 실패 — {exc}",
+                ))
+        else:
+            results.append(_issue(
+                checker, INFO,
+                "claude.gstack/harness/CLAUDE.md",
+                "파일 부재 — 건너뜀",
+            ))
+
+        # MR-4: claude.gstack.auto.design 외 변형에 디자인 오버레이 없어야 함
+        all_overlay = _DESIGN_OVERLAY_FILES + _DESIGN_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_DESIGN:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_overlay = []
+            for rel in all_overlay:
+                if (variant_dir / rel).exists():
+                    found_overlay.append(rel)
+            if found_overlay:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"디자인 오버레이가 {variant} 에 잘못 미러됨: {found_overlay}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    variant,
+                    f"{variant} 변형에 디자인 오버레이 부재 OK",
+                ))
+
+        # MR-5: claude.gstack.auto.design 에 디자인 오버레이 모두 존재해야 함
+        design_variant = _HT / "claude.gstack.auto.design"
+        if design_variant.exists():
+            missing = []
+            for rel in _DESIGN_OVERLAY_FILES:
+                if not (design_variant / rel).exists():
+                    missing.append(rel)
+            for rel in _DESIGN_OVERLAY_DIRS:
+                if not (design_variant / rel).exists():
+                    missing.append(rel)
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN,
+                    "claude.gstack.auto.design",
+                    f"디자인 변형에 일부 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    "claude.gstack.auto.design",
+                    "디자인 오버레이 모두 존재 OK",
+                ))
+        else:
+            results.append(_issue(
+                checker, INFO,
+                "claude.gstack.auto.design",
+                "디자인 변형 부재 (F011 미적용 가능)",
+            ))
+
+    except Exception as exc:  # noqa: BLE001
+        results.append(_issue(checker, INFO, "LINT-MR", f"검사 중 오류 — {exc}"))
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # 검사기 레지스트리
 # ---------------------------------------------------------------------------
 
@@ -842,6 +1043,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
+    "LINT-MR": ("변형 오버레이 정합 (5변형)", check_mirror_regression),
 }
 
 
