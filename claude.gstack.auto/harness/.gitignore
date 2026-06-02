@@ -55,3 +55,9 @@ htmlcov/
 !.claude/state/qa-browser/screenshots/.gitkeep
 .claude/state/qa-browser/runs/*
 !.claude/state/qa-browser/runs/.gitkeep
+
+# Lint 캐시 (세션 로컬 — /project:lint report 재출력용)
+.claude/state/lint-last.json
+
+# Backup 캐시 (세션 로컬 — backup.py status 재출력용)
+.claude/state/backup-last.json

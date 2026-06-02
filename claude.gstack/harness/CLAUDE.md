@@ -221,6 +221,25 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 > lint는 **거버넌스 정합성** (메타데이터·연결성) 만 검사. design-review (IA/A11Y/CON) 와 qa-browser (E2E) 와 책임 분리됨.
 > 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
 
+### 다운스트림 백업 동기화 (Phase 6 — F010)
+
+```
+python3 .claude/bin/backup.py init                                  # 백업 리포 초기 설정 (대화형)
+python3 .claude/bin/backup.py init --repo git@github.com:USER/REPO.git --branch PROJECT  # 비대화 설정
+python3 .claude/bin/backup.py sync                                  # 산출물 동기화 (현재 워크트리 → 백업 브랜치)
+python3 .claude/bin/backup.py status                                # 마지막 sync 정보 + 설정 표시
+python3 .claude/bin/backup.py status --preview                      # 다음 sync 시 변경될 파일 미리보기
+python3 .claude/bin/backup.py config show                           # 전체 설정 표시
+python3 .claude/bin/backup.py config set backup_branch <name>       # 단일 필드 갱신
+python3 .claude/bin/backup.py self                                  # 의존성·SSH·환경 점검
+```
+
+> **호출 시점**: 기능 완료 / phase 종료 / 다른 머신 작업 시작 전. 수동 트리거 전용 (handoff 자동 호출 없음).
+> 백업 리포 패턴: **공유 리포 + 프로젝트별 브랜치** (예: william-woo/harness_backup → harness_update_agent 브랜치)
+> 제외 대상: src/ (코드) + node_modules + secrets (`.env*`, 단 `.example/.template/.sample` 화이트리스트) + build artifacts + state runtime
+> 안전 보장: 절대 force push 안 함, 인증 실패 시 친절 안내 + exit 0
+> 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
+
 ---
 
 ### 멀티 호스트 관리 (Phase 3 업그레이드 — F006)
@@ -256,6 +275,7 @@ Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
 | `.claude/state/qa-browser/screenshots/.gitkeep` | 스크린샷 디렉토리 보존 마커 | ✅ 커밋 대상 |
 | `.claude/state/qa-browser/runs/.gitkeep` | 실행 로그 디렉토리 보존 마커 | ✅ 커밋 대상 |
 | `.claude/state/lint-last.json` | `/project:lint check` 결과 캐시 (`/project:lint report` 재출력용) | ❌ gitignore |
+| `.claude/state/backup-last.json` | `backup.py sync` 결과 캐시 (status/commit/ts) | ❌ gitignore |
 
 ---
 
@@ -430,6 +450,22 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 라우팅·네비게이션 확인
 
 해당 없으면 단위 테스트 + Reviewer로 충분 — Playwright 불필요.
+
+---
+
+## 💾 backup-sync 호출 기준
+
+다음 중 하나에 해당하면 `python3 .claude/bin/backup.py sync` 권장:
+
+- 새 Feature(FXXX) 완료 (`status: done`, `passes: true`) 직후
+- Phase 마일스톤 도달 (예: Phase 5 완료)
+- 다른 머신에서 작업 이어갈 예정
+- 팀원과 산출물 공유 필요
+- 중요한 ADR / 설계 문서 작성·갱신 후
+- handoff 직전 (수동 — 자동 호출 X)
+
+해당 없으면 (예: 소규모 수정·실험) backup-sync 스킵 가능.
+**전제 조건**: `init` 으로 `backup_repo` 설정 완료. SSH 키가 ssh-agent 에 등록.
 
 ---
 

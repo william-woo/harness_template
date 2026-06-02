@@ -3,86 +3,55 @@
 > 이 파일은 Claude Code가 이 프로젝트를 이해하고 올바르게 작동하기 위한 핵심 가이드입니다.
 > **팀원 모두 이 파일을 읽고 프로젝트 시작 전 반드시 설정을 완료하세요.**
 >
-> 🤖 이 변형(`claude.gstack.auto`)은 **자율 진행 모드**입니다.
-> 작업 디렉토리 내부 액션에 대해 사용자 승인을 요청하지 않으며, 에이전트들끼리
-> 검토·결정합니다. 자세한 정책은 아래 **🤖 Autonomous Mode** 섹션을 참조하세요.
+> 🤖 **이 작업 환경은 Autonomous Mode 입니다** (2026-06-02 적용).
+> 메인 `.claude/` 는 `claude.gstack.auto` 변형의 정책을 사용합니다 — 작업 디렉토리 내부
+> 액션은 prompt 없이 자율 진행, 인증·계정·외부 디렉토리는 사용자 명시 승인 필수.
+> 자세한 정책은 아래 **🤖 Autonomous Mode** 섹션 참조.
 
 ---
 
-## 🤖 Autonomous Mode (claude.gstack.auto 전용)
+## 🤖 Autonomous Mode (현재 활성)
 
-이 변형은 자율 진행 정책을 채택합니다. 3 규칙이 핵심:
+이 작업 환경은 자율 진행 정책을 채택합니다. 3 규칙이 핵심:
 
 ### 규칙 #1 — 작업 디렉토리 내부는 자율 진행
-
 `$CLAUDE_PROJECT_DIR` 하위의 모든 액션은 **사용자 승인 요청 없이 진행**됩니다.
-파일 읽기·쓰기·편집, 워크트리 내 git 작업, 로컬 헬퍼 스크립트 실행 모두 자동.
-
-`.claude/settings.json` 의 `permissions.allow` 가 광범위 패턴(`Bash(*)`, `Edit(*)`, `Write(*)` 등)
-으로 설정되어 있어 prompt 가 발생하지 않습니다. 안전망은 후술하는 훅과 Gatekeeper 입니다.
+`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(*)`, `Write(*)` 광범위
+패턴이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
 
 ### 규칙 #2 — 모호한 경우 에이전트 간 검토
+판단이 불확실한 액션은 사용자에게 묻지 말고 **Gatekeeper 에이전트** 호출 →
+PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추가 검토.
 
-판단이 불확실한 액션(예: 의존성 추가, 마이그레이션, 외부 fetch 발생 명령)은 사용자에게
-묻지 말고 **에이전트 간 협업으로 결정**합니다. 호출 패턴:
+[Gatekeeper](.claude/agents/gatekeeper.md) 가 모든 모호 케이스를 처리.
 
-```
-Developer → Gatekeeper 에이전트 호출 → DECISION (PROCEED | CONSULT | ESCALATE)
-   ↓ CONSULT 시
-   → Reviewer 또는 Architect 추가 검토 → 종합 판단 후 진행
-```
+### 규칙 #3 — 사용자 승인 필수 경계
+다음은 반드시 사용자 명시 승인:
+- **3-A 계정/인증**: `gh auth login`, `npm login`, `aws configure`, `ssh-keygen`, `sudo`, 자격증명 셸 노출 (`export TOKEN`, `printenv | grep secret`)
+- **3-B 외부 부수 효과**: 절대 경로가 workdir 밖, 시스템 패키지 설치, 사용자 dotfile *변경*, 민감 자격증명 dotfile 읽기 (`~/.ssh`, `~/.aws` 등)
+- **3-C 비가역 외부 통신**: `git push origin main/master`, `gh pr create`, 결제 API, 클라우드 리소스 변경
 
-[Gatekeeper 에이전트](.claude/agents/gatekeeper.md) 는 액션을 3 규칙에 매핑해 5초 내 결정을
-내립니다. CONSULT 면 후속 검토 권고, ESCALATE 면 사용자 명시 승인 필요.
+강제 메커니즘:
+- `pre-bash-auto-boundary-check.sh` 훅 — 패턴 매칭 차단
+- Gatekeeper 에이전트 — 컨텍스트 기반 ESCALATE 판정
 
-### 규칙 #3 — 사용자 승인 필수 경계 (에스컬레이션)
+### Autonomous Mode 비활성화 시
+`.claude/settings.json` 의 `permissions.allow` 에서 wildcard 제거 + autonomous 훅 wiring 제거.
 
-다음 카테고리는 **반드시 사용자에게 확인을 받아야** 합니다:
+---
 
-| 카테고리 | 예시 |
+## 🪞 메인 ↔ 변형 미러 정책 (Autonomous Mode 적용 후)
+
+메인 `.claude/` 는 이제 `claude.gstack.auto` 와 정합 상태입니다. 변형별 미러 정책:
+
+| 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| **3-A 계정/인증** | `gh auth login`, `npm login`, `aws configure`, `gcloud auth`, `ssh-keygen`, `gpg --gen-key`, `sudo`, `git config --global` |
-| **3-B 작업 디렉토리 외부 부수 효과** | 절대 경로가 `$CLAUDE_PROJECT_DIR` 밖인 `rm`/`cp`/`mv`/`chmod`, `apt`/`brew`/`yum` 시스템 패키지 설치, `~/.bashrc` 등 dotfile 변경 |
-| **3-C 비가역 외부 통신** | `git push origin main` (main 브랜치는 별도 안전), `gh pr create`, 결제/주문 API, 클라우드 리소스 생성·삭제 |
+| `claude.gstack/` (표준) | **autonomous 오버레이 4 파일 제외** 후 미러:<br>• `.claude/agents/gatekeeper.md` 제외<br>• `.claude/hooks/pre-bash-auto-boundary-check.sh` 제외<br>• `.claude/settings.json` (standard 버전 별도 유지)<br>• `CLAUDE.md` 의 "Autonomous Mode" 섹션 제외 |
+| `claude.gstack.auto/` (자율) | **전체 미러** — 메인과 1:1 |
+| `claude/` (baseline) | Phase 0 동결, Karpathy 예외만 |
+| `openai/.codex/` (codex) | 정적 산출물, Karpathy 예외만 |
 
-이 경계는 두 곳에서 강제됩니다:
-
-1. **`pre-bash-auto-boundary-check.sh` 훅**: bash 명령 패턴 매칭으로 `exit 2` 차단 → 사용자 prompt
-2. **Gatekeeper 에이전트**: 컨텍스트 기반 추론으로 ESCALATE 판정
-
-### 자율 모드 사용 시 권장 패턴
-
-```
-Developer 가 모호한 액션 직면
-  ↓
-Use the gatekeeper agent to review this action:
-  ACTION_TYPE: bash
-  COMMAND_OR_TARGET: npm install some-package
-  CONTEXT: F010 새 기능에 SVG 파서 필요
-  INTENDED_SCOPE: within-workdir (node_modules 갱신)
-  ↓
-gatekeeper → DECISION: CONSULT (suggested_consultant: architect)
-  ↓
-Architect → 의존성 정당성 평가 → 승인
-  ↓
-Developer → npm install 실행 (훅 통과 → 자동 진행)
-```
-
-### 자율 모드의 안전 보장
-
-- **`pre-bash-check.sh`** (기존): SQL/k8s/docker 위험 패턴, main 브랜치 직접 commit 차단 — 그대로 유지
-- **`pre-bash-auto-boundary-check.sh`** (신규): 인증·계정·외부경로 차단 — 규칙 #3 강제
-- **`permissions.deny`**: `rm -rf /`, `rm -rf ~` 등 명백히 파괴적인 명령은 deny 처리 (allow 우선순위 위)
-- **Gatekeeper**: 패턴으로 못 잡는 컨텍스트 위험 (의존성 추가 등) 을 추론으로 보완
-
-### Autonomous Mode 비활성화
-
-자율 모드를 끄고 표준 prompt 모드로 돌아가려면:
-
-```bash
-# settings.json 의 permissions.allow 에서 wildcard 제거
-# 또는 claude.gstack 변형으로 마이그레이션
-```
+**중요**: F010 세션 2 에서 발생한 회귀 — 미러링 시 claude.gstack.auto/settings.json 이 표준 버전으로 덮어쓰기됐었음. 2026-06-02 복구 완료. 미러 작업 시 항상 이 정책 확인.
 
 ---
 
@@ -111,8 +80,7 @@ project-root/
 │   │   ├── architect.md      # 아키텍처 에이전트
 │   │   ├── developer.md      # 개발 에이전트
 │   │   ├── reviewer.md       # 코드 리뷰 에이전트
-│   │   ├── qa.md             # QA/검증 에이전트
-│   │   └── gatekeeper.md     # ⭐ Autonomous Mode 경계 결정 에이전트
+│   │   └── qa.md             # QA/검증 에이전트
 │   ├── skills/               # 재사용 스킬
 │   │   ├── planning/SKILL.md
 │   │   ├── coding/SKILL.md
@@ -130,8 +98,6 @@ project-root/
 │   │   └── status.md
 │   ├── hooks/                # 훅 스크립트 (settings.json에서 참조)
 │   │   ├── pre-bash-check.sh
-│   │   ├── pre-bash-auto-boundary-check.sh  # ⭐ Autonomous Mode 경계 강제
-│   │   ├── pre-edit-freeze-check.sh
 │   │   ├── pre-write-check.sh
 │   │   ├── post-write-check.sh
 │   │   └── session-end.sh
@@ -149,10 +115,9 @@ project-root/
 │       └── git-conventions.md
 ├── src/                      # 소스 코드
 │   └── harness_template/     # 배포용 하네스 템플릿 (별도 git repo)
-│       ├── claude/             #   ⓐ baseline — Phase 0 스냅샷 (수정 X)
-│       ├── claude.gstack/      #   ⓑ ★ 메인 — 모든 phase 산출물의 정합 사본
-│       ├── claude.gstack.auto/ #   ⓓ ⭐ Autonomous Mode 변형 (이 파일) — 자율 진행 정책
-│       └── openai/             #   ⓒ Codex 호스트 변형 (.codex/ 구조)
+│       ├── claude/           #   ⓐ baseline — Phase 0 스냅샷 (수정 X)
+│       ├── claude.gstack/    #   ⓑ ★ 메인 — 모든 phase 산출물의 정합 사본
+│       └── openai/           #   ⓒ Codex 호스트 변형 (.codex/ 구조)
 ├── tests/                    # 테스트
 │   └── e2e/                  # E2E 테스트 스크립트 (Playwright — F008)
 │       └── _template.spec.ts # qa-browser 스크립트 템플릿 예시
@@ -306,6 +271,25 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 > lint는 **거버넌스 정합성** (메타데이터·연결성) 만 검사. design-review (IA/A11Y/CON) 와 qa-browser (E2E) 와 책임 분리됨.
 > 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
 
+### 다운스트림 백업 동기화 (Phase 6 — F010)
+
+```
+python3 .claude/bin/backup.py init                                  # 백업 리포 초기 설정 (대화형)
+python3 .claude/bin/backup.py init --repo git@github.com:USER/REPO.git --branch PROJECT  # 비대화 설정
+python3 .claude/bin/backup.py sync                                  # 산출물 동기화 (현재 워크트리 → 백업 브랜치)
+python3 .claude/bin/backup.py status                                # 마지막 sync 정보 + 설정 표시
+python3 .claude/bin/backup.py status --preview                      # 다음 sync 시 변경될 파일 미리보기
+python3 .claude/bin/backup.py config show                           # 전체 설정 표시
+python3 .claude/bin/backup.py config set backup_branch <name>       # 단일 필드 갱신
+python3 .claude/bin/backup.py self                                  # 의존성·SSH·환경 점검
+```
+
+> **호출 시점**: 기능 완료 / phase 종료 / 다른 머신 작업 시작 전. 수동 트리거 전용 (handoff 자동 호출 없음).
+> 백업 리포 패턴: **공유 리포 + 프로젝트별 브랜치** (예: william-woo/harness_backup → harness_update_agent 브랜치)
+> 제외 대상: src/ (코드) + node_modules + secrets (`.env*`, 단 `.example/.template/.sample` 화이트리스트) + build artifacts + state runtime
+> 안전 보장: 절대 force push 안 함, 인증 실패 시 친절 안내 + exit 0
+> 호출 안 하면 하네스 동작에 영향 없음 (옵셔널, hook-failure-tolerance).
+
 ---
 
 ### 멀티 호스트 관리 (Phase 3 업그레이드 — F006)
@@ -341,6 +325,7 @@ Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
 | `.claude/state/qa-browser/screenshots/.gitkeep` | 스크린샷 디렉토리 보존 마커 | ✅ 커밋 대상 |
 | `.claude/state/qa-browser/runs/.gitkeep` | 실행 로그 디렉토리 보존 마커 | ✅ 커밋 대상 |
 | `.claude/state/lint-last.json` | `/project:lint check` 결과 캐시 (`/project:lint report` 재출력용) | ❌ gitignore |
+| `.claude/state/backup-last.json` | `backup.py sync` 결과 캐시 (status/commit/ts) | ❌ gitignore |
 
 ---
 
@@ -372,7 +357,6 @@ Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
 | **Developer** | 실제 구현 | 코드 작성, 단위 테스트, 버그 수정 |
 | **Reviewer** | 구현 완료 후 | 코드 품질, 보안, 성능 리뷰 |
 | **QA** | 리뷰 통과 후 | E2E 테스트, 인수 검증, 기능 완료 마킹 |
-| **Gatekeeper** ⭐ | 자율 모드 경계 결정 | 모호한 액션을 PROCEED/CONSULT/ESCALATE 로 5초 내 판정 (claude.gstack.auto 전용) |
 
 **에이전트 호출 방법:**
 ```
@@ -516,6 +500,22 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 라우팅·네비게이션 확인
 
 해당 없으면 단위 테스트 + Reviewer로 충분 — Playwright 불필요.
+
+---
+
+## 💾 backup-sync 호출 기준
+
+다음 중 하나에 해당하면 `python3 .claude/bin/backup.py sync` 권장:
+
+- 새 Feature(FXXX) 완료 (`status: done`, `passes: true`) 직후
+- Phase 마일스톤 도달 (예: Phase 5 완료)
+- 다른 머신에서 작업 이어갈 예정
+- 팀원과 산출물 공유 필요
+- 중요한 ADR / 설계 문서 작성·갱신 후
+- handoff 직전 (수동 — 자동 호출 X)
+
+해당 없으면 (예: 소규모 수정·실험) backup-sync 스킵 가능.
+**전제 조건**: `init` 으로 `backup_repo` 설정 완료. SSH 키가 ssh-agent 에 등록.
 
 ---
 
