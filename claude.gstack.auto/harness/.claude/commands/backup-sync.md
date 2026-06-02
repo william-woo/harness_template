@@ -65,7 +65,7 @@ python3 .claude/bin/backup.py self          # 의존성 빠른 확인
 |---|---|
 | 사용자 코드 | `src/` |
 | 빌드 산출물 | `node_modules/`, `__pycache__/`, `*.pyc`, `.venv/`, `dist/`, `build/`, `target/`, `.next/`, `out/` |
-| 보안 (BLOCK) | `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `.aws/` |
+| 보안 (BLOCK) | `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `.aws/`, `.netrc`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `*.p12`, `*.pfx`, `*.jks` (단, `*.example` / `*.template` / `*.sample` 화이트리스트) |
 | IDE / OS | `.vscode/`, `.idea/`, `.DS_Store`, `*.swp`, `*.swo` |
 | 로그 | `*.log`, `logs/`, `npm-debug.log*` |
 | 서브 git 보호 | `.git/` |
