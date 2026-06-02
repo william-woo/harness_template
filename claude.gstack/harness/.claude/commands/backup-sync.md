@@ -7,10 +7,10 @@
 
 ```
 /project:backup-sync               # 기본 동작 = sync
-/project:backup-sync init          # 백업 리포·브랜치 초기 설정 (세션 2 예정)
-/project:backup-sync status        # 마지막 sync 정보 + 변경 미리보기 (세션 2 예정)
-/project:backup-sync config show   # 현재 설정 조회 (세션 2 예정)
-/project:backup-sync self          # 셀프 dry-run — 의존성 체크 (세션 2 예정)
+/project:backup-sync init          # 백업 리포·브랜치 초기 설정
+/project:backup-sync status        # 마지막 sync 정보 + 변경 미리보기
+/project:backup-sync config show   # 현재 설정 조회
+/project:backup-sync self          # 셀프 dry-run — 의존성 체크
 ```
 
 ### 플래그
@@ -20,7 +20,6 @@
 | `--dry-run` | OFF | 실제 push 없이 미리보기만 |
 | `--strict` | OFF | 에러 발생 시 exit 1 (CI gate용) |
 | `--message` | 자동 | 커밋 메시지 override |
-| `--format` | human | 출력 형식: human \| json |
 
 ## 헬퍼 스크립트
 
@@ -48,7 +47,7 @@ python3 .claude/bin/backup.py self          # 의존성 빠른 확인
 - `backup.repo`: SSH URL 권장 (`git@github.com:user/repo.git`)
 - `backup.branch`: 비워두면 `git remote` basename 자동 추출
 
-`init` 서브커맨드로 설정 안내 (세션 2 구현): `python3 .claude/bin/backup.py init`
+`init` 서브커맨드로 설정 안내: `python3 .claude/bin/backup.py init`
 
 ## 동작
 
@@ -93,13 +92,13 @@ ssh-add -l           # ssh-agent 등록 확인
 ssh -T git@github.com  # GitHub 연결 테스트
 ```
 
-## 세션 분할 (F010)
+## 구현 범위 (F010 완료)
 
 | 세션 | 범위 | 상태 |
 |---|---|---|
-| 세션 1 (현재) | `sync` 코어 + 보안 BLOCK + `/project:backup-sync` 커맨드 | 구현 완료 |
-| 세션 2 | `init` / `status` / `config` / `self` + `init-project` 안내 | 예정 |
-| 세션 3 (선택) | CLAUDE.md 통합 + 에러 시나리오 dry-run + 최종 미러 정합 | 예정 |
+| 세션 1 | `sync` 코어 + 보안 BLOCK + `/project:backup-sync` 커맨드 | 구현 완료 |
+| 세션 2 | `init` / `status` / `config` / `self` + `init-project` 안내 | 구현 완료 |
+| 세션 3 | CLAUDE.md 통합 + 에러 시나리오 dry-run + 최종 미러 정합 | 구현 완료 |
 
 ## 설계 근거
 

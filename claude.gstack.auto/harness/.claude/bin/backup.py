@@ -6,17 +6,16 @@ Python stdlib + git CLI + rsync만 사용. 외부 의존성 없음.
 host.json 의 backup 객체를 읽어 원격 백업 리포로 산출물 동기화.
 
 서브커맨드:
-  sync       현재 프로젝트의 하네스 산출물을 backup_repo/backup_branch 로 동기화 (세션 1)
-  init       host.json 의 backup 필드 초기 설정 (세션 2)
-  status     마지막 sync 정보 + 변경 미리보기 (세션 2)
-  config     backup 필드 조회/수정 (세션 2)
-  self       셀프 dry-run — 의존성 체크 (세션 2)
+  sync       현재 프로젝트의 하네스 산출물을 backup_repo/backup_branch 로 동기화
+  init       host.json 의 backup 필드 초기 설정
+  status     마지막 sync 정보 + 변경 미리보기
+  config     backup 필드 조회/수정
+  self       셀프 dry-run — 의존성 체크
 
 옵션 (전역):
   --strict   에러 발생 시 exit 1 (CI gate) — 기본 OFF (exit 0)
   --dry-run  실제 push 안 함, 미리보기만
   --message  sync 시 커밋 메시지 override
-  --format   출력 형식: human|json (기본 human)
 
 설계 원칙:
   - 실패해도 절대 호출자를 차단하지 않음 (hook-failure-tolerance, exit 0 유지)
@@ -33,10 +32,10 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -88,6 +87,7 @@ _EXCLUDE_PATTERNS: list[str] = [
 
 # 보안 BLOCK 패턴 — 누락 시 exit 1 (결정 5 예외, 결정 6 보안)
 # 단, *.example / *.template / *.sample 접미사는 화이트리스트 (ADR-005 결정 6 보강)
+# SSH 키 파일명 + .netrc 추가 (ADR-005 보강 — SHOULD 5)
 _SECURITY_BLOCK_PATTERNS: list[str] = [
     ".env",
     ".env.*",
@@ -96,6 +96,16 @@ _SECURITY_BLOCK_PATTERNS: list[str] = [
     "credentials.json",
     ".aws/credentials",
     ".aws/",
+    # SSH 키 파일명
+    ".netrc",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    # 인증서/키스토어
+    "*.p12",
+    "*.pfx",
+    "*.jks",
 ]
 
 # 보안 BLOCK 화이트리스트 접미사 — 자격증명이 아닌 양식 파일 (ADR-005 결정 6 보강)
@@ -284,8 +294,8 @@ def scan_security_blocks(root: Path) -> list[str]:
       - 디렉토리 접두사: ".aws/credentials", ".aws/"
     """
     blocked: list[str] = []
-    try:
-        for pattern in _SECURITY_BLOCK_PATTERNS:
+    for pattern in _SECURITY_BLOCK_PATTERNS:
+        try:
             pat = pattern.rstrip("/")
 
             if "*" in pat:
@@ -321,8 +331,13 @@ def scan_security_blocks(root: Path) -> list[str]:
                         if ".git" not in rel.split("/") and not rel.startswith(".git"):
                             if not _is_security_whitelisted(rel):
                                 blocked.append(rel)
-    except Exception:
-        pass
+        except Exception as e:
+            # 개별 패턴 실패는 stderr 경고 후 다음 패턴 진행 (보안 게이트 유지)
+            print(
+                f"[backup] WARN — 보안 스캔 패턴 '{pattern}' 처리 중 오류: {e}",
+                file=sys.stderr,
+            )
+            continue
     return blocked
 
 
@@ -540,6 +555,7 @@ def cmd_sync(args) -> int:
                 cwd=clone_dir,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if r.returncode != 0:
                 print(f"[backup] 브랜치 '{backup_branch}' 미존재 — orphan branch 신규 생성")
@@ -548,6 +564,7 @@ def cmd_sync(args) -> int:
                     cwd=clone_dir,
                     capture_output=True,
                     text=True,
+                    timeout=30,
                 )
                 if r.returncode != 0:
                     print(
@@ -561,6 +578,7 @@ def cmd_sync(args) -> int:
                     ["git", "rm", "-rf", "."],
                     cwd=clone_dir,
                     capture_output=True,
+                    timeout=30,
                 )
 
             # 6. rsync — 제외 목록 적용 (ADR-005 결정 6)
@@ -606,13 +624,14 @@ def cmd_sync(args) -> int:
                     gitkeep.touch()
 
             # 7. git add + commit
-            subprocess.run(["git", "add", "-A"], cwd=clone_dir, capture_output=True)
+            subprocess.run(["git", "add", "-A"], cwd=clone_dir, capture_output=True, timeout=30)
 
             # 변경 없으면 일찍 종료
             r = subprocess.run(
                 ["git", "diff", "--cached", "--quiet"],
                 cwd=clone_dir,
                 capture_output=True,
+                timeout=30,
             )
             if r.returncode == 0:
                 print("[backup] 변경 사항 없음 — sync 스킵")
@@ -625,6 +644,7 @@ def cmd_sync(args) -> int:
                 cwd=clone_dir,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if r_stat.stdout:
                 print(r_stat.stdout.rstrip())
@@ -635,6 +655,7 @@ def cmd_sync(args) -> int:
                 cwd=clone_dir,
                 capture_output=True,
                 text=True,
+                timeout=30,
             )
             if r.returncode != 0:
                 print(f"[backup] commit 실패: {r.stderr.strip()}", file=sys.stderr)
@@ -646,6 +667,7 @@ def cmd_sync(args) -> int:
                 cwd=clone_dir,
                 capture_output=True,
                 text=True,
+                timeout=30,
             ).stdout.strip()[:7]
 
             # 8. push (ff-only — force push 절대 없음, ADR-005 결정 5)
@@ -680,7 +702,6 @@ def cmd_sync(args) -> int:
 
     except Exception as e:
         print(f"[backup] 예기치 못한 오류: {e}", file=sys.stderr)
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 0  # hook-failure-tolerance
 
@@ -814,7 +835,6 @@ def cmd_init(args) -> int:
 
     except Exception as e:
         print(f"[backup] init 오류: {e}", file=sys.stderr)
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 0  # hook-failure-tolerance
 
@@ -917,7 +937,6 @@ def cmd_status(args) -> int:
 
     except Exception as e:
         print(f"[backup] status 오류: {e}", file=sys.stderr)
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 0
 
@@ -955,7 +974,6 @@ def cmd_config(args) -> int:
 
     except Exception as e:
         print(f"[backup] config 오류: {e}", file=sys.stderr)
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 0
 
@@ -1198,8 +1216,16 @@ def cmd_self(args) -> int:
                 ssh_host = m.group(1)
                 try:
                     r = subprocess.run(
-                        ["ssh", "-T", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no",
-                         f"git@{ssh_host}"],
+                        [
+                            "ssh", "-T",
+                            "-o", "ConnectTimeout=5",
+                            # accept-new: 처음 연결 시 호스트 키 자동 수락하되 변경은 거부
+                            # (StrictHostKeyChecking=no 는 MITM 취약 — accept-new 가 더 안전)
+                            "-o", "StrictHostKeyChecking=accept-new",
+                            # BatchMode: 비대화형 실행, 패스프레이즈 프롬프트 억제
+                            "-o", "BatchMode=yes",
+                            f"git@{ssh_host}",
+                        ],
                         capture_output=True, text=True, timeout=10,
                     )
                     # GitHub 등은 exit 1 이지만 stderr 에 "successfully authenticated" 포함
@@ -1301,12 +1327,6 @@ def main() -> int:
         default="",
         help="sync 시 커밋 메시지 override",
     )
-    parser.add_argument(
-        "--format",
-        choices=["human", "json"],
-        default="human",
-        help="출력 형식 (기본 human)",
-    )
 
     sub = parser.add_subparsers(dest="cmd", metavar="<서브커맨드>")
 
@@ -1381,7 +1401,6 @@ def main() -> int:
             return 0
     except Exception as e:
         print(f"[backup] 최상위 예외: {e}", file=sys.stderr)
-        import traceback
         traceback.print_exc(file=sys.stderr)
         return 0  # hook-failure-tolerance
 
