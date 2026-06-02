@@ -44,14 +44,20 @@ if echo "$FILE" | grep -qE '(^|/)feature_list\.json$'; then
   CURR_TMP=$(mktemp)
   trap 'rm -f "$PREV_TMP" "$CURR_TMP"' EXIT
 
-  # HEAD 버전 (없으면 빈 파일 = 초기 생성으로 간주)
-  git show HEAD:feature_list.json > "$PREV_TMP" 2>/dev/null || : > "$PREV_TMP"
+  # HEAD 버전 — git repo 루트 기준 상대경로 계산 후 조회 (없으면 빈 파일 = 초기 생성으로 간주)
+  REPO_ROOT=$(git -C "$(dirname "$FILE")" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$REPO_ROOT" ]; then
+    REL_PATH="${FILE#"$REPO_ROOT/"}"
+    git -C "$REPO_ROOT" show HEAD:"$REL_PATH" > "$PREV_TMP" 2>/dev/null || : > "$PREV_TMP"
+  else
+    : > "$PREV_TMP"
+  fi
 
-  if [ ! -f feature_list.json ]; then
+  if [ ! -f "$FILE" ]; then
     echo "🚫 [harness] feature_list.json 파일을 찾을 수 없음" >&2
     exit 2
   fi
-  cp feature_list.json "$CURR_TMP"
+  cp "$FILE" "$CURR_TMP"
 
   VIOLATION=$(python3 - "$PREV_TMP" "$CURR_TMP" <<'PYEOF'
 import json, sys, os
