@@ -1,0 +1,5 @@
+{
+  "agent_type": "claude-code",
+  "harness_version": 2,
+  "notes": "기본값. openclaw/codex로 변경 시 /project:host 안내 메시지가 안내합니다. backup 설정은 /project:backup-sync init 으로 추가 가능 (옵셔널)."
+}
