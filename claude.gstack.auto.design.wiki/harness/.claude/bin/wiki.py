@@ -6,9 +6,9 @@ claude.gstack.auto.design.wiki 변형 전용. 프로젝트 산출물 (feature/AD
 
 서브커맨드:
   ingest [source]  — 산출물 → vault 노드 (결정론적 매핑 + 옵션 LLM 보강)
-  query <검색어>    — (세션 2) vault 검색 (qmd / stdlib grep 자동 분기)
-  lint             — (세션 2) vault 정합성 점검 (고아 / stale / 끊긴 wikilink / frontmatter)
-  graph            — (세션 2) DOT/mermaid 텍스트 그래프 출력
+  query <검색어>    — vault 검색 (qmd BM25/vector / stdlib grep 자동 분기 — graceful degrade)
+  lint             — vault 정합성 점검 (WIKI-ORPHAN / WIKI-DEAD-LINK / WIKI-STALE / WIKI-FRONTMATTER)
+  graph            — DOT/mermaid/JSON 텍스트 그래프 출력 (외부 도구 0 — stdlib only)
   self             — 의존성 점검 (Obsidian/qmd/Marp 설치 여부 + graceful degrade 상태)
 
 전역 옵션:
@@ -352,7 +352,7 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
     if enrich_llm:
         print("  INFO: --enrich-llm 옵트인 감지.")
         print("        LLM 보강은 designer 에이전트 (opus-4-7) 위임 패턴을 사용합니다.")
-        print("        이 기능은 세션 2 이후 구현 예정 — 현재는 결정론적 매핑만 실행됨.")
+        print("        이 기능은 후속 phase 구현 예정 — 현재는 결정론적 매핑만 실행됨.")
 
     return created, 0
 
@@ -483,7 +483,7 @@ def _ingest_adrs(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, int]:
         created += 1
 
     if enrich_llm:
-        print("  INFO: --enrich-llm 옵트인 감지 (ADRs). 세션 2 이후 구현 예정.")
+        print("  INFO: --enrich-llm 옵트인 감지 (ADRs). 후속 phase 구현 예정.")
 
     return created, 0
 
@@ -605,7 +605,7 @@ def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, i
         created += 1
 
     if enrich_llm:
-        print("  INFO: --enrich-llm 옵트인 감지 (learnings). 세션 2 이후 구현 예정.")
+        print("  INFO: --enrich-llm 옵트인 감지 (learnings). 후속 phase 구현 예정.")
 
     return created, 0
 
@@ -663,49 +663,650 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _detect_tool(tool_name: str) -> bool:
+    """외부 도구 설치 여부를 감지한다 (단일 도구 버전).
+
+    Args:
+        tool_name: 감지할 도구 이름 (예: "qmd", "marp")
+
+    Returns:
+        bool: 도구가 PATH 에 있으면 True
+    """
+    return shutil.which(tool_name) is not None
+
+
+def _grep_vault(vault_dir: Path, query_text: str, limit: int, node_type: Optional[str]) -> list[dict]:
+    """stdlib re 로 vault 노드를 검색한다 (qmd 없을 때 fallback).
+
+    제목 매칭 우선, 본문 매칭 후순. 결과: 매칭 노드 목록.
+
+    Args:
+        vault_dir: vault 루트 경로
+        query_text: 검색어
+        limit: 최대 결과 수
+        node_type: 노드 타입 필터 (features/adrs/learnings/pages/sources)
+
+    Returns:
+        list: [{node_id, path, match_type, context_line}] 형식 결과 목록
+    """
+    pattern = re.compile(re.escape(query_text), re.IGNORECASE)
+    results: list[dict] = []
+
+    # 검색 대상 디렉토리 결정
+    search_dirs: list[Path] = []
+    node_dirs = ["features", "adrs", "learnings", "pages", "sources"]
+    if node_type and node_type in node_dirs:
+        d = vault_dir / node_type
+        if d.exists():
+            search_dirs.append(d)
+    else:
+        for nd in node_dirs:
+            d = vault_dir / nd
+            if d.exists():
+                search_dirs.append(d)
+
+    seen_ids: set[str] = set()
+
+    for search_dir in search_dirs:
+        for md_file in sorted(search_dir.glob("*.md")):
+            node_id = md_file.stem
+            if node_id in seen_ids:
+                continue
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+            lines = content.splitlines()
+
+            # 제목 라인 (# 로 시작) 우선 매칭
+            title_match = None
+            for line in lines:
+                if line.startswith("#") and pattern.search(line):
+                    title_match = line.strip()
+                    break
+
+            if title_match:
+                seen_ids.add(node_id)
+                results.append({
+                    "node_id": node_id,
+                    "path": str(md_file.relative_to(vault_dir)),
+                    "match_type": "title",
+                    "context_line": title_match[:120],
+                })
+                continue
+
+            # 본문 매칭 (frontmatter 포함)
+            body_match = None
+            for line in lines:
+                if pattern.search(line):
+                    body_match = line.strip()
+                    break
+
+            if body_match:
+                seen_ids.add(node_id)
+                results.append({
+                    "node_id": node_id,
+                    "path": str(md_file.relative_to(vault_dir)),
+                    "match_type": "body",
+                    "context_line": body_match[:120],
+                })
+
+            if len(results) >= limit * 3:
+                break
+
+    # 제목 매칭 우선 정렬 후 limit 적용
+    results.sort(key=lambda r: (0 if r["match_type"] == "title" else 1, r["node_id"]))
+    return results[:limit]
+
+
 def cmd_query(args: argparse.Namespace) -> int:
-    """query 서브커맨드 스텁 — 세션 2 에서 구현.
+    """query 서브커맨드 — vault 검색 (qmd 있으면 BM25, 없으면 grep fallback).
+
+    ADR-007 결정 5: graceful degrade. qmd 미설치 시 stdlib grep 으로 fallback.
+    결과: 매칭 노드 ID + 한 줄 컨텍스트 + wikilink 경로.
 
     Args:
         args: argparse 파싱 결과
 
     Returns:
-        int: 0 (항상 graceful)
+        int: exit code (0: 성공)
     """
-    print("[wiki.py query] 세션 2 구현 예정.")
-    print("  현재: stdlib grep fallback 스텁")
-    query_text = getattr(args, "query_text", "")
-    if query_text:
-        print(f"  검색어: '{query_text}'")
-        print("  vault 검색은 세션 2 (query + graceful degrade) 완성 후 사용 가능합니다.")
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    query_text = getattr(args, "query_text", "") or ""
+    limit = getattr(args, "limit", 10)
+    node_type = getattr(args, "node_type", None)
+
+    if not query_text:
+        print("[wiki.py query] 검색어를 입력하세요.")
+        print("  사용법: wiki.py query <검색어> [--limit N] [--type feature|adr|learning]")
+        return 0
+
+    if not vault_dir.exists():
+        print(f"[wiki.py query] vault 없음: {vault_dir}")
+        print("  먼저 wiki.py ingest 를 실행하세요.")
+        return 0
+
+    qmd_available = _detect_tool("qmd")
+
+    print(f"[wiki.py query] 검색어: '{query_text}'")
+    print(f"  vault: {vault_dir}")
+
+    if qmd_available:
+        # qmd BM25/vector 검색
+        print(f"  모드: qmd (BM25/vector 검색)")
+        try:
+            result = subprocess.run(
+                ["qmd", "search", query_text, "--path", str(vault_dir), "--limit", str(limit)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                print(result.stdout)
+                _append_log(vault_dir, "query", f"qmd | '{query_text}' | limit={limit}")
+                return 0
+            else:
+                print(f"  WARN: qmd 실행 실패 ({result.returncode}) — grep fallback")
+                print(f"  stderr: {result.stderr[:200]}")
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            print(f"  WARN: qmd 실행 오류 ({e}) — grep fallback")
+
+    # grep fallback (qmd 없거나 실패 시)
+    if not qmd_available:
+        print(f"  모드: stdlib grep (qmd 미설치 — fallback)")
+        print(f"  더 나은 검색을 원하면: bash .claude/bin/wiki-setup.sh")
+    else:
+        print(f"  모드: stdlib grep (fallback)")
+
+    results = _grep_vault(vault_dir, query_text, limit, node_type)
+
+    if not results:
+        print(f"\n  결과 없음: '{query_text}'")
+        print("  vault 노드가 없거나 매칭되는 내용이 없습니다.")
+        _append_log(vault_dir, "query", f"grep | '{query_text}' | 결과 없음")
+        return 0
+
+    print(f"\n  결과 {len(results)}건:")
+    print(f"  {'노드 ID':<20} {'타입':<8} {'컨텍스트'}")
+    print(f"  {'-'*20} {'-'*8} {'-'*60}")
+    for r in results:
+        node_id = r["node_id"]
+        match_type = r["match_type"]
+        context = r["context_line"]
+        wiki_path = r["path"]
+        print(f"  [[{node_id}]]{'':<{max(0, 18 - len(node_id))}} {match_type:<8} {context}")
+
+    print(f"\n  wikilink: [[<노드ID>]] — vault 경로 wiki/<하위폴더>/<노드ID>.md")
+
+    _append_log(vault_dir, "query", f"grep | '{query_text}' | {len(results)}건")
     return 0
+
+
+# ─── lint: vault 정합성 점검 ───────────────────────────────────────────────────
+
+def _parse_frontmatter(content: str) -> dict:
+    """markdown 파일의 YAML frontmatter 를 파싱한다 (간단한 키=값 파서).
+
+    외부 YAML 라이브러리 없이 stdlib 로 처리. 복잡한 YAML (중첩/멀티라인) 은
+    부분 파싱 — 단순 key: value 만 추출.
+
+    Args:
+        content: markdown 파일 전체 텍스트
+
+    Returns:
+        dict: frontmatter 키-값. frontmatter 없으면 빈 dict.
+    """
+    if not content.startswith("---"):
+        return {}
+    end_idx = content.find("\n---\n", 4)
+    if end_idx == -1:
+        return {}
+    fm_text = content[4:end_idx]
+    result: dict = {}
+    for line in fm_text.splitlines():
+        m = re.match(r"^(\w[\w_-]*):\s*(.*)$", line.strip())
+        if m:
+            key, val = m.group(1), m.group(2).strip()
+            # JSON 배열 파싱 시도
+            if val.startswith("["):
+                try:
+                    result[key] = json.loads(val)
+                except json.JSONDecodeError:
+                    result[key] = val
+            else:
+                result[key] = val
+    return result
+
+
+def _extract_wikilinks(content: str) -> list[str]:
+    """markdown 본문에서 [[wikilink]] 패턴을 모두 추출한다.
+
+    Args:
+        content: markdown 파일 전체 텍스트
+
+    Returns:
+        list: wikilink 대상 이름 목록 (중복 제거)
+    """
+    return list(set(re.findall(r"\[\[([^\]]+)\]\]", content)))
+
+
+def _collect_all_nodes(vault_dir: Path) -> dict[str, Path]:
+    """vault 전체 노드를 수집한다 (node_id → 파일 경로).
+
+    Args:
+        vault_dir: vault 루트 경로
+
+    Returns:
+        dict: {node_id: 파일 경로}
+    """
+    nodes: dict[str, Path] = {}
+    node_dirs = ["features", "adrs", "learnings", "pages", "sources"]
+    for nd in node_dirs:
+        d = vault_dir / nd
+        if not d.exists():
+            continue
+        for md_file in d.glob("*.md"):
+            nodes[md_file.stem] = md_file
+    return nodes
 
 
 def cmd_lint(args: argparse.Namespace) -> int:
-    """lint 서브커맨드 스텁 — 세션 2 에서 구현.
+    """lint 서브커맨드 — vault 정합성 점검 (ADR-007 결정 7).
+
+    F009 lint.py 와 독립 (wiki 변형 전용). 4 가지 검사:
+    - WIKI-ORPHAN: 인바운드 wikilink 0 인 노드 (index.md 제외)
+    - WIKI-DEAD-LINK: [[X]] 가 존재하지 않는 노드 가리킴
+    - WIKI-STALE: source_ref 원본이 노드보다 최신 (ingest 재실행 필요)
+    - WIKI-FRONTMATTER: 필수 frontmatter 필드 (type/id/created) 누락
+
+    BLOCK: WIKI-DEAD-LINK (끊긴 그래프 — 명확한 오류)
+    CONCERN: WIKI-ORPHAN / WIKI-STALE (권고)
+    INFO: WIKI-FRONTMATTER (메타데이터 누락)
 
     Args:
         args: argparse 파싱 결과
 
     Returns:
-        int: 0 (항상 graceful)
+        int: exit code (0: 성공, 1: --strict + BLOCK)
     """
-    print("[wiki.py lint] 세션 2 구현 예정.")
-    print("  구현 예정 항목: WIKI-ORPHAN / WIKI-DEAD-LINK / WIKI-STALE / WIKI-FRONTMATTER")
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    strict = getattr(args, "strict", False)
+
+    print("[wiki.py lint] vault 정합성 점검")
+    print(f"  vault: {vault_dir}")
+
+    if not vault_dir.exists():
+        print(f"  CONCERN: vault 없음 ({vault_dir}) — ingest 를 먼저 실행하세요.")
+        return 0
+
+    # 전체 노드 수집
+    all_nodes = _collect_all_nodes(vault_dir)
+    if not all_nodes:
+        print("  INFO: vault 에 노드 없음 — 점검 스킵.")
+        return 0
+
+    print(f"  대상 노드: {len(all_nodes)}개")
+    print("")
+
+    issues: list[tuple[str, str, str]] = []  # (label, node_id, 설명)
+
+    # ── 1. WIKI-FRONTMATTER: 필수 필드 누락 ────────────────────────────────────
+    required_fields = {"type", "id", "created"}
+    print("[1/4] WIKI-FRONTMATTER 점검...")
+    for node_id, node_path in all_nodes.items():
+        try:
+            content = node_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _parse_frontmatter(content)
+        missing = required_fields - set(fm.keys())
+        if missing:
+            issues.append((
+                "WIKI-FRONTMATTER",
+                node_id,
+                f"필수 frontmatter 누락: {sorted(missing)}",
+            ))
+
+    # ── 2. 인바운드 링크 맵 구성 (WIKI-ORPHAN 준비) ────────────────────────────
+    # node_id → 이 노드를 가리키는 다른 노드들
+    inbound: dict[str, list[str]] = {nid: [] for nid in all_nodes}
+
+    # wikilink 파싱 (모든 노드 본문 + index.md 제외)
+    outbound_links: dict[str, list[str]] = {}  # node_id → [링크 대상 node_id]
+    dead_links: list[tuple[str, str]] = []  # (from_node_id, dead_target)
+
+    print("[2/4] WIKI-DEAD-LINK 점검...")
+    for node_id, node_path in all_nodes.items():
+        try:
+            content = node_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        links = _extract_wikilinks(content)
+        outbound_links[node_id] = links
+        for target in links:
+            if target in all_nodes:
+                inbound[target].append(node_id)
+            else:
+                # index.md 의 [[X]] 는 카탈로그이므로 dead link 제외
+                dead_links.append((node_id, target))
+
+    for from_id, dead_target in dead_links:
+        issues.append((
+            "WIKI-DEAD-LINK",
+            from_id,
+            f"[[{dead_target}]] → 존재하지 않는 노드",
+        ))
+
+    # ── 3. WIKI-ORPHAN: 인바운드 0 노드 ────────────────────────────────────────
+    print("[3/4] WIKI-ORPHAN 점검...")
+    for node_id in all_nodes:
+        # index.md 및 최상위 파일은 제외
+        if inbound.get(node_id) is not None and len(inbound[node_id]) == 0:
+            issues.append((
+                "WIKI-ORPHAN",
+                node_id,
+                "인바운드 wikilink 0 — 다른 노드에서 참조되지 않음",
+            ))
+
+    # ── 4. WIKI-STALE: source_ref 원본이 노드보다 최신 ──────────────────────────
+    print("[4/4] WIKI-STALE 점검...")
+    for node_id, node_path in all_nodes.items():
+        try:
+            content = node_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = _parse_frontmatter(content)
+        source_ref = fm.get("source_ref", "")
+        if not source_ref:
+            continue
+
+        # source_ref 경로 해석: feature_list.json#F001 → feature_list.json
+        src_path_str = source_ref.split("#")[0]
+        src_path = _PROJECT_ROOT / src_path_str
+        if not src_path.exists():
+            continue
+
+        try:
+            src_mtime = src_path.stat().st_mtime
+            node_mtime = node_path.stat().st_mtime
+            if src_mtime > node_mtime:
+                issues.append((
+                    "WIKI-STALE",
+                    node_id,
+                    f"원본 '{src_path_str}' 이 노드보다 최신 — ingest 재실행 권장",
+                ))
+        except OSError:
+            continue
+
+    # ── 결과 출력 ───────────────────────────────────────────────────────────────
+    print("")
+
+    blocks = [(lbl, nid, desc) for lbl, nid, desc in issues if lbl == "WIKI-DEAD-LINK"]
+    concerns = [(lbl, nid, desc) for lbl, nid, desc in issues if lbl in ("WIKI-ORPHAN", "WIKI-STALE")]
+    infos = [(lbl, nid, desc) for lbl, nid, desc in issues if lbl == "WIKI-FRONTMATTER"]
+    pass_count = len(all_nodes) - len({nid for _, nid, _ in issues})
+
+    if not issues:
+        print(f"  {PASS_LABEL}: 정합성 이슈 없음 ({len(all_nodes)}개 노드 모두 통과)")
+    else:
+        for lbl, nid, desc in blocks:
+            print(f"  [{BLOCK}] {lbl} | {nid}: {desc}")
+        for lbl, nid, desc in concerns:
+            print(f"  [{CONCERN}] {lbl} | {nid}: {desc}")
+        for lbl, nid, desc in infos:
+            print(f"  [{INFO}] {lbl} | {nid}: {desc}")
+
+    print("")
+    print(f"요약: PASS ~{pass_count} / BLOCK {len(blocks)} / CONCERN {len(concerns)} / INFO {len(infos)}")
+
+    _append_log(
+        vault_dir,
+        "lint",
+        f"BLOCK {len(blocks)} / CONCERN {len(concerns)} / INFO {len(infos)} ({len(all_nodes)}개 노드)",
+    )
+
+    if blocks and strict:
+        return 1
+
     return 0
 
 
+# ─── graph: vault 노드/엣지 → mermaid / DOT 텍스트 ───────────────────────────
+
+def _build_node_label(node_id: str, node_path: Path) -> str:
+    """노드 레이블을 생성한다 (mermaid/DOT 용 짧은 이름).
+
+    Args:
+        node_id: 노드 ID
+        node_path: 노드 파일 경로
+
+    Returns:
+        str: 레이블 문자열
+    """
+    try:
+        content = node_path.read_text(encoding="utf-8")
+    except OSError:
+        return node_id
+    # 첫 번째 # 헤딩 추출
+    m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
+    if m:
+        title = m.group(1).strip()
+        # 너무 길면 잘라냄
+        if len(title) > 40:
+            title = title[:37] + "..."
+        return title
+    return node_id
+
+
+def _get_node_type_from_frontmatter(content: str, node_path: Path) -> str:
+    """노드 타입을 frontmatter 또는 경로로부터 추출한다.
+
+    Args:
+        content: 노드 파일 전체 텍스트
+        node_path: 노드 파일 경로
+
+    Returns:
+        str: 노드 타입 (feature/adr/learning/page/source)
+    """
+    fm = _parse_frontmatter(content)
+    if "type" in fm:
+        return str(fm["type"])
+    # 경로 기반 추론
+    parent = node_path.parent.name
+    type_map = {
+        "features": "feature",
+        "adrs": "adr",
+        "learnings": "learning",
+        "pages": "page",
+        "sources": "source",
+    }
+    return type_map.get(parent, "unknown")
+
+
 def cmd_graph(args: argparse.Namespace) -> int:
-    """graph 서브커맨드 스텁 — 세션 2 에서 구현.
+    """graph 서브커맨드 — vault 노드/엣지를 mermaid 또는 DOT 텍스트로 출력.
+
+    Obsidian graph view 의 텍스트 대체 (외부 도구 없이도 그래프 구조 확인).
+    외부 도구 0 — 순수 stdlib (텍스트 출력).
+
+    frontmatter `related` + 본문 `[[wikilink]]` 모두 엣지로 사용.
+    --output 지정 시 mermaid 코드블록으로 파일 저장.
 
     Args:
         args: argparse 파싱 결과
 
     Returns:
-        int: 0 (항상 graceful)
+        int: exit code (0: 성공)
     """
-    print("[wiki.py graph] 세션 2 구현 예정.")
-    print("  구현 예정: mermaid / DOT 텍스트 그래프 출력")
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    graph_format = getattr(args, "graph_format", "mermaid")
+    node_type_filter = getattr(args, "node_type_filter", None)
+    output_path_str = getattr(args, "output", None)
+
+    print(f"[wiki.py graph] vault: {vault_dir}")
+    print(f"  format: {graph_format}")
+
+    if not vault_dir.exists():
+        print(f"  CONCERN: vault 없음 ({vault_dir}) — ingest 를 먼저 실행하세요.")
+        return 0
+
+    all_nodes = _collect_all_nodes(vault_dir)
+    if not all_nodes:
+        print("  INFO: vault 에 노드 없음 — 그래프 출력 스킵.")
+        return 0
+
+    # 노드 타입별 그룹핑 맵
+    type_nodes: dict[str, list[str]] = {}
+    node_labels: dict[str, str] = {}
+    edges: list[tuple[str, str]] = []  # (from_id, to_id)
+
+    for node_id, node_path in all_nodes.items():
+        try:
+            content = node_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        node_type = _get_node_type_from_frontmatter(content, node_path)
+
+        # 타입 필터
+        if node_type_filter and node_type != node_type_filter:
+            continue
+
+        type_nodes.setdefault(node_type, []).append(node_id)
+
+        # 레이블 (mermaid 는 짧은 텍스트 사용)
+        node_labels[node_id] = node_id  # 기본: ID 사용 (레이블 너무 길면 그래프 복잡)
+
+        # 엣지: frontmatter related + 본문 wikilink
+        fm = _parse_frontmatter(content)
+        related = fm.get("related", [])
+        if isinstance(related, list):
+            for target in related:
+                if target in all_nodes:
+                    edges.append((node_id, target))
+
+        wikilinks = _extract_wikilinks(content)
+        for target in wikilinks:
+            if target in all_nodes and (node_id, target) not in edges:
+                edges.append((node_id, target))
+
+    # 타입 필터 적용 시 필터된 노드만 포함
+    if node_type_filter:
+        filtered_ids = set(type_nodes.get(node_type_filter, []))
+        edges = [(f, t) for f, t in edges if f in filtered_ids or t in filtered_ids]
+
+    all_used_ids = {nid for ids in type_nodes.values() for nid in ids}
+
+    # ── mermaid 출력 ────────────────────────────────────────────────────────────
+    if graph_format == "mermaid":
+        lines = ["graph LR"]
+
+        # subgraph 로 타입 그룹핑
+        type_order = ["feature", "adr", "learning", "page", "source", "unknown"]
+        for node_type in type_order:
+            ids = type_nodes.get(node_type, [])
+            if not ids:
+                continue
+            # mermaid subgraph: 특수문자 이스케이프
+            safe_type = node_type.replace("-", "_")
+            lines.append(f'  subgraph {safe_type}["{node_type}"]')
+            for nid in sorted(ids):
+                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", nid)
+                lines.append(f'    {safe_id}["{nid}"]')
+            lines.append("  end")
+
+        # 엣지
+        for from_id, to_id in edges:
+            safe_from = re.sub(r"[^A-Za-z0-9_-]", "_", from_id)
+            safe_to = re.sub(r"[^A-Za-z0-9_-]", "_", to_id)
+            lines.append(f"  {safe_from} --> {safe_to}")
+
+        graph_text = "\n".join(lines)
+
+        if output_path_str:
+            out_path = Path(output_path_str)
+            md_content = f"# Wiki 지식 그래프\n\n```mermaid\n{graph_text}\n```\n"
+            _atomic_write(out_path, md_content)
+            print(f"\n  저장: {out_path}")
+            print(f"  노드 {sum(len(v) for v in type_nodes.values())}개 / 엣지 {len(edges)}개")
+        else:
+            print("")
+            print(graph_text)
+            print("")
+            print(f"  노드 {sum(len(v) for v in type_nodes.values())}개 / 엣지 {len(edges)}개")
+            print("  위 mermaid 코드를 https://mermaid.live 또는 Obsidian 에 붙여넣기 가능.")
+
+    # ── DOT 출력 ────────────────────────────────────────────────────────────────
+    elif graph_format == "dot":
+        type_colors = {
+            "feature": "#4A90D9",
+            "adr": "#E8A838",
+            "learning": "#7BC67E",
+            "page": "#B39DDB",
+            "source": "#EF9A9A",
+            "unknown": "#CFD8DC",
+        }
+
+        dot_lines = ['digraph wiki {', '  rankdir=LR;', '  node [shape=box, style=filled];']
+
+        for node_type in ["feature", "adr", "learning", "page", "source", "unknown"]:
+            ids = type_nodes.get(node_type, [])
+            if not ids:
+                continue
+            color = type_colors.get(node_type, "#CFD8DC")
+            dot_lines.append(f'  // {node_type}')
+            dot_lines.append(f'  {{ node [fillcolor="{color}"]')
+            for nid in sorted(ids):
+                safe_id = re.sub(r"[^A-Za-z0-9_]", "_", nid)
+                dot_lines.append(f'    {safe_id} [label="{nid}"];')
+            dot_lines.append("  }")
+
+        dot_lines.append("")
+        for from_id, to_id in edges:
+            safe_from = re.sub(r"[^A-Za-z0-9_]", "_", from_id)
+            safe_to = re.sub(r"[^A-Za-z0-9_]", "_", to_id)
+            dot_lines.append(f"  {safe_from} -> {safe_to};")
+
+        dot_lines.append("}")
+        graph_text = "\n".join(dot_lines)
+
+        if output_path_str:
+            out_path = Path(output_path_str)
+            _atomic_write(out_path, graph_text)
+            print(f"\n  저장: {out_path}")
+        else:
+            print("")
+            print(graph_text)
+            print("")
+
+        print(f"  노드 {sum(len(v) for v in type_nodes.values())}개 / 엣지 {len(edges)}개")
+        print("  DOT → PNG: dot -Tpng output.dot -o graph.png (graphviz 필요)")
+
+    # ── JSON 출력 ────────────────────────────────────────────────────────────────
+    elif graph_format == "json":
+        nodes_list = []
+        for node_type, ids in type_nodes.items():
+            for nid in ids:
+                nodes_list.append({"id": nid, "type": node_type})
+        edges_list = [{"from": f, "to": t} for f, t in edges]
+        graph_data = {"nodes": nodes_list, "edges": edges_list}
+        graph_text = json.dumps(graph_data, ensure_ascii=False, indent=2)
+
+        if output_path_str:
+            out_path = Path(output_path_str)
+            _atomic_write(out_path, graph_text)
+            print(f"\n  저장: {out_path}")
+        else:
+            print(graph_text)
+
+        print(f"  노드 {len(nodes_list)}개 / 엣지 {len(edges_list)}개")
+
+    _append_log(
+        vault_dir,
+        "graph",
+        f"{graph_format} | 노드 {sum(len(v) for v in type_nodes.values())}개 / 엣지 {len(edges)}개",
+    )
     return 0
 
 
@@ -859,17 +1460,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="LLM 보강 모드 옵트인 (세션 2 이후 실구현)",
     )
 
-    # query (세션 2 구현 예정)
-    query_p = sub.add_parser("query", help="vault 검색 (세션 2 구현 예정)")
+    # query
+    query_p = sub.add_parser("query", help="vault 검색 (qmd BM25 / stdlib grep fallback)")
     query_p.add_argument("query_text", nargs="?", help="검색어")
     query_p.add_argument("--limit", type=int, default=10, help="결과 수 제한")
     query_p.add_argument("--type", dest="node_type", help="노드 타입 필터")
 
-    # lint (세션 2 구현 예정)
-    lint_p = sub.add_parser("lint", help="vault 정합성 점검 (세션 2 구현 예정)")
+    # lint
+    lint_p = sub.add_parser("lint", help="vault 정합성 점검 (ORPHAN/DEAD-LINK/STALE/FRONTMATTER)")
 
-    # graph (세션 2 구현 예정)
-    graph_p = sub.add_parser("graph", help="vault 그래프 출력 (세션 2 구현 예정)")
+    # graph
+    graph_p = sub.add_parser("graph", help="vault 그래프 출력 (mermaid/DOT/JSON)")
     graph_p.add_argument(
         "--format",
         dest="graph_format",
@@ -878,6 +1479,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="그래프 출력 형식",
     )
     graph_p.add_argument("--node-type", dest="node_type_filter", help="노드 타입 필터")
+    graph_p.add_argument(
+        "--output",
+        dest="output",
+        default=None,
+        help="출력 파일 경로 (지정 시 파일 저장, 기본: stdout)",
+    )
 
     # self
     self_p = sub.add_parser("self", help="의존성·환경 점검 (graceful degrade 상태)")
