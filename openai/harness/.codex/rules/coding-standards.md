@@ -13,9 +13,6 @@
 | **`claude.gstack.auto.design.wiki/`** | **허용** | Obsidian / qmd / Marp | LINT-MR-7 (반대 방향 — 허용 확인) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
-**계약**: wiki 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (자동 / 수동 무관).
-graceful degrade 가 의무 (ADR-007 결정 5) — 도구 없이도 핵심 기능은 동작한다.
-
 **wiki 변형 예외 계약**:
 - wiki 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (선택적 — graceful degrade)
 - 허용 도구: Obsidian (graph view), qmd (BM25/vector 검색), Marp (슬라이드)

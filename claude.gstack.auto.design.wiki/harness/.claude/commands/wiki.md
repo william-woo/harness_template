@@ -144,7 +144,7 @@ graceful degrade 가 의무 — 도구 없이도 핵심 기능(ingest/lint/graph
 | 항목 | 심각도 | 설명 |
 |---|---|---|
 | WIKI-DEAD-LINK | BLOCK | 본문 `[[X]]` 가 X.md 파일로 resolve 불가 |
-| WIKI-FRONTMATTER | BLOCK | frontmatter 누락 또는 `type` / `created` 필수 필드 부재 |
+| WIKI-FRONTMATTER | INFO | frontmatter 누락 또는 `type` / `created` 필수 필드 부재 (메타 불완전, 그래프 깨짐 아님) |
 | WIKI-ORPHAN | CONCERN | 다른 노드에서 in-degree 0 (참조되지 않는 노드) |
 | WIKI-STALE | CONCERN | frontmatter `status: stale` 또는 90일 이상 미수정 |
 

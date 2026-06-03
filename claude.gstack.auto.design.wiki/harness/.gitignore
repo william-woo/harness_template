@@ -61,3 +61,6 @@ htmlcov/
 
 # Backup 캐시 (세션 로컬 — backup.py status 재출력용)
 .claude/state/backup-last.json
+
+# Wiki 런타임 산출물 (wiki.py graph --output 생성 — git 제외)
+wiki/graph.md

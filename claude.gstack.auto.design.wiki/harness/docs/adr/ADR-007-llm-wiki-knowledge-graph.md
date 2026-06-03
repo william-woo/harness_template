@@ -574,7 +574,7 @@ F012 `wiki.py lint` 는 vault 정합성 (고아 노드 / 끊긴 wikilink / stale
 | WIKI-ORPHAN | 고아 노드 (다른 노드에서 참조 0) | 모든 노드 파일을 순회 → `[[wikilink]]` + frontmatter `related` 그래프 구성 → in-degree 0 노드 추출 | CONCERN (BLOCK 아님 — 신규 노드는 일시적 고아 정상) |
 | WIKI-DEAD-LINK | 끊긴 wikilink | 본문 `[[X]]` 추출 → X.md 파일 존재 여부 확인 | BLOCK (끊긴 링크는 오류) |
 | WIKI-STALE | stale 페이지 (frontmatter `status: stale` 또는 90 일 이상 미수정 + source 변경) | frontmatter `status` 직접 검사 + git log 로 vault 외부 source 의 최근 변경 시각 비교 | CONCERN |
-| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | BLOCK |
+| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | INFO (BLOCK 아님 — 메타 불완전이지 그래프 깨짐 아님) |
 
 **근거**:
 

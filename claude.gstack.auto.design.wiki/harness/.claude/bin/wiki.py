@@ -105,26 +105,66 @@ def _atomic_write(path: Path, content: str) -> None:
         raise
 
 
-def _detect_external_tools() -> dict[str, bool]:
+def _node_exists(node_id: str, vault_dir: Path) -> bool:
+    """vault 에 해당 node_id 의 .md 파일이 존재하는지 확인한다.
+
+    Args:
+        node_id: 확인할 노드 ID (파일명 stem)
+        vault_dir: vault 루트 경로
+
+    Returns:
+        bool: 노드가 vault 의 하위 디렉토리 어딘가에 존재하면 True
+    """
+    for sub in ("features", "adrs", "learnings", "pages", "sources"):
+        if (vault_dir / sub / f"{node_id}.md").exists():
+            return True
+    return False
+
+
+def _collect_known_node_ids(vault_dir: Path) -> set[str]:
+    """vault 에 현재 존재하는 모든 노드 ID 집합을 반환한다.
+
+    Args:
+        vault_dir: vault 루트 경로
+
+    Returns:
+        set[str]: 노드 ID (파일명 stem) 집합
+    """
+    ids: set[str] = set()
+    for sub in ("features", "adrs", "learnings", "pages", "sources"):
+        node_dir = vault_dir / sub
+        if node_dir.exists():
+            for md_file in node_dir.glob("*.md"):
+                ids.add(md_file.stem)
+    return ids
+
+
+def _detect_external_tools(vault_dir: Optional[Path] = None) -> dict[str, bool]:
     """외부 도구 설치 여부 자동 감지 (ADR-007 결정 5).
+
+    Args:
+        vault_dir: vault 경로 (Obsidian 감지용). None 이면 기본 경로 사용.
 
     Returns:
         dict: {tool: bool} — True 면 사용 가능, False 면 fallback
     """
     return {
         "qmd": shutil.which("qmd") is not None,
-        "obsidian": _detect_obsidian_vault(),
+        "obsidian": _detect_obsidian_vault(vault_dir),
         "marp": shutil.which("marp") is not None,
     }
 
 
-def _detect_obsidian_vault() -> bool:
+def _detect_obsidian_vault(vault_dir: Optional[Path] = None) -> bool:
     """vault 에 .obsidian/ 폴더가 있으면 Obsidian 설정 존재로 간주.
+
+    Args:
+        vault_dir: 확인할 vault 경로. None 이면 기본 경로 사용.
 
     Returns:
         bool: .obsidian/ 존재 여부
     """
-    vault = _VAULT_DIR_DEFAULT
+    vault = vault_dir if vault_dir is not None else _VAULT_DIR_DEFAULT
     return (vault / ".obsidian").is_dir()
 
 
@@ -253,6 +293,7 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
     ADR-007 결정 3: 결정론적 매핑.
     - dependencies → related: [...] wikilink 엣지
     - 역방향 엣지 (dependents) 도 자동 계산
+    - deps/dependents 는 feature_list.json 내부 참조이므로 vault 존재 확인 불필요
 
     Args:
         vault_dir: vault 루트 경로
@@ -269,6 +310,9 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
         print(f"  CONCERN: feature_list.json 없음 또는 비어있음 ({_FEATURE_LIST})")
         print("           graceful — features 노드 생성 스킵")
         return 0, 0
+
+    # feature_list.json 에 정의된 유효 ID 집합 (deps/dependents wikilink 안전 집합)
+    valid_feature_ids: set[str] = {f.get("id", "") for f in features if f.get("id")}
 
     # 역방향 엣지 계산: id → dependents
     dependents: dict[str, list[str]] = {}
@@ -291,24 +335,30 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
         tags = [feature.get("category", ""), f"phase-{_guess_phase(fid)}"]
         tags = [t for t in tags if t]
 
-        # related: dependencies
+        # related: dependencies (frontmatter — 메타데이터만, 끊겨도 OK)
         related_refs = deps[:]
 
-        # 본문 wikilink (dependencies)
+        # 본문 wikilink (dependencies) — feature_list.json 내부 참조만
         dep_body = ""
         if deps:
             dep_body = "## Dependencies\n\n"
             for dep in deps:
-                dep_body += f"- [[{dep}]]\n"
+                if dep in valid_feature_ids:
+                    dep_body += f"- [[{dep}]]\n"
+                else:
+                    dep_body += f"- {dep}\n"
         else:
             dep_body = "## Dependencies\n\n_(없음)_\n"
 
-        # dependents (역방향)
+        # dependents (역방향) — feature_list.json 내부 참조만
         dep_back = dependents.get(fid, [])
         dep_back_body = "## Dependents\n\n"
         if dep_back:
             for d in dep_back:
-                dep_back_body += f"- [[{d}]]\n"
+                if d in valid_feature_ids:
+                    dep_back_body += f"- [[{d}]]\n"
+                else:
+                    dep_back_body += f"- {d}\n"
         else:
             dep_back_body += "_(없음)_\n"
 
@@ -383,20 +433,30 @@ def _guess_phase(fid: str) -> str:
 
 # ─── ingest: docs/adr/*.md → nodes/adrs/ ─────────────────────────────────────
 
-def _ingest_adrs(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, int]:
+def _ingest_adrs(
+    vault_dir: Path,
+    enrich_llm: bool = False,
+    known_ids: Optional[set] = None,
+) -> tuple[int, int]:
     """docs/adr/*.md 를 wiki/adrs/<ADR-NNN>.md 노드로 변환.
 
-    ADR-007 결정 3: 본문의 FXXX 참조 추출 → related wikilink 엣지.
+    ADR-007 결정 3: 본문의 FXXX 참조 추출 → related frontmatter 엣지.
+    MUST 1 (dead-link 분리): related frontmatter 는 전체 참조 기록,
+    본문 [[wikilink]] 는 known_ids 에 실제 존재하는 노드만 작성.
 
     Args:
         vault_dir: vault 루트 경로
         enrich_llm: LLM 보강 모드 플래그
+        known_ids: vault 에 이미 존재하는 노드 ID 집합 (None 이면 vault 직접 조회)
 
     Returns:
         tuple: (생성된 노드 수, 건너뛴 수)
     """
     adrs_dir = vault_dir / "adrs"
     adrs_dir.mkdir(parents=True, exist_ok=True)
+
+    if known_ids is None:
+        known_ids = _collect_known_node_ids(vault_dir)
 
     if not _ADR_DIR.exists():
         print(f"  CONCERN: docs/adr/ 디렉토리 없음 ({_ADR_DIR})")
@@ -446,7 +506,7 @@ def _ingest_adrs(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, int]:
         # 본문 발췌: "결정" 섹션 + "결과" 섹션 (첫 500자)
         excerpt = _extract_adr_excerpt(raw)
 
-        # frontmatter
+        # frontmatter: related 는 전체 참조 기록 (끊겨도 메타데이터로 유효)
         related_yaml = json.dumps(feature_refs)
         tags_yaml = json.dumps(["adr", f"adr-{adr_num}"])
         node_wiki_status = "active" if adr_status == "accepted" else "draft"
@@ -462,12 +522,16 @@ def _ingest_adrs(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, int]:
             "---\n"
         )
 
-        # 역방향 wikilink (feature 참조)
+        # 역방향 wikilink: vault 에 실제 존재하는 노드만 [[wikilink]],
+        # 나머지는 평문 텍스트로 (dead-link 방지 — MUST 1)
         feat_links = ""
         if feature_refs:
             feat_links = "## 관련 Features\n\n"
             for ref in feature_refs:
-                feat_links += f"- [[{ref}]]\n"
+                if ref in known_ids:
+                    feat_links += f"- [[{ref}]]\n"
+                else:
+                    feat_links += f"- {ref}\n"
             feat_links += "\n"
 
         body = (
@@ -509,20 +573,30 @@ def _extract_adr_excerpt(raw: str) -> str:
 
 # ─── ingest: learnings.jsonl → nodes/learnings/ ───────────────────────────────
 
-def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, int]:
+def _ingest_learnings(
+    vault_dir: Path,
+    enrich_llm: bool = False,
+    known_ids: Optional[set] = None,
+) -> tuple[int, int]:
     """learnings.jsonl 각 엔트리를 wiki/learnings/ 노드로 변환.
 
-    ADR-007 결정 3: feature_id → related wikilink 엣지.
+    ADR-007 결정 3: feature_id → related frontmatter 엣지.
+    MUST 1 (dead-link 분리): related frontmatter 는 전체 참조 기록,
+    본문 [[wikilink]] 는 known_ids 에 실제 존재하는 노드만 작성.
 
     Args:
         vault_dir: vault 루트 경로
         enrich_llm: LLM 보강 모드 플래그
+        known_ids: vault 에 이미 존재하는 노드 ID 집합 (None 이면 vault 직접 조회)
 
     Returns:
         tuple: (생성된 노드 수, 건너뛴 수)
     """
     learnings_dir = vault_dir / "learnings"
     learnings_dir.mkdir(parents=True, exist_ok=True)
+
+    if known_ids is None:
+        known_ids = _collect_known_node_ids(vault_dir)
 
     if not _LEARNINGS.exists():
         print(f"  CONCERN: learnings.jsonl 없음 ({_LEARNINGS})")
@@ -558,7 +632,7 @@ def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, i
         date_part = ts[:10] if len(ts) >= 10 else ts
         node_id = f"{date_part}-{category}-{note_slug}"
 
-        # related: feature_id + note 에서 FXXX 추출
+        # related: feature_id + note 에서 FXXX 추출 (frontmatter — 전체 참조 기록)
         related: list[str] = []
         if feature_id:
             related.append(feature_id)
@@ -569,7 +643,7 @@ def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, i
 
         tags = [category] + (tags_raw if isinstance(tags_raw, list) else [])
 
-        # frontmatter
+        # frontmatter: related 는 전체 참조 기록 (끊겨도 메타데이터로 유효)
         related_yaml = json.dumps(related)
         tags_yaml = json.dumps(tags)
         frontmatter = (
@@ -584,12 +658,16 @@ def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, i
             "---\n"
         )
 
-        # 본문
+        # 본문 wikilink: vault 에 실제 존재하는 노드만 [[wikilink]],
+        # 나머지는 평문 텍스트로 (dead-link 방지 — MUST 1)
         feat_links = ""
         if related:
             feat_links = "## 관련 Features\n\n"
             for ref in related:
-                feat_links += f"- [[{ref}]]\n"
+                if ref in known_ids:
+                    feat_links += f"- [[{ref}]]\n"
+                else:
+                    feat_links += f"- {ref}\n"
             feat_links += "\n"
 
         body = (
@@ -612,8 +690,66 @@ def _ingest_learnings(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, i
 
 # ─── 서브커맨드 핸들러 ─────────────────────────────────────────────────────────
 
+def _ingest_source_file(vault_dir: Path, source_file: Path) -> tuple[int, int]:
+    """외부 .md 파일을 wiki/sources/<slug>.md 노드로 ingest.
+
+    MUST 2: --source-file 옵션 구현.
+
+    Args:
+        vault_dir: vault 루트 경로
+        source_file: 외부 .md 파일 경로
+
+    Returns:
+        tuple: (생성된 노드 수, 건너뛴 수)
+    """
+    sources_dir = vault_dir / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+
+    if not source_file.exists():
+        print(f"  CONCERN: 파일 없음 ({source_file})")
+        return 0, 1
+
+    raw = source_file.read_text(encoding="utf-8")
+
+    # 제목 추출 (첫 번째 # 헤딩 또는 파일명)
+    title_m = re.search(r"^#\s+(.+)$", raw, re.MULTILINE)
+    title = title_m.group(1).strip() if title_m else source_file.stem
+
+    slug = _slug_from_text(title, 40) or _slug_from_text(source_file.stem, 40)
+    node_id = slug
+
+    tags_yaml = json.dumps(["source"])
+    frontmatter = (
+        "---\n"
+        f"type: source\n"
+        f"id: {node_id}\n"
+        f"created: {_now_iso()}\n"
+        f"source_ref: {source_file}\n"
+        f"tags: {tags_yaml}\n"
+        f"related: []\n"
+        f"status: active\n"
+        "---\n"
+    )
+
+    body = (
+        f"# {title}\n\n"
+        f"> **원본 경로**: `{source_file}`\n\n"
+        "---\n\n"
+        f"{raw.strip()}\n"
+    )
+
+    content = frontmatter + "\n" + body
+    _atomic_write(sources_dir / f"{node_id}.md", content)
+    print(f"  {PASS_LABEL}: sources/{node_id}.md 생성 (원본: {source_file})")
+    return 1, 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     """ingest 서브커맨드 — 산출물을 vault 노드로 결정론적 변환.
+
+    MUST 1 (dead-link 분리): 2-pass 처리.
+    1st pass: features 노드 생성 (기준 노드 집합 확립)
+    2nd pass: adrs/learnings 노드 생성 + known_ids 로 wikilink 필터링
 
     Args:
         args: argparse 파싱 결과
@@ -624,28 +760,48 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
     source = getattr(args, "source", "all") or "all"
     enrich_llm = getattr(args, "enrich_llm", False)
+    source_file_arg = getattr(args, "source_file", None)
+
+    # --source-file 처리 (MUST 2)
+    if source_file_arg:
+        sf = Path(source_file_arg)
+        print(f"[wiki.py ingest] --source-file 모드: {sf}")
+        created, skipped = _ingest_source_file(vault_dir, sf)
+        if created:
+            print("\n[index] wiki/index.md 갱신 중...")
+            _atomic_write(vault_dir / "index.md", _build_index_content(vault_dir))
+            print(f"  {PASS_LABEL}: index.md 갱신 완료")
+            _append_log(vault_dir, "ingest", f"source-file {sf.name} — {created}개 노드 생성")
+            print(f"\n[완료] {created}개 노드 생성 | vault: {vault_dir}")
+        return 0
 
     print(f"[wiki.py ingest] vault: {vault_dir}")
     print(f"  source: {source}")
 
     total_created = 0
-    has_concern = False
 
+    # ── 1st pass: features 노드 생성 ───────────────────────────────────────────
+    # features 먼저 생성하여 adrs/learnings 의 wikilink 기준 집합 확립
     if source in ("features", "all"):
         print("\n[1/3] feature_list.json → features/")
         created, _ = _ingest_features(vault_dir, enrich_llm)
         total_created += created
         print(f"  {PASS_LABEL}: features 노드 {created}개 생성")
 
+    # ── known_ids 수집 (1st pass 완료 후) ─────────────────────────────────────
+    # adrs/learnings 의 [[wikilink]] 는 vault 에 실제 존재하는 노드만 (MUST 1)
+    known_ids = _collect_known_node_ids(vault_dir)
+
+    # ── 2nd pass: adrs/learnings 노드 생성 + wikilink 필터링 ──────────────────
     if source in ("adrs", "all"):
         print("\n[2/3] docs/adr/*.md → adrs/")
-        created, _ = _ingest_adrs(vault_dir, enrich_llm)
+        created, _ = _ingest_adrs(vault_dir, enrich_llm, known_ids=known_ids)
         total_created += created
         print(f"  {PASS_LABEL}: adrs 노드 {created}개 생성")
 
     if source in ("learnings", "all"):
         print("\n[3/3] learnings.jsonl → learnings/")
-        created, _ = _ingest_learnings(vault_dir, enrich_llm)
+        created, _ = _ingest_learnings(vault_dir, enrich_llm, known_ids=known_ids)
         total_created += created
         print(f"  {PASS_LABEL}: learnings 노드 {created}개 생성")
 
@@ -1351,8 +1507,8 @@ def cmd_self(args: argparse.Namespace) -> int:
         else:
             results.append((f"vault/{nd}/", CONCERN, "없음 — ingest 후 생성"))
 
-    # --- 외부 도구 ---
-    tools = _detect_external_tools()
+    # --- 외부 도구 --- (vault_dir 전달: --vault override 존중 — SHOULD 2)
+    tools = _detect_external_tools(vault_dir)
     tool_notes = {
         "qmd": "BM25/vector 검색 — 미설치 시 stdlib grep fallback",
         "obsidian": ".obsidian/ 존재 (GUI는 수동 설치)",
@@ -1458,6 +1614,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="LLM 보강 모드 옵트인 (세션 2 이후 실구현)",
+    )
+    ingest_p.add_argument(
+        "--source-file",
+        dest="source_file",
+        default=None,
+        help="외부 .md 파일을 wiki/sources/ 노드로 ingest",
     )
 
     # query
