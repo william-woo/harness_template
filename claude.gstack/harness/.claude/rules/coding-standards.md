@@ -2,6 +2,28 @@
 
 > 모든 에이전트가 따라야 하는 코딩 규칙. 프로젝트 시작 시 기술 스택에 맞게 수정하세요.
 
+## 외부 의존성 정책 (변형별)
+
+| 변형 | 외부 의존성 | 허용 카탈로그 | 격리 강제 |
+|---|---|---|---|
+| `claude/` (baseline) | 0 | — | LINT-MR-7 |
+| `claude.gstack/` | 0 | — | LINT-MR-7 |
+| `claude.gstack.auto/` | 0 | — | LINT-MR-7 |
+| `claude.gstack.auto.design/` | 0 | — | LINT-MR-7 |
+| **`claude.gstack.auto.design.wiki/`** | **허용** | Obsidian / qmd / Marp | LINT-MR-7 (반대 방향 — 허용 확인) |
+| `openai/.codex/` | 0 | — | LINT-MR-7 |
+
+**계약**: wiki 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (자동 / 수동 무관).
+graceful degrade 가 의무 (ADR-007 결정 5) — 도구 없이도 핵심 기능은 동작한다.
+
+**wiki 변형 예외 계약**:
+- wiki 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (선택적 — graceful degrade)
+- 허용 도구: Obsidian (graph view), qmd (BM25/vector 검색), Marp (슬라이드)
+- 핵심 wiki 기능 (.md + [[wikilink]] 노드 관리) 은 stdlib only — 외부 도구는 *향상*만
+- 다른 5 변형은 이 예외를 절대 상속하지 않음 (LINT-MR-7 이 강제 — 세션 3)
+
+---
+
 ## Simplicity First (Karpathy)
 
 코드는 동작해야 하고, 읽혀야 하고, 유지보수 가능해야 한다. 이 세 목표는 모두 단순함에서 온다.
