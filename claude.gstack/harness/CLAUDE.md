@@ -67,9 +67,10 @@ project-root/
 │   └── harness_template/     # 배포용 하네스 템플릿 (별도 git repo)
 │       ├── claude/           #   ⓐ baseline — Phase 0 스냅샷 (수정 X)
 │       ├── claude.gstack/    #   ⓑ ★ 메인 — 모든 phase 산출물의 정합 사본 (표준)
-│       ├── claude.gstack.auto/         #   ⓒ 자율 모드 변형 (메인 1:1)
-│       ├── claude.gstack.auto.design/  #   ⓓ 자율+디자인 변형 (F011 신설 — 디자인 오버레이 포함)
-│       └── openai/           #   ⓔ Codex 호스트 변형 (.codex/ 구조)
+│       ├── claude.gstack.auto/              #   ⓑ′ 자율 모드 변형 (메인 1:1)
+│       ├── claude.gstack.auto.design/       #   ⓑ″ 자율+디자인 변형 (F011 신설)
+│       ├── claude.gstack.auto.design.wiki/  #   ⓑ‴ 자율+디자인+wiki 변형 (F012 신설 — 외부 의존성 허용)
+│       └── openai/           #   ⓒ Codex 호스트 변형 (.codex/ 구조)
 ├── tests/                    # 테스트
 │   └── e2e/                  # E2E 테스트 스크립트 (Playwright — F008)
 │       └── _template.spec.ts # qa-browser 스크립트 템플릿 예시
@@ -504,15 +505,16 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (5 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (6 변형 매트릭스)
 
-| 변형 | 미러 정책 | 디자인 오버레이 | 자율 오버레이 |
-|---|---|:-:|:-:|
-| `claude/` (baseline) | Karpathy 예외만 | ❌ | ❌ |
-| `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ |
-| `claude.gstack.auto/` (자율) | 메인과 1:1 | ❌ | ✅ |
-| `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ |
-| `openai/.codex/` (codex stub) | 정적, Karpathy 예외만 | ❌ | ❌ |
+| 변형 | 미러 정책 | 자율 오버레이 | 디자인 오버레이 | wiki 오버레이 | 외부 의존성 |
+|---|---|:-:|:-:|:-:|:-:|
+| ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | 0 |
+| ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | 0 |
+| ⓑ′ `claude.gstack.auto/` (자율) | 메인과 1:1 | ✅ | ❌ | ❌ | 0 |
+| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | 0 |
+| **ⓑ‴ `claude.gstack.auto.design.wiki/`** (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | **허용** (Obsidian/qmd/Marp) |
+| ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | 0 |
 
 **자율 오버레이 4 파일** (claude.gstack 에서 제외):
 - `.claude/agents/gatekeeper.md`
@@ -520,13 +522,19 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/settings.json` 의 `Bash(*)` 권한
 - `CLAUDE.md` 의 "Autonomous Mode" 섹션
 
-**디자인 오버레이** (claude.gstack.auto.design 에만):
+**디자인 오버레이** (claude.gstack.auto.design + wiki 변형에 존재):
 - `.claude/agents/designer.md`
-- `.claude/design/references/` 4 파일
+- `docs/design-references/` 4 파일
 - `.claude/bin/design_pick.py`
 - `.claude/commands/design-pick.md`
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (F011 신설).
+**wiki 오버레이** (claude.gstack.auto.design.wiki 에만 — F012 신설):
+- `.claude/bin/wiki.py`
+- `.claude/bin/wiki-setup.sh`
+- `.claude/commands/wiki.md`
+- `wiki/` vault 디렉토리
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~7 / F011 신설·F012 확장).
 
 ---
 

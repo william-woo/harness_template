@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (5변형 — F011 신설)
+  LINT-MR     변형 오버레이 정합 (6변형 — F011 신설, F012 확장: MR-6/MR-7)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -857,21 +857,59 @@ _DESIGN_OVERLAY_DIRS = [
     "harness/docs/design-references",
 ]
 
-# 디자인 오버레이가 없어야 하는 변형
+# 디자인 오버레이가 없어야 하는 변형 (MR-4: wiki 변형은 design의 1:1 복사이므로 제외)
 _VARIANTS_NO_DESIGN = ["claude", "claude.gstack", "claude.gstack.auto"]
+
+# 디자인 오버레이를 보유해야 하는 변형 (MR-5: design + wiki 둘 다)
+_VARIANTS_WITH_DESIGN = ["claude.gstack.auto.design", "claude.gstack.auto.design.wiki"]
+
+# wiki 오버레이 파일 (ⓑ‴ wiki 변형에만 존재해야 함 — MR-6)
+_WIKI_OVERLAY_FILES = [
+    "harness/.claude/bin/wiki.py",
+    "harness/.claude/commands/wiki.md",
+    "harness/.claude/bin/wiki-setup.sh",
+]
+
+# wiki vault 디렉토리 (MR-6)
+_WIKI_OVERLAY_DIRS = [
+    "harness/wiki",
+]
+
+# wiki 오버레이가 없어야 하는 변형 (MR-6)
+_VARIANTS_NO_WIKI = ["claude", "claude.gstack", "claude.gstack.auto", "claude.gstack.auto.design"]
+
+# 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
+_EXTERNAL_DEP_FILES = [
+    "harness/.claude/bin/wiki-setup.sh",
+    "harness/requirements.txt",
+    "harness/package.json",
+]
+
+# openai 변형 포함한 외부 의존성 검사 대상 (MR-7: 5 변형)
+_VARIANTS_NO_EXTERNAL_DEPS = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+]
+# openai 변형 경로 (구조가 달라 별도 처리)
+_OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 5 변형 미러 정합 점검 (F011 신설).
+    """LINT-MR: 6 변형 미러 정합 점검 (F011 신설, F012 확장).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
+    F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
 
     검사 항목:
     - MR-1: claude.gstack 에 자율 오버레이 파일 부재
     - MR-2: claude.gstack/settings.json 에 Bash(*) 미사용
     - MR-3: claude.gstack/CLAUDE.md 에 Autonomous Mode 섹션 부재
-    - MR-4: claude.gstack.auto.design 외 변형에 디자인 오버레이 부재
-    - MR-5: claude.gstack.auto.design 에 디자인 오버레이 모두 존재
+    - MR-4: claude.gstack.auto.design 외 변형 (ⓐ/ⓑ/ⓑ′) 에 디자인 오버레이 부재
+    - MR-5: claude.gstack.auto.design + claude.gstack.auto.design.wiki 에 디자인 오버레이 존재
+    - MR-6: ⓐ/ⓑ/ⓑ′/ⓑ″ 4 변형에 wiki 오버레이 부재 (wiki 변형만 허용)
+    - MR-7: 5 변형 (ⓐ/ⓑ/ⓑ′/ⓑ″/ⓒ) 에 외부 의존성 매니페스트 부재 (wiki 변형만 wiki-setup.sh 허용)
 
     Returns:
         list[dict]: 검사 결과 목록 (각 dict는 id/label/target/message 키 보유)
@@ -1002,34 +1040,151 @@ def check_mirror_regression() -> list:
                     f"{variant} 변형에 디자인 오버레이 부재 OK",
                 ))
 
-        # MR-5: claude.gstack.auto.design 에 디자인 오버레이 모두 존재해야 함
-        design_variant = _HT / "claude.gstack.auto.design"
-        if design_variant.exists():
-            missing = []
-            for rel in _DESIGN_OVERLAY_FILES:
-                if not (design_variant / rel).exists():
-                    missing.append(rel)
-            for rel in _DESIGN_OVERLAY_DIRS:
-                if not (design_variant / rel).exists():
-                    missing.append(rel)
-            if missing:
+        # MR-5: claude.gstack.auto.design + wiki 변형에 디자인 오버레이 모두 존재해야 함
+        # (wiki 변형은 design 변형의 1:1 복사이므로 디자인 오버레이 보유 정상)
+        for design_variant_name in _VARIANTS_WITH_DESIGN:
+            design_variant = _HT / design_variant_name
+            if design_variant.exists():
+                missing = []
+                for rel in _DESIGN_OVERLAY_FILES:
+                    if not (design_variant / rel).exists():
+                        missing.append(rel)
+                for rel in _DESIGN_OVERLAY_DIRS:
+                    if not (design_variant / rel).exists():
+                        missing.append(rel)
+                if missing:
+                    results.append(_issue(
+                        checker, CONCERN,
+                        design_variant_name,
+                        f"디자인 변형에 일부 오버레이 부재: {missing}",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        design_variant_name,
+                        "디자인 오버레이 모두 존재 OK",
+                    ))
+            else:
                 results.append(_issue(
-                    checker, CONCERN,
-                    "claude.gstack.auto.design",
-                    f"디자인 변형에 일부 오버레이 부재: {missing}",
+                    checker, INFO,
+                    design_variant_name,
+                    f"{design_variant_name} 변형 부재 (F011/F012 미적용 가능)",
+                ))
+
+        # MR-6: ⓐ/ⓑ/ⓑ′/ⓑ″ 4 변형에 wiki 오버레이 파일/디렉토리 없어야 함
+        # (wiki 오버레이는 ⓑ‴ claude.gstack.auto.design.wiki 에만 존재)
+        all_wiki_overlay = _WIKI_OVERLAY_FILES + _WIKI_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_WIKI:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_wiki = []
+            for rel in all_wiki_overlay:
+                if (variant_dir / rel).exists():
+                    found_wiki.append(rel)
+            if found_wiki:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"wiki 오버레이가 {variant} 에 잘못 미러됨 (wiki 변형 전용): {found_wiki}",
                 ))
             else:
                 results.append(_issue(
                     checker, PASS,
-                    "claude.gstack.auto.design",
-                    "디자인 오버레이 모두 존재 OK",
+                    variant,
+                    f"{variant} 변형에 wiki 오버레이 부재 OK",
+                ))
+
+        # MR-6 (계속): wiki 변형에 wiki 오버레이 모두 존재해야 함
+        wiki_variant = _HT / "claude.gstack.auto.design.wiki"
+        if wiki_variant.exists():
+            missing_wiki = []
+            for rel in _WIKI_OVERLAY_FILES:
+                if not (wiki_variant / rel).exists():
+                    missing_wiki.append(rel)
+            for rel in _WIKI_OVERLAY_DIRS:
+                if not (wiki_variant / rel).exists():
+                    missing_wiki.append(rel)
+            if missing_wiki:
+                results.append(_issue(
+                    checker, CONCERN,
+                    "claude.gstack.auto.design.wiki",
+                    f"wiki 변형에 일부 wiki 오버레이 부재: {missing_wiki}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    "claude.gstack.auto.design.wiki",
+                    "wiki 오버레이 모두 존재 OK",
                 ))
         else:
             results.append(_issue(
                 checker, INFO,
-                "claude.gstack.auto.design",
-                "디자인 변형 부재 (F011 미적용 가능)",
+                "claude.gstack.auto.design.wiki",
+                "wiki 변형 부재 (F012 미적용 가능)",
             ))
+
+        # MR-7: 5 변형 (ⓐ/ⓑ/ⓑ′/ⓑ″/ⓒ) 에 외부 의존성 매니페스트 없어야 함
+        # (wiki-setup.sh 는 wiki 변형에만 허용, requirements.txt / package.json 도 불가)
+        for variant in _VARIANTS_NO_EXTERNAL_DEPS:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                continue
+            found_ext = []
+            for rel in _EXTERNAL_DEP_FILES:
+                if (variant_dir / rel).exists():
+                    found_ext.append(rel)
+            if found_ext:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"외부 의존성 매니페스트가 {variant} 에 잘못 포함 (wiki 변형만 허용): {found_ext}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    variant,
+                    f"{variant} 변형에 외부 의존성 매니페스트 부재 OK",
+                ))
+
+        # MR-7 (계속): openai 변형도 wiki-setup.sh 없어야 함 (경로가 다름)
+        openai_dir = _HT / "openai"
+        if openai_dir.exists():
+            openai_setup = openai_dir / "harness" / ".codex" / "bin" / "wiki-setup.sh"
+            openai_setup2 = openai_dir / "harness" / "wiki-setup.sh"
+            if openai_setup.exists() or openai_setup2.exists():
+                results.append(_issue(
+                    checker, BLOCK,
+                    "openai/.codex",
+                    "openai 변형에 wiki-setup.sh 잘못 포함 (wiki 변형만 허용)",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    "openai/.codex",
+                    "openai 변형에 외부 의존성 매니페스트 부재 OK",
+                ))
+
+        # MR-7 (계속): wiki 변형에 wiki-setup.sh 존재해야 함 (graceful degrade 매뉴얼)
+        if wiki_variant.exists():
+            wiki_setup = wiki_variant / "harness" / ".claude" / "bin" / "wiki-setup.sh"
+            if not wiki_setup.exists():
+                results.append(_issue(
+                    checker, CONCERN,
+                    "claude.gstack.auto.design.wiki",
+                    "wiki 변형에 wiki-setup.sh 부재 — graceful degrade 매뉴얼 누락",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    "claude.gstack.auto.design.wiki",
+                    "wiki-setup.sh 존재 OK (외부 의존성 허용 변형)",
+                ))
 
     except Exception as exc:  # noqa: BLE001
         results.append(_issue(checker, INFO, "LINT-MR", f"검사 중 오류 — {exc}"))
@@ -1048,7 +1203,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (5변형)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (6변형)", check_mirror_regression),
 }
 
 
