@@ -5,7 +5,7 @@
 
 **claude.gstack.auto.design.wiki.orch 변형 전용.** single-host (모든 에이전트가 같은 컨텍스트 풀).
 
-> ADR-008 결정 1 (orchestrate 커맨드 형태) + 결정 3 (핸드오프 규약) + 결정 4 (조건부 라우팅)
+> ADR-008 결정 1 (orchestrate 커맨드 형태) + 결정 3 (핸드오프 규약) + 결정 4 (조건부 라우팅) + 결정 5 (single-host 원칙)
 > plan-full 패턴 (Planner→Architect→Reviewer 설계 체인) 과 보완 관계 — 책임 분리.
 
 ---
@@ -59,6 +59,7 @@
    │
    ├─ 디자인 필요? ──▶ [Step 4] designer 에이전트 호출 (research.md 입력)
    │                             산출물: design.md
+   │                             [NOTE] architect ↔ designer 는 의존성 없으면 병렬 spawn 가능
    │
    ▼
 [Step 5] developer 에이전트 호출 (research + adr + design 인라인 주입)
@@ -68,13 +69,14 @@
 [Step 6] reviewer 에이전트 호출
          산출물: review.md → APPROVED / NEEDS REVISION
    │
-   ├─ NEEDS REVISION ─▶ developer 재호출 (최대 2 회)
-   │                     그래도 실패 시 → architect 재호출 (설계 재검토)
+   ├─ NEEDS REVISION ─▶ developer 재호출 (최대 2 회) ─▶ 그래도 실패 시 architect 재호출
+   │                     각 반복을 flow.md 에 기록
    │
    ├─ UI 변경? ───────▶ [Step 7] /project:design-review 호출
    │
    ├─ AC 동작 기술? ──▶ [Step 8] qa 에이전트 (+ qa-browser) 호출
    │                             산출물: qa.md
+   │                             qa FAIL → developer 재호출 (최대 2 회)
    │
    ▼
 [Step 9] 통합 리포트 (final.md) + 사용자 출력
@@ -85,12 +87,154 @@
 
 ---
 
+## 라우팅 판별 규칙 (ADR-008 결정 4)
+
+### 단계별 포함/스킵 기준
+
+| 단계 | 포함 조건 | 스킵 조건 | 키워드 예시 |
+|---|---|---|---|
+| **researcher** | 신규 도메인, 모르는 외부 API/서비스, "어떻게 X 가 작동", 모범 사례 조사, 학술 배경 필요 | 익숙한 영역, 이미 알려진 패턴, 내부 모듈 변경 | "조사", "비교", "best practice", 외부 라이브러리 이름, "왜", "어떻게" |
+| **architect** | 신규 DB 테이블/스키마, 외부 API 연동, 모듈 의존성 변경, 3+ 파일 구조 변경, 보안·인증 | 기존 패턴 복제, 단순 UI/스타일, 단순 버그 | plan-full CLAUDE.md "Architect 호출 기준" 동일 |
+| **designer** | UI 컴포넌트/페이지, 디자인 시스템 토큰 변경, 사용자 대면 화면, 브랜드 스타일 변경 | 순수 백엔드·CLI·로직, API 변경, 리팩토링 | "디자인", "UI", "스타일", "색", "폰트", "레이아웃", 화면 이름 |
+| **developer** | 거의 항상 포함 (코드 변경 발생하는 모든 요청) | 순수 조사·문서 작업, typo 수준은 supervisor 직접 처리 | (기본 포함) |
+| **reviewer** | 코드 변경 발생 (거의 항상) | 문서만 변경, 순수 조사 결과만 | (기본 포함) |
+| **qa + qa-browser** | acceptance_criteria 에 동작 기술 (로그인, 폼 제출, 라우팅, 버튼 클릭) | 단위 테스트로 충분한 경우, 코드 변경 없는 조사 | F008 호출 기준 일관 |
+| **design-review** | UI 변경 + reviewer 통과 후 | 순수 백엔드·로직 변경 | F007 호출 기준 일관 |
+
+**보수적 기본값**: 의심스러우면 단계 추가 — 누락 비용이 추가 비용보다 큼.
+(plan-full 의 "설계 필요 시 포함" 정신 일관)
+
+### 라우팅 매트릭스 (요청 카테고리별)
+
+| 요청 카테고리 | researcher | architect | designer | developer | reviewer | qa | design-review |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 신규 UI 컴포넌트 (디자인 시스템 있음) | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 신규 UI 컴포넌트 (디자인 시스템 미정) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 신규 외부 API 연동 (모르는 서비스) | ✅ | ✅ | ❌ | ✅ | ✅ | (조건부) | ❌ |
+| 신규 DB 스키마 + 기능 | (조건부) | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| 단순 버그 수정 | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| 리팩토링 (구조 변경 + 모듈 분리) | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| typo / 문구 변경 | ❌ | ❌ | ❌ | (조건부 — supervisor 직접) | ❌ | ❌ | ❌ |
+
+조건부 = 요청 내용에 따라 supervisor 가 판단. 풀 파이프라인은 "신규 UI + 외부 API (디자인 시스템 미정)" 같은 복합 요청에서만 발생.
+
+---
+
+## 순차/병렬 규칙
+
+### 순차 실행 (의존성 존재)
+
+```
+researcher → architect   : architect 가 research 결과를 설계에 반영
+researcher → designer    : designer 가 research 를 브랜드 결정에 반영
+developer → reviewer     : reviewer 가 작성된 코드를 검토
+reviewer → design-review : design-review 는 동작하는 코드 + reviewer 통과를 전제
+design-review → qa-browser : qa-browser 는 정적 감사 통과 후 동적 검증
+```
+
+### 병렬 spawn 가능 (의존성 없음)
+
+```
+architect ↔ designer     : 아키텍처 설계와 디자인 결정은 서로 독립 축
+                           → Task 도구로 동시 spawn 가능
+```
+
+**기본은 순차** — single-host 컨텍스트 일관성 우선.
+병렬은 **명백히 독립적일 때만** (architect ↔ designer 가 유일한 현재 후보).
+
+### 전체 순서 요약
+
+```
+[리서치] → [아키텍처/디자인: 병렬 가능] → [개발] → [리뷰] → [디자인감사] → [QA]
+```
+
+---
+
+## 실패·재작업 루프
+
+| 단계 실패 | 대응 | 최대 횟수 | 초과 시 |
+|---|---|---|---|
+| reviewer NEEDS REVISION | developer 재호출 (review.md 지적 사항 인라인 주입) | 2 회 | architect 재호출 (설계 재검토) |
+| qa FAIL | developer 재호출 (qa.md 실패 항목 인라인 주입) | 2 회 | architect 재호출 |
+| design-review BLOCK | designer 재호출 (BLOCK 항목 인라인 주입) | 2 회 | 사용자 ESCALATE |
+| 어떤 단계든 `[ESCALATION]` 태그 | 자동 진행 중단 + 사용자에게 보고 | — | final.md 에 `[ESCALATED]` 기록 |
+
+**supervisor 가 flow.md 에 각 반복을 기록** — 재작업 횟수와 지적 사항을 추적.
+plan-full 의 "Reviewer NEEDS REVISION 2 회 → Planner 재분해" 정신 일관.
+
+---
+
+## plan-full ↔ orchestrate 관계
+
+| 도구 | 범위 | 선행·후행 관계 |
+|---|---|---|
+| `/project:plan-full` | 설계 체인 (요구사항 → Feature + ADR) | orchestrate 의 선행 도구 (선택적) |
+| `/project:orchestrate` | 실행 라우팅 (Feature → 리서치+코딩+검토) | plan-full 결과를 입력으로 받아 실행 |
+
+### 통합 흐름 (복합 신규 기능)
+
+```
+사용자: "결제 시스템 추가" (복합 요청)
+  ↓
+[선택] /project:plan-full 결제 시스템 추가
+  → feature_list F0XX 추가 + ADR-NNN 작성
+  ↓
+/project:orchestrate --feature=F0XX
+  → supervisor 가 F0XX acceptance_criteria 분석
+  → researcher (결제 API 비교) + designer (결제 페이지 디자인) 병렬 spawn 가능
+  → architect (결제 아키텍처, plan-full ADR 보완)
+  → developer 구현
+  → reviewer + design-review + qa
+  → final.md 통합 리포트
+```
+
+orchestrate 가 설계 필요 판단 시 **내부적으로 architect 호출 포함 가능**
+(plan-full 을 선행하지 않은 경우 자동 보완).
+
+---
+
+## single-host 원칙 (ADR-008 결정 5 — d-1)
+
+모든 sub-agent 는 **같은 Claude Code 컨텍스트 풀**에서 spawn (Task 도구).
+핸드오프는 컨텍스트 **전달**이지 **분리**가 아님 — 핸드오프 디렉토리는 감사 추적 + 인라인 주입은 실제 전달.
+
+```
+같은 컨텍스트 풀
+┌──────────────────────────────────────────────┐
+│  supervisor (메인 컨텍스트)                    │
+│   │                                           │
+│   ├─ Task: researcher  →  research.md          │
+│   ├─ Task: designer    →  design.md            │
+│   ├─ Task: developer   →  impl.md              │
+│   └─ Task: reviewer    →  review.md            │
+│                                               │
+│  모든 sub-agent 가 같은 토크나이저·의미론 공유   │
+└──────────────────────────────────────────────┘
+```
+
+### d-1 / d-2 / d-3 경계 (단일 소스)
+
+| 단계 | 의미 | 전제 | 본 커맨드 범위 |
+|---|---|---|:---:|
+| **d-1 (본 커맨드)** | single-host supervisor + sub-agent 오케스트레이션 (Claude Code Task 도구) | GPU 무관, 즉시 가능 | **✅** |
+| d-2 | 로컬 LLM 통합 (researcher 일부를 로컬 small model 에 위임) | GPU 필요, 별도 ADR-009 | ❌ |
+| d-3 | 이종 호스트 분산 (Claude Code + Codex + OpenClaw 간 작업 라우팅) | 컨텍스트 전달 손실 감수, 별도 ADR-010 | ❌ |
+
+**재귀 패턴 금지**: sub-agent 가 또 다른 sub-agent 를 spawn 하는 것 금지.
+supervisor (메인 컨텍스트) 가 모든 단계를 직접 spawn 해 컨텍스트 깊이를 1 단계로 유지.
+
+이종 호스트/모델 분산 (각 에이전트를 다른 LLM 으로) 은 d-3 후속 — ADR-008 결정 5 경계표.
+d-1 은 GPU 무관, 지금 동작. d-2(로컬 LLM)/d-3(분산) 은 후속 phase.
+
+---
+
 ## 핸드오프 디렉토리 규약 (ADR-008 결정 3)
 
 ```
 .claude/state/orch/<task-id>/
 ├── request.md      # 원본 요청 + 라우팅 계획 (supervisor 작성)
 ├── plan.md         # 라우팅 판정 결과 (어떤 에이전트 어떤 순서로)
+├── flow.md         # 재작업 루프 기록 (각 반복의 지적 사항 + 결과)
 ├── research.md     # researcher 산출물 (없으면 파일 없음)
 ├── adr.md          # architect 산출물 (없으면 파일 없음)
 ├── design.md       # designer 산출물 (없으면 파일 없음)
@@ -106,24 +250,6 @@
 
 **gitignore 정책**: `.claude/state/orch/*` 는 git 제외, `.gitkeep` 만 보존.
 qa-browser 의 `.claude/state/qa-browser/` 패턴 100% 일관 (ADR-008 결정 3).
-
----
-
-## 라우팅 판별 규칙 (ADR-008 결정 4 — 세션 2에서 상세화)
-
-| 조건 | 필요 단계 | 키워드 예시 |
-|---|---|---|
-| 신규 도메인 / 모르는 외부 서비스 / 모범 사례 조사 | **researcher** | "조사", "비교", "best practice", 외부 라이브러리 이름, "왜", "어떻게 X가 작동" |
-| UI 컴포넌트 / 화면 / 디자인 시스템 / 토큰 변경 | **designer** | "디자인", "UI", "스타일", "색", "폰트", "레이아웃", 화면 이름 |
-| 신규 DB / 외부 API 연동 / 모듈 의존성 변경 / 3+ 파일 구조 / 보안·인증 | **architect** | plan-full CLAUDE.md "Architect 호출 기준" 일치 |
-| 코드 변경 (거의 모든 요청) | **developer** | 기본 포함 |
-| 코드 변경 후 (거의 모든 요청) | **reviewer** | 기본 포함 |
-| acceptance_criteria 에 동작 기술 (로그인, 폼 제출, 라우팅) | **qa + qa-browser** | F008 호출 기준 일관 |
-| UI 변경 + reviewer 통과 후 | **design-review 커맨드** | F007 호출 기준 일관 |
-
-**의심스러우면 단계 추가** — 누락 비용이 추가 비용보다 큼 (gatekeeper "50/50 이면 ESCALATE" 정신 일관).
-
-라우팅 매트릭스 상세 + 순차/병렬 표 + 실패·재작업 루프 + 시나리오 예시 → **세션 2**에서 orchestrate.md 본문 완성.
 
 ---
 
@@ -159,25 +285,20 @@ FEATURE: <F0XX 또는 자연어 설명>
 RESEARCH_NOTES: <research.md 발췌>
 DESIGN_TOKENS: <design.md 의 tokens 시안>
 ADR: <adr.md 의 결정·구현 가이드 발췌>
+
+---
+
+# reviewer 호출 예시 (review.md 재작업 루프)
+Use the developer agent to revise based on reviewer feedback:
+
+FEATURE: <F0XX>
+REVIEWER_FEEDBACK: |
+  <review.md 의 NEEDS REVISION 항목 전체 발췌>
+PREVIOUS_IMPL_SUMMARY: <impl.md 요약>
 ```
 
 → supervisor 가 각 단계 산출물의 **관련 섹션만 발췌**해 다음 에이전트에 주입.
 어떤 부분이 핵심인지 supervisor 가 판단 — sub-agent 의 불필요한 탐색 제거.
-
----
-
-## single-host 원칙 (ADR-008 결정 5)
-
-모든 sub-agent 는 **같은 Claude Code 컨텍스트 풀**에서 spawn (Task 도구).
-이종 호스트/모델 분산은 d-3 후속 phase (ADR-010 가칭), 본 커맨드 범위 외.
-
-| 단계 | 범위 | 전제 |
-|---|---|---|
-| **d-1 (본 커맨드)** | single-host supervisor + sub-agent 오케스트레이션 | GPU 무관, 즉시 가능 |
-| d-2 | 로컬 LLM 통합 (researcher 일부 위임) | GPU 필요 |
-| d-3 | 이종 호스트 분산 (Claude Code + Codex + OpenClaw) | 컨텍스트 전달 손실 감수 |
-
-sub-agent 가 또 다른 sub-agent 를 spawn 하는 **재귀 패턴 금지** — supervisor (메인 컨텍스트) 가 모든 단계를 직접 spawn.
 
 ---
 
@@ -212,13 +333,15 @@ cat > .claude/state/orch/$TASK_ID/request.md << 'EOF'
 
 ## 라우팅 판정
 - researcher: 필요 (신규 도메인)
+- architect: 필요 (외부 API 연동)
 - designer: 필요 (UI 변경)
 - developer: 필요
 - reviewer: 필요
 - qa: 필요 (acceptance_criteria 에 동작 기술)
+- design-review: 필요 (UI 변경 + reviewer 통과 후)
 EOF
 
-# 3. researcher 호출 (인라인 주입 포함)
+# 3. researcher 호출
 Use the researcher agent to investigate: ...
 
 # 4. research.md 저장 (researcher 최종 메시지 → 파일)
@@ -226,15 +349,40 @@ cat > .claude/state/orch/$TASK_ID/research.md << 'EOF'
 <researcher 최종 메시지 전문>
 EOF
 
-# 5. designer 호출 (research.md 발췌 주입)
-Use the designer agent to compare 4 brands for:
-RESEARCH_NOTES: <research.md 요약 발췌>
-...
+# 5. architect + designer 병렬 spawn (독립 축)
+Use the architect agent to design: ... (RESEARCH_NOTES 인라인 주입)
+Use the designer agent to compare 4 brands for: ... (RESEARCH_NOTES 인라인 주입)
+→ 각 산출물 저장: adr.md, design.md
 
-# (이하 각 단계 반복 — 세션 2에서 전체 흐름 완성)
+# 6. developer 호출 (모든 이전 산출물 인라인 주입)
+Use the developer agent to implement:
+FEATURE: <F0XX>
+RESEARCH_NOTES: <research.md 발췌>
+ADR: <adr.md 발췌>
+DESIGN_TOKENS: <design.md 발췌>
+
+# 7. reviewer 호출
+Use the reviewer agent to review: ... → review.md
+
+# 8. NEEDS REVISION 시 재작업 루프 (최대 2 회)
+# flow.md 에 반복 기록
+
+# 9. design-review (UI 변경 시)
+/project:design-review --scope=downstream
+
+# 10. qa 호출
+Use the qa agent to verify: ... → qa.md
+
+# 11. final.md 작성 (supervisor 통합 리포트)
 ```
 
-세션 2 에서: 라우팅 매트릭스 + 순차/병렬 판별 + 실패·재작업 루프 + 시나리오 3개 완성.
+---
+
+## 시나리오 예시 참조
+
+- `docs/orch-examples/01-ui-external-api.md` — UI + 외부 API (풀 파이프라인)
+- `docs/orch-examples/02-simple-bug.md` — 단순 버그 (최소 라우팅)
+- `docs/orch-examples/03-refactoring.md` — 리팩토링 (리뷰 집중형)
 
 ---
 
