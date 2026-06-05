@@ -897,6 +897,7 @@ _ORCH_OVERLAY_FILES = [
 # orch 상태 디렉토리 (MR-8: .gitkeep 존재 여부로 확인)
 _ORCH_OVERLAY_DIRS = [
     "harness/.claude/state/orch",
+    "harness/docs/orch-examples",   # ADR-008 결정 7 + CLAUDE.md orch 오버레이 4항목
 ]
 
 # orch 오버레이가 없어야 하는 변형 (MR-8: ⓐ/ⓑ/ⓑ′/ⓑ″/ⓑ‴ 5 변형)

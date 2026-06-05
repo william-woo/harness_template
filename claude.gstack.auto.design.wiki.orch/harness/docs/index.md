@@ -4,41 +4,40 @@
 # 프로젝트 산출물 인덱스
 
 자동 생성됨. 손으로 수정하지 말 것 — `python3 .claude/bin/lint.py regenerate-index` 로 재생성.
-마지막 갱신: 2026-05-21T07:09:30+09:00
+마지막 갱신: 2026-06-06T04:12:43+09:00
 
 ## Features
 
 | ID | 상태 | 우선순위 | 제목 |
 |---|---|---|---|
-| F001 | done | critical | Phase 1 — Safety Guards + Learn + Context Save/Restore |
-| F002 | done | high | Phase 2 — Autoplan 커맨드 (/project:plan-full) |
-| F003 | done | high | Phase 2 — Review Readiness Dashboard (/project:ship) |
-| F004 | done | medium | Phase 2 — Retro + Analytics (/project:retro) |
-| F005 | done | medium | Phase 3 — Brain Local (SQLite 기반 영구 지식) |
-| F006 | done | low | Phase 3 — 멀티 호스트 아키텍처 준비 |
-| F007 | done | low | Phase 4 — Design Review 강화 (단계 1) |
-| F008 | done | low | Phase 4 — QA 브라우저 자동화 스킬 |
-| F009 | done | medium | Phase 5 — LLM Wiki 패턴 (lint + index) |
+| F001 | todo | critical | 프로젝트 환경 설정 |
+| F002 | todo | critical | [주요 기능 1] |
+| F003 | todo | high | [주요 기능 2] |
 
 ## ADR (Architecture Decision Records)
 
 | 번호 | 상태 | 제목 | 관련 feature |
 |---|---|---|---|
-| ADR-001 | accepted | 멀티 호스트 아키텍처 준비 (claude-code / openclaw / codex) | F005, F006 |
-| ADR-002 | accepted | Design Review 강화 (단계 1) — 메타-하네스 제공 모델 결정 | F003, F005, F006, F007, F008, F009 |
-| ADR-003 | accepted | QA 브라우저 자동화 (Playwright) — 옵셔널 의존성 + 메타-하네스 듀얼 모드 | F003, F004, F005, F006, F007, F008, F009 |
-| ADR-004 | accepted | LLM Wiki 패턴 (lint + index) — 정합성 헬스체크 + 산출물 카탈로그 | F001, F003, F005, F006, F007, F008, F009 |
+| ADR-001 | accepted | 멀티 호스트 아키텍처 준비 (claude-code / openclaw / codex) | — |
+| ADR-002 | accepted | Design Review 강화 (단계 1) — 메타-하네스 제공 모델 결정 | F003 |
+| ADR-003 | accepted | QA 브라우저 자동화 (Playwright) — 옵셔널 의존성 + 메타-하네스 듀얼 모드 | F003 |
+| ADR-004 | accepted | LLM Wiki 패턴 (lint + index) — 정합성 헬스체크 + 산출물 카탈로그 | F001, F003 |
+| ADR-005 | accepted | 다운스트림 백업 동기화 (`/project:backup-sync`) | F001 |
+| ADR-006 | accepted | Design-Pick 자동화 + `claude.gstack.auto.design` 변형 신설 | F001 |
+| ADR-007 | proposed | LLM Wiki 지식 그래프 + `claude.gstack.auto.design.wiki` 변형 + 외부 의존성 정책 예외 | F001, F002 |
+| ADR-008 | accepted | 이종 에이전트 오케스트레이션 (supervisor pattern) + `claude.gstack.auto.design.wiki.orch` 변형 + d-1/d-2/d-3 경계 | F001, F002 |
 
 ## Design Documents
 
 | 파일 | 관련 feature |
 |---|---|
-| F007-design-review-checklist.md | F007 |
-| F008-qa-browser-templates.md | F008 |
+| F007-design-review-checklist.md | — |
+| F008-qa-browser-templates.md | — |
+| F011-tokens-schema.md | — |
 
 ## Agents
 
-architect / developer / planner / qa / reviewer (5종)
+architect / designer / developer / gatekeeper / planner / qa / researcher / reviewer (8종)
 각각 [.claude/agents/](.claude/agents/)에 정의.
 
 ## Skills
@@ -53,7 +52,7 @@ architect / developer / planner / qa / reviewer (5종)
 
 ## Commands
 
-21종의 슬래시 커맨드 — [.claude/commands/](.claude/commands/)
+25종의 슬래시 커맨드 — [.claude/commands/](.claude/commands/)
 
 | 카테고리 | 커맨드 |
 |---|---|
@@ -64,14 +63,8 @@ architect / developer / planner / qa / reviewer (5종)
 | 영구지식 | brain-sync, brain-search, brain-stats, brain-list |
 | 호스트 | host |
 | 감사 | design-review, qa-browser |
+| 기타 | backup-sync, design-pick, orchestrate, wiki |
 
 ## Learnings 통계
 
-총 43건 — pattern: 18 / pitfall: 7 / architecture: 10 / preference: 6 / decision: 2
-
-최근 5건:
-- [pattern] subprocess-external-tool-detection: 외부 도구(node/npx) 감지는 subprocess.run() + try/except(FileNotFoundError, TimeoutE... (F008)
-- [architecture] atomic-loop-simulate-before-playwright: Playwright 미설치 환경에서도 원자적 루프 인터페이스를 simulate_atomic_loop()로 dry-run 가능하다. 실제 실... (F008)
-- [architecture] design-review-cmd-plus-skill-not-agent: design-review는 Reviewer를 보완하는 별도 영역(IA/A11Y/일관성) 검사 도구다. 에이전트 신설이 아닌 커맨드+스킬 조... (F007)
-- [pattern] atomic-fix-loop-1-block-1-call: 원자적 수정 루프 — BLOCK N건 = Developer N회 호출 (직렬). 한 번에 한 수정으로 변경 범위를 명확히 하고 회귀 원인 ... (F007)
-- [pitfall] design-review-self-vs-downstream-mode-confusion: design-review 셀프 모드와 다운스트림 모드는 체크리스트 항목이 다르다 (A11Y 전체 N/A, IA/CON 항목도 부분 대체).... (F007)
+learnings.jsonl 없음 또는 비어있음.

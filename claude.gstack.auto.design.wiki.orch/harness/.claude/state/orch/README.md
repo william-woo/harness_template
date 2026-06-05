@@ -16,6 +16,7 @@
 └── <task-id>/                                  # 런타임 산출물 (gitignore)
     ├── request.md    # 원본 요청 + 라우팅 판정 계획
     ├── plan.md       # 단계별 라우팅 계획 (어떤 에이전트 어떤 순서로)
+    ├── flow.md       # 재작업 루프 기록 (각 반복의 지적 사항 + 결과)
     ├── research.md   # researcher 에이전트 산출물 (없으면 파일 없음)
     ├── adr.md        # architect 산출물 (없으면 파일 없음)
     ├── design.md     # designer 에이전트 산출물 (없으면 파일 없음)
