@@ -70,6 +70,7 @@ project-root/
 │       ├── claude.gstack.auto/              #   ⓑ′ 자율 모드 변형 (메인 1:1)
 │       ├── claude.gstack.auto.design/       #   ⓑ″ 자율+디자인 변형 (F011 신설)
 │       ├── claude.gstack.auto.design.wiki/  #   ⓑ‴ 자율+디자인+wiki 변형 (F012 신설 — 외부 의존성 허용)
+│       ├── claude.gstack.auto.design.wiki.orch/  #   ⓑ⁗ 자율+디자인+wiki+orch 변형 (F013 신설 — 이종 에이전트 오케스트레이션 d-1)
 │       └── openai/           #   ⓒ Codex 호스트 변형 (.codex/ 구조)
 ├── tests/                    # 테스트
 │   └── e2e/                  # E2E 테스트 스크립트 (Playwright — F008)
@@ -329,6 +330,7 @@ Phase 1·2 업그레이드로 추가된 프로젝트 로컬 상태:
 | **Developer** | 실제 구현 | 코드 작성, 단위 테스트, 버그 수정 |
 | **Reviewer** | 구현 완료 후 | 코드 품질, 보안, 성능 리뷰 |
 | **QA** | 리뷰 통과 후 | E2E 테스트, 인수 검증, 기능 완료 마킹 |
+| **researcher** | orch 변형 전용 — orchestrate 커맨드가 spawn | 외부 자료·내부 brain·산출물에서 정보 수집 → 합성 → 리서치 노트 (ADR-008 결정 2) |
 
 **에이전트 호출 방법:**
 ```
@@ -505,16 +507,33 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (6 변형 매트릭스)
+## 🔀 orchestrate 호출 기준
 
-| 변형 | 미러 정책 | 자율 오버레이 | 디자인 오버레이 | wiki 오버레이 | 외부 의존성 |
-|---|---|:-:|:-:|:-:|:-:|
-| ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | 0 |
-| ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | 0 |
-| ⓑ′ `claude.gstack.auto/` (자율) | 메인과 1:1 | ✅ | ❌ | ❌ | 0 |
-| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | 0 |
-| **ⓑ‴ `claude.gstack.auto.design.wiki/`** (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | **허용** (Obsidian/qmd/Marp) |
-| ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | 0 |
+다음 중 하나에 해당하면 `/project:orchestrate` (orch 변형 전용):
+
+- 복합 요청 — 리서치 + 디자인 + 코딩 등 여러 역할이 함께 필요한 요청
+- 신규 기능 end-to-end — 조사부터 QA까지 한 흐름으로 실행하고 싶을 때
+- 신규 외부 API / 모르는 서비스 도입 (researcher 가 먼저 조사 후 developer 에 전달)
+
+해당 없으면 (단순 버그 수정, 단일 역할) 해당 에이전트 직접 호출.
+`/project:plan-full` (설계 체인) 과 보완적 — plan-full 이 Feature+ADR 을 만들면, orchestrate 가 실행 라우팅.
+
+**orch 변형 전용**: `claude.gstack.auto.design.wiki.orch` 변형에서만 동작.
+다른 변형에서 호출 시 orchestrate.md / researcher.md 가 없어 명령 미인식.
+
+---
+
+## 🪞 메인 ↔ 변형 미러 정책 (7 변형 매트릭스)
+
+| 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
+|---|---|:-:|:-:|:-:|:-:|:-:|
+| ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+| ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | ❌ | 0 |
+| ⓑ′ `claude.gstack.auto/` (자율) | 메인과 1:1 | ✅ | ❌ | ❌ | ❌ | 0 |
+| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
+| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
+| **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
+| ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 **자율 오버레이 4 파일** (claude.gstack 에서 제외):
 - `.claude/agents/gatekeeper.md`
@@ -522,19 +541,25 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/settings.json` 의 `Bash(*)` 권한
 - `CLAUDE.md` 의 "Autonomous Mode" 섹션
 
-**디자인 오버레이** (claude.gstack.auto.design + wiki 변형에 존재):
+**디자인 오버레이** (claude.gstack.auto.design + wiki + orch 변형에 존재):
 - `.claude/agents/designer.md`
 - `docs/design-references/` 4 파일
 - `.claude/bin/design_pick.py`
 - `.claude/commands/design-pick.md`
 
-**wiki 오버레이** (claude.gstack.auto.design.wiki 에만 — F012 신설):
+**wiki 오버레이** (claude.gstack.auto.design.wiki + orch 변형에 존재 — F012 신설):
 - `.claude/bin/wiki.py`
 - `.claude/bin/wiki-setup.sh`
 - `.claude/commands/wiki.md`
 - `wiki/` vault 디렉토리
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~7 / F011 신설·F012 확장).
+**orch 오버레이** (claude.gstack.auto.design.wiki.orch 에만 — F013 신설):
+- `.claude/agents/researcher.md`
+- `.claude/commands/orchestrate.md`
+- `.claude/state/orch/` (핸드오프 디렉토리)
+- `docs/orch-examples/` (흐름 예시 시나리오)
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~8 / F011 신설·F012 확장·F013 MR-8 추가).
 
 ---
 

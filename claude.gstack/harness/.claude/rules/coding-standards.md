@@ -11,13 +11,15 @@
 | `claude.gstack.auto/` | 0 | — | LINT-MR-7 |
 | `claude.gstack.auto.design/` | 0 | — | LINT-MR-7 |
 | **`claude.gstack.auto.design.wiki/`** | **허용** | Obsidian / qmd / Marp | LINT-MR-7 (반대 방향 — 허용 확인) |
+| **`claude.gstack.auto.design.wiki.orch/`** | **허용** (wiki 상속) | Obsidian / qmd / Marp (wiki 복사) | LINT-MR-7/MR-8 (orch 자체는 stdlib only) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
-- wiki 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (선택적 — graceful degrade)
+- wiki/orch 변형을 가져가는 다운스트림은 외부 도구 설치를 감수한다 (선택적 — graceful degrade)
 - 허용 도구: Obsidian (graph view), qmd (BM25/vector 검색), Marp (슬라이드)
 - 핵심 wiki 기능 (.md + [[wikilink]] 노드 관리) 은 stdlib only — 외부 도구는 *향상*만
-- 다른 5 변형은 이 예외를 절대 상속하지 않음 (LINT-MR-7 이 강제 — 세션 3)
+- orch 변형은 wiki 의 외부 의존성 정책 상속 + orch 자체 (researcher/orchestrate) 는 stdlib only
+- 다른 5 변형은 이 예외를 절대 상속하지 않음 (LINT-MR-7 이 강제)
 
 ---
 

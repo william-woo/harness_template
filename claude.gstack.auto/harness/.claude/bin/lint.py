@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (6변형 — F011 신설, F012 확장: MR-6/MR-7)
+  LINT-MR     변형 오버레이 정합 (7변형 — F011 신설, F012 확장: MR-6/MR-7, F013 추가: MR-8)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -857,13 +857,17 @@ _DESIGN_OVERLAY_DIRS = [
     "harness/docs/design-references",
 ]
 
-# 디자인 오버레이가 없어야 하는 변형 (MR-4: wiki 변형은 design의 1:1 복사이므로 제외)
+# 디자인 오버레이가 없어야 하는 변형 (MR-4: wiki/orch 변형은 design의 1:1 복사이므로 제외)
 _VARIANTS_NO_DESIGN = ["claude", "claude.gstack", "claude.gstack.auto"]
 
-# 디자인 오버레이를 보유해야 하는 변형 (MR-5: design + wiki 둘 다)
-_VARIANTS_WITH_DESIGN = ["claude.gstack.auto.design", "claude.gstack.auto.design.wiki"]
+# 디자인 오버레이를 보유해야 하는 변형 (MR-5: design + wiki + orch 셋 다)
+_VARIANTS_WITH_DESIGN = [
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",  # F013: orch 변형도 wiki 복사라 디자인 보유
+]
 
-# wiki 오버레이 파일 (ⓑ‴ wiki 변형에만 존재해야 함 — MR-6)
+# wiki 오버레이 파일 (ⓑ‴ wiki 변형 + ⓑ⁗ orch 변형에만 존재해야 함 — MR-6)
 _WIKI_OVERLAY_FILES = [
     "harness/.claude/bin/wiki.py",
     "harness/.claude/commands/wiki.md",
@@ -875,8 +879,37 @@ _WIKI_OVERLAY_DIRS = [
     "harness/wiki",
 ]
 
-# wiki 오버레이가 없어야 하는 변형 (MR-6)
+# wiki 오버레이가 없어야 하는 변형 (MR-6: ⓐ/ⓑ/ⓑ′/ⓑ″ 4 변형 — orch 변형은 wiki 복사라 제외)
 _VARIANTS_NO_WIKI = ["claude", "claude.gstack", "claude.gstack.auto", "claude.gstack.auto.design"]
+
+# wiki 오버레이를 보유해야 하는 변형 (MR-6 확장: wiki + orch 둘 다)
+_VARIANTS_WITH_WIKI = [
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",  # F013: orch 변형도 wiki 오버레이 보유 (wiki 상속)
+]
+
+# orch 오버레이 파일 (ⓑ⁗ orch 변형에만 존재해야 함 — MR-8)
+_ORCH_OVERLAY_FILES = [
+    "harness/.claude/agents/researcher.md",
+    "harness/.claude/commands/orchestrate.md",
+]
+
+# orch 상태 디렉토리 (MR-8: .gitkeep 존재 여부로 확인)
+_ORCH_OVERLAY_DIRS = [
+    "harness/.claude/state/orch",
+]
+
+# orch 오버레이가 없어야 하는 변형 (MR-8: ⓐ/ⓑ/ⓑ′/ⓑ″/ⓑ‴ 5 변형)
+_VARIANTS_NO_ORCH = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+]
+
+# orch 오버레이를 보유해야 하는 변형 (MR-8: orch 변형만)
+_VARIANTS_WITH_ORCH = ["claude.gstack.auto.design.wiki.orch"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -897,19 +930,21 @@ _OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 6 변형 미러 정합 점검 (F011 신설, F012 확장).
+    """LINT-MR: 7 변형 미러 정합 점검 (F011 신설, F012 확장, F013 MR-8 추가).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
     F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
+    F013: MR-5/_VARIANTS_WITH_DESIGN 갱신 + MR-6/_VARIANTS_WITH_WIKI 신설 + MR-8 (orch 오버레이 격리) 추가.
 
     검사 항목:
     - MR-1: claude.gstack 에 자율 오버레이 파일 부재
     - MR-2: claude.gstack/settings.json 에 Bash(*) 미사용
     - MR-3: claude.gstack/CLAUDE.md 에 Autonomous Mode 섹션 부재
     - MR-4: claude.gstack.auto.design 외 변형 (ⓐ/ⓑ/ⓑ′) 에 디자인 오버레이 부재
-    - MR-5: claude.gstack.auto.design + claude.gstack.auto.design.wiki 에 디자인 오버레이 존재
-    - MR-6: ⓐ/ⓑ/ⓑ′/ⓑ″ 4 변형에 wiki 오버레이 부재 (wiki 변형만 허용)
-    - MR-7: 5 변형 (ⓐ/ⓑ/ⓑ′/ⓑ″/ⓒ) 에 외부 의존성 매니페스트 부재 (wiki 변형만 wiki-setup.sh 허용)
+    - MR-5: claude.gstack.auto.design + wiki + orch 변형에 디자인 오버레이 존재
+    - MR-6: ⓐ/ⓑ/ⓑ′/ⓑ″ 4 변형에 wiki 오버레이 부재 + wiki/orch 변형에 wiki 오버레이 존재
+    - MR-7: 5 변형 (ⓐ/ⓑ/ⓑ′/ⓑ″/ⓒ) 에 외부 의존성 매니페스트 부재 (wiki/orch 변형만 wiki-setup.sh 허용)
+    - MR-8: ⓐ/ⓑ/ⓑ′/ⓑ″/ⓑ‴ 5 변형에 orch 오버레이 부재 + orch 변형에 orch 오버레이 존재
 
     Returns:
         list[dict]: 검사 결과 목록 (각 dict는 id/label/target/message 키 보유)
@@ -1100,34 +1135,36 @@ def check_mirror_regression() -> list:
                     f"{variant} 변형에 wiki 오버레이 부재 OK",
                 ))
 
-        # MR-6 (계속): wiki 변형에 wiki 오버레이 모두 존재해야 함
-        wiki_variant = _HT / "claude.gstack.auto.design.wiki"
-        if wiki_variant.exists():
-            missing_wiki = []
-            for rel in _WIKI_OVERLAY_FILES:
-                if not (wiki_variant / rel).exists():
-                    missing_wiki.append(rel)
-            for rel in _WIKI_OVERLAY_DIRS:
-                if not (wiki_variant / rel).exists():
-                    missing_wiki.append(rel)
-            if missing_wiki:
-                results.append(_issue(
-                    checker, CONCERN,
-                    "claude.gstack.auto.design.wiki",
-                    f"wiki 변형에 일부 wiki 오버레이 부재: {missing_wiki}",
-                ))
+        # MR-6 (계속): wiki/orch 변형에 wiki 오버레이 모두 존재해야 함
+        # F013: _VARIANTS_WITH_WIKI = [wiki, orch] — orch 변형도 wiki 상속
+        for wiki_variant_name in _VARIANTS_WITH_WIKI:
+            wiki_variant = _HT / wiki_variant_name
+            if wiki_variant.exists():
+                missing_wiki = []
+                for rel in _WIKI_OVERLAY_FILES:
+                    if not (wiki_variant / rel).exists():
+                        missing_wiki.append(rel)
+                for rel in _WIKI_OVERLAY_DIRS:
+                    if not (wiki_variant / rel).exists():
+                        missing_wiki.append(rel)
+                if missing_wiki:
+                    results.append(_issue(
+                        checker, CONCERN,
+                        wiki_variant_name,
+                        f"{wiki_variant_name} 변형에 일부 wiki 오버레이 부재: {missing_wiki}",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        wiki_variant_name,
+                        f"{wiki_variant_name} wiki 오버레이 모두 존재 OK",
+                    ))
             else:
                 results.append(_issue(
-                    checker, PASS,
-                    "claude.gstack.auto.design.wiki",
-                    "wiki 오버레이 모두 존재 OK",
+                    checker, INFO,
+                    wiki_variant_name,
+                    f"{wiki_variant_name} 변형 부재 (F012/F013 미적용 가능)",
                 ))
-        else:
-            results.append(_issue(
-                checker, INFO,
-                "claude.gstack.auto.design.wiki",
-                "wiki 변형 부재 (F012 미적용 가능)",
-            ))
 
         # MR-7: 5 변형 (ⓐ/ⓑ/ⓑ′/ⓑ″/ⓒ) 에 외부 의존성 매니페스트 없어야 함
         # (wiki-setup.sh 는 wiki 변형에만 허용, requirements.txt / package.json 도 불가)
@@ -1170,20 +1207,82 @@ def check_mirror_regression() -> list:
                     "openai 변형에 외부 의존성 매니페스트 부재 OK",
                 ))
 
-        # MR-7 (계속): wiki 변형에 wiki-setup.sh 존재해야 함 (graceful degrade 매뉴얼)
-        if wiki_variant.exists():
-            wiki_setup = wiki_variant / "harness" / ".claude" / "bin" / "wiki-setup.sh"
-            if not wiki_setup.exists():
+        # MR-7 (계속): wiki/orch 변형에 wiki-setup.sh 존재해야 함 (graceful degrade 매뉴얼)
+        # F013: orch 변형도 wiki 복사라 wiki-setup.sh 보유 (외부 의존성 상속)
+        for wiki_variant_name in _VARIANTS_WITH_WIKI:
+            wiki_variant = _HT / wiki_variant_name
+            if wiki_variant.exists():
+                wiki_setup = wiki_variant / "harness" / ".claude" / "bin" / "wiki-setup.sh"
+                if not wiki_setup.exists():
+                    results.append(_issue(
+                        checker, CONCERN,
+                        wiki_variant_name,
+                        f"{wiki_variant_name} 변형에 wiki-setup.sh 부재 — graceful degrade 매뉴얼 누락",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        wiki_variant_name,
+                        f"{wiki_variant_name} wiki-setup.sh 존재 OK (외부 의존성 허용 변형)",
+                    ))
+
+        # MR-8: ⓐ/ⓑ/ⓑ′/ⓑ″/ⓑ‴ 5 변형에 orch 오버레이 없어야 함
+        # (orch 오버레이는 ⓑ⁗ claude.gstack.auto.design.wiki.orch 에만 존재 — ADR-008 결정 7)
+        all_orch_overlay = _ORCH_OVERLAY_FILES + _ORCH_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_ORCH:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
                 results.append(_issue(
-                    checker, CONCERN,
-                    "claude.gstack.auto.design.wiki",
-                    "wiki 변형에 wiki-setup.sh 부재 — graceful degrade 매뉴얼 누락",
+                    checker, INFO,
+                    variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_orch = []
+            for rel in all_orch_overlay:
+                if (variant_dir / rel).exists():
+                    found_orch.append(rel)
+            if found_orch:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"orch 오버레이가 {variant} 에 잘못 미러됨 (orch 변형 전용): {found_orch}",
                 ))
             else:
                 results.append(_issue(
                     checker, PASS,
-                    "claude.gstack.auto.design.wiki",
-                    "wiki-setup.sh 존재 OK (외부 의존성 허용 변형)",
+                    variant,
+                    f"{variant} 변형에 orch 오버레이 부재 OK",
+                ))
+
+        # MR-8 (계속): orch 변형에 orch 오버레이 모두 존재해야 함
+        for orch_variant_name in _VARIANTS_WITH_ORCH:
+            orch_variant = _HT / orch_variant_name
+            if orch_variant.exists():
+                missing_orch = []
+                for rel in _ORCH_OVERLAY_FILES:
+                    if not (orch_variant / rel).exists():
+                        missing_orch.append(rel)
+                for rel in _ORCH_OVERLAY_DIRS:
+                    if not (orch_variant / rel).exists():
+                        missing_orch.append(rel)
+                if missing_orch:
+                    results.append(_issue(
+                        checker, CONCERN,
+                        orch_variant_name,
+                        f"{orch_variant_name} 변형에 일부 orch 오버레이 부재: {missing_orch}",
+                    ))
+                else:
+                    results.append(_issue(
+                        checker, PASS,
+                        orch_variant_name,
+                        f"{orch_variant_name} orch 오버레이 모두 존재 OK",
+                    ))
+            else:
+                results.append(_issue(
+                    checker, INFO,
+                    orch_variant_name,
+                    f"{orch_variant_name} 변형 부재 (F013 미적용 가능)",
                 ))
 
     except Exception as exc:  # noqa: BLE001
@@ -1203,7 +1302,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (6변형)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (7변형 — F013 MR-8 추가)", check_mirror_regression),
 }
 
 
