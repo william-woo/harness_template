@@ -70,6 +70,8 @@ def _now_iso() -> str:
 def _slug_from_text(text: str, max_len: int = 40) -> str:
     """텍스트를 파일명 안전한 slug 로 변환.
 
+    개행 문자를 먼저 제거하고 첫 줄만 사용하여 slug 에 \\n 이 들어가는 버그 방지.
+
     Args:
         text: 원본 텍스트
         max_len: 최대 slug 길이
@@ -77,11 +79,45 @@ def _slug_from_text(text: str, max_len: int = 40) -> str:
     Returns:
         소문자, 알파벳/숫자/하이픈만 포함한 slug
     """
+    # 개행 제거: 첫 줄만 사용 (slug 에 \n 문자 포함 방지 — F014 수정)
+    text = text.split("\n")[0].replace("\r", " ").strip()
     slug = text.lower()
     slug = re.sub(r"[^a-z0-9가-힣\s-]", "", slug)
     slug = re.sub(r"\s+", "-", slug.strip())
     slug = re.sub(r"-+", "-", slug)
     return slug[:max_len].rstrip("-")
+
+
+def _extract_created(content: str) -> Optional[str]:
+    """기존 노드 파일에서 created 타임스탬프를 추출한다.
+
+    frontmatter 의 'created: <값>' 라인을 파싱.
+    없으면 None 반환 (호출자가 _now_iso() 로 fallback).
+
+    Args:
+        content: 노드 파일 전체 텍스트
+
+    Returns:
+        ISO 8601 타임스탬프 문자열 또는 None
+    """
+    m = re.search(r"^created:\s*(.+)$", content, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def _content_equal_ignoring_timestamps(old: str, new: str) -> bool:
+    """created/updated 줄을 제외한 본문이 동일한지 비교한다.
+
+    완전 멱등성 구현: 같은 소스를 2회 ingest 해도 파일을 쓰지 않아 diff 0.
+
+    Args:
+        old: 기존 파일 내용
+        new: 새로 생성된 내용
+
+    Returns:
+        True 면 내용이 동일 (파일 skip 가능), False 면 변경됨
+    """
+    _ts_pattern = re.compile(r"^(created|updated):\s*.+$", re.MULTILINE)
+    return _ts_pattern.sub("", old) == _ts_pattern.sub("", new)
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -370,7 +406,12 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
         else:
             ac_body += "_(없음)_\n"
 
-        # frontmatter
+        # frontmatter (멱등성 — F014: created 보존, updated 분리)
+        node_path = features_dir / f"{fid}.md"
+        now = _now_iso()
+        existing_created = _extract_created(node_path.read_text(encoding="utf-8")) if node_path.exists() else None
+        ts_created = existing_created or now
+
         related_yaml = json.dumps(related_refs) if related_refs else "[]"
         tags_yaml = json.dumps(tags)
         node_status = "active" if passes else "draft"
@@ -378,7 +419,8 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
             "---\n"
             f"type: feature\n"
             f"id: {fid}\n"
-            f"created: {_now_iso()}\n"
+            f"created: {ts_created}\n"
+            f"updated: {now}\n"
             f"source_ref: feature_list.json#{fid}\n"
             f"tags: {tags_yaml}\n"
             f"related: {related_yaml}\n"
@@ -395,8 +437,11 @@ def _ingest_features(vault_dir: Path, enrich_llm: bool = False) -> tuple[int, in
             f"**Status**: `{status}` | **Passes**: `{passes}`\n"
         )
 
-        content = frontmatter + "\n" + body
-        _atomic_write(features_dir / f"{fid}.md", content)
+        new_content = frontmatter + "\n" + body
+        # 내용 동일 시 파일을 쓰지 않아 완전 멱등 (timestamp 제외 비교)
+        if node_path.exists() and _content_equal_ignoring_timestamps(node_path.read_text(encoding="utf-8"), new_content):
+            continue
+        _atomic_write(node_path, new_content)
         created += 1
 
     if enrich_llm:
@@ -507,6 +552,12 @@ def _ingest_adrs(
         excerpt = _extract_adr_excerpt(raw)
 
         # frontmatter: related 는 전체 참조 기록 (끊겨도 메타데이터로 유효)
+        # 멱등성 — F014: created 보존, updated 분리
+        node_path = adrs_dir / f"{node_id}.md"
+        now = _now_iso()
+        existing_created = _extract_created(node_path.read_text(encoding="utf-8")) if node_path.exists() else None
+        ts_created = existing_created or now
+
         related_yaml = json.dumps(feature_refs)
         tags_yaml = json.dumps(["adr", f"adr-{adr_num}"])
         node_wiki_status = "active" if adr_status == "accepted" else "draft"
@@ -514,7 +565,8 @@ def _ingest_adrs(
             "---\n"
             f"type: adr\n"
             f"id: {node_id}\n"
-            f"created: {_now_iso()}\n"
+            f"created: {ts_created}\n"
+            f"updated: {now}\n"
             f"source_ref: docs/adr/{adr_path.name}\n"
             f"tags: {tags_yaml}\n"
             f"related: {related_yaml}\n"
@@ -542,8 +594,11 @@ def _ingest_adrs(
             f"{excerpt}\n"
         )
 
-        content = frontmatter + "\n" + body
-        _atomic_write(adrs_dir / f"{node_id}.md", content)
+        new_content = frontmatter + "\n" + body
+        # 내용 동일 시 파일을 쓰지 않아 완전 멱등 (timestamp 제외 비교)
+        if node_path.exists() and _content_equal_ignoring_timestamps(node_path.read_text(encoding="utf-8"), new_content):
+            continue
+        _atomic_write(node_path, new_content)
         created += 1
 
     if enrich_llm:
@@ -644,13 +699,20 @@ def _ingest_learnings(
         tags = [category] + (tags_raw if isinstance(tags_raw, list) else [])
 
         # frontmatter: related 는 전체 참조 기록 (끊겨도 메타데이터로 유효)
+        # 멱등성 — F014: created 보존, updated 분리
+        node_path = learnings_dir / f"{node_id}.md"
+        now = _now_iso()
+        existing_created = _extract_created(node_path.read_text(encoding="utf-8")) if node_path.exists() else None
+        ts_created = existing_created or now
+
         related_yaml = json.dumps(related)
         tags_yaml = json.dumps(tags)
         frontmatter = (
             "---\n"
             f"type: learning\n"
             f"id: {node_id}\n"
-            f"created: {_now_iso()}\n"
+            f"created: {ts_created}\n"
+            f"updated: {now}\n"
             f"source_ref: .claude/state/learnings.jsonl\n"
             f"tags: {tags_yaml}\n"
             f"related: {related_yaml}\n"
@@ -678,8 +740,11 @@ def _ingest_learnings(
             f"{note}\n"
         )
 
-        content = frontmatter + "\n" + body
-        _atomic_write(learnings_dir / f"{node_id}.md", content)
+        new_content = frontmatter + "\n" + body
+        # 내용 동일 시 파일을 쓰지 않아 완전 멱등 (timestamp 제외 비교)
+        if node_path.exists() and _content_equal_ignoring_timestamps(node_path.read_text(encoding="utf-8"), new_content):
+            continue
+        _atomic_write(node_path, new_content)
         created += 1
 
     if enrich_llm:
@@ -718,12 +783,19 @@ def _ingest_source_file(vault_dir: Path, source_file: Path) -> tuple[int, int]:
     slug = _slug_from_text(title, 40) or _slug_from_text(source_file.stem, 40)
     node_id = slug
 
+    # 멱등성 — F014: created 보존, updated 분리
+    node_path = sources_dir / f"{node_id}.md"
+    now = _now_iso()
+    existing_created = _extract_created(node_path.read_text(encoding="utf-8")) if node_path.exists() else None
+    ts_created = existing_created or now
+
     tags_yaml = json.dumps(["source"])
     frontmatter = (
         "---\n"
         f"type: source\n"
         f"id: {node_id}\n"
-        f"created: {_now_iso()}\n"
+        f"created: {ts_created}\n"
+        f"updated: {now}\n"
         f"source_ref: {source_file}\n"
         f"tags: {tags_yaml}\n"
         f"related: []\n"
@@ -738,8 +810,12 @@ def _ingest_source_file(vault_dir: Path, source_file: Path) -> tuple[int, int]:
         f"{raw.strip()}\n"
     )
 
-    content = frontmatter + "\n" + body
-    _atomic_write(sources_dir / f"{node_id}.md", content)
+    new_content = frontmatter + "\n" + body
+    # 내용 동일 시 파일을 쓰지 않아 완전 멱등 (timestamp 제외 비교)
+    if node_path.exists() and _content_equal_ignoring_timestamps(node_path.read_text(encoding="utf-8"), new_content):
+        print(f"  {INFO}: sources/{node_id}.md 변경 없음 (skip)")
+        return 0, 1
+    _atomic_write(node_path, new_content)
     print(f"  {PASS_LABEL}: sources/{node_id}.md 생성 (원본: {source_file})")
     return 1, 0
 
