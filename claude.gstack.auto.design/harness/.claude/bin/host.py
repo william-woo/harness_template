@@ -38,7 +38,7 @@ _PROJECT_ROOT = _SCRIPT_DIR.parent.parent  # .claude/bin/host.py → project roo
 _HOST_JSON = _PROJECT_ROOT / ".claude" / "host.json"
 _SKILLS_DIR = _PROJECT_ROOT / ".claude" / "skills"
 
-VALID_AGENT_TYPES = {"claude-code", "openclaw", "codex"}
+VALID_AGENT_TYPES = {"claude-code", "openclaw", "codex", "opencode"}
 
 # ---------------------------------------------------------------------------
 # 어댑터 팩토리
@@ -49,7 +49,7 @@ def _load_adapter(agent_type: str):
     agent_type에 맞는 어댑터 인스턴스를 반환한다.
 
     Args:
-        agent_type: "claude-code" | "openclaw" | "codex"
+        agent_type: "claude-code" | "openclaw" | "codex" | "opencode"
 
     Returns:
         HostAdapter 인스턴스. 알 수 없는 타입이면 ClaudeCodeAdapter (안전 fallback).
@@ -65,6 +65,10 @@ def _load_adapter(agent_type: str):
         elif agent_type == "codex":
             from host_adapters.codex import CodexAdapter
             return CodexAdapter()
+        elif agent_type == "opencode":
+            # ADR-009 결정 7: opencode 어댑터 로드 분기 (F015)
+            from host_adapters.opencode import OpenCodeAdapter
+            return OpenCodeAdapter()
         else:
             from host_adapters.claude_code import ClaudeCodeAdapter
             return ClaudeCodeAdapter()
