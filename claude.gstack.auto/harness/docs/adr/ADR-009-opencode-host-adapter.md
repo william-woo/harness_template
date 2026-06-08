@@ -103,9 +103,15 @@ opencode_permission = {tool: "deny" for tool in denied}
 
 | 우리 에이전트 | OpenCode mode | 근거 |
 |---|---|---|
-| developer, reviewer, qa, designer, researcher, planner, architect | `subagent` | 측정 03 결과: 우리 7 에이전트는 모두 다른 agent (orchestrate/사용자) 가 spawn 하는 성격. primary 가 아니다. |
-| gatekeeper | `subagent` | autonomous 모드에서 다른 agent 가 호출하는 패턴 |
+| developer, reviewer, qa, designer, researcher, planner, architect, gatekeeper | `all` | **측정 04 보정** (아래) — primary 직접 진입 + subagent spawn 겸용 |
 | (없음) | `primary` | 우리는 별도 primary agent 없음 — OpenCode 빌트인 `build` 가 primary 역할 수행 |
+
+> **측정 04 보정 (2026-06-08, F015 세션 3)**: 최초엔 8 에이전트를 `mode: subagent` 로 변환했으나,
+> OpenCode 에서 **subagent 는 `opencode run --agent <name>` 직접 진입점이 될 수 없다**
+> ("not a primary agent → fallback"). d-2 의 주 사용 사례인 **단일역할 직접 호출**이 막힌다.
+> → `mode: all` 로 변경. `all` 은 primary(직접 진입) + subagent(task spawn) 겸용 **상위집합**이라
+> 단일역할 직접 호출과 orchestrate task spawn 을 모두 만족한다. (opencode.py `_format_opencode_agent`)
+> 실측: mode:all 직접 호출 시 헤더 `> developer`, fallback 경고 소멸 — docs/poc/measurements/04-single-role-e2e.md
 
 **대안 검토**:
 

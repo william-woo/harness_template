@@ -163,7 +163,8 @@ class OpenCodeAdapter(HostAdapter):
           - tools: A,B,C → permission deny-list 역변환
             (OpenCode 전체 도구 집합 - Claude 허용 도구 매핑 = denied 도구)
           - 본문 시스템 프롬프트: 그대로 ({{HOST.*}} 토큰 치환 적용)
-          - mode: subagent (우리 7 에이전트 모두 subagent — ADR-009 결정 1)
+          - mode: all (측정 04 — subagent 는 직접 호출 불가하여 all 로 보정.
+            primary 직접 진입 + subagent task spawn 겸용 상위집합)
 
         Args:
             claude_agent_path: .claude/agents/<name>.md 경로
@@ -315,7 +316,11 @@ class OpenCodeAdapter(HostAdapter):
         else:
             lines.append(f"description: {description.strip()}")
 
-        lines.append("mode: subagent")
+        # mode: all — 측정 04 발견. mode: subagent 는 `opencode run --agent <name>`
+        # 직접 호출 시 "not a primary agent → fallback" 으로 단일역할 실행이 막힌다.
+        # mode: all 은 primary(직접 진입) + subagent(task spawn) 겸용 — d-2 단일역할
+        # 직접 호출(14B 주 사용 사례)과 orchestrate task spawn 을 모두 만족하는 상위집합.
+        lines.append("mode: all")
 
         if permission:
             lines.append("permission:")

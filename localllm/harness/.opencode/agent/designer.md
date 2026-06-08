@@ -11,7 +11,7 @@ description: >-
   
   주의: claude.gstack.auto.design 변형 전용. 다른 변형엔 없음 — 다운스트림
   UI 프로젝트에서 활용한다. 메인 harness_update_agent 에서는 개발·테스트 목적 사용.
-mode: subagent
+mode: all
 permission:
   lsp: deny
   skill: deny

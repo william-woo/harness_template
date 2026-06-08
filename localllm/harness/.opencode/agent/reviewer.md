@@ -3,7 +3,7 @@ description: >-
   코드 리뷰 전문 에이전트. Developer 에이전트의 구현이 완료된 후 호출한다.
   코드 품질, 보안, 성능, 가독성을 검토하고 구체적인 피드백을 제공한다.
   예: "Use the reviewer agent to review the F001 implementation"
-mode: subagent
+mode: all
 permission:
   edit: deny
   lsp: deny

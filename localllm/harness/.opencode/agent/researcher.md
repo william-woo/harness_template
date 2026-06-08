@@ -12,7 +12,7 @@ description: >-
   주의: claude.gstack.auto.design.wiki.orch 변형 전용. 이종 에이전트 오케스트레이션의
   '리서치' 꼭짓점 (코딩=Developer, 디자인=designer, 리서치=researcher 삼각형).
   Write 도구 없음 — 산출물은 stdout 으로 반환, 저장은 /project:orchestrate 본문 책임.
-mode: subagent
+mode: all
 permission:
   edit: deny
   lsp: deny

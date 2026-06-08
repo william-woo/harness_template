@@ -523,7 +523,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (7 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (8 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -533,7 +533,14 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
+| **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **localllm 변형 (F015 / d-2)**: Claude Code 가 아니라 **OpenCode + 로컬 LLM(Ollama)** 으로
+> 하네스를 구동하는 PoC 샌드박스 (orch 변형 복사본 + d-2 오버레이). 호스트 어댑터 `opencode.py` 가
+> `.claude/agents/*.md` 를 OpenCode 포맷 `.opencode/agent/*.md` (`mode: all` + permission deny-list) 로
+> 변환. 단일역할 14B 즉시 가능 / 멀티스텝 32B+ (측정 04 / docs/poc/MODEL-GRADES.md).
+> render-agents: `HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents`
 
 **자율 오버레이 4 파일** (claude.gstack 에서 제외):
 - `.claude/agents/gatekeeper.md`
@@ -553,11 +560,18 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/commands/wiki.md`
 - `wiki/` vault 디렉토리
 
-**orch 오버레이** (claude.gstack.auto.design.wiki.orch 에만 — F013 신설):
+**orch 오버레이** (claude.gstack.auto.design.wiki.orch + localllm 에 존재 — F013 신설):
 - `.claude/agents/researcher.md`
 - `.claude/commands/orchestrate.md`
 - `.claude/state/orch/` (핸드오프 디렉토리)
 - `docs/orch-examples/` (흐름 예시 시나리오)
+
+**d-2 오버레이** (localllm 에만 — F015 신설):
+- `.opencode/AGENTS.md` (OpenCode 프로젝트 컨텍스트 — CLAUDE.md 상당)
+- `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
+- `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
+- `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
+- coding 스킬 "상대경로 우선" 보강
 
 회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~8 / F011 신설·F012 확장·F013 MR-8 추가).
 

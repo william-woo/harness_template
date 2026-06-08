@@ -3,7 +3,7 @@ description: >-
   QA/검증 전문 에이전트. Reviewer 에이전트가 APPROVED한 기능을 E2E 관점에서 검증한다.
   모든 인수 기준을 통과한 경우에만 feature_list.json의 passes를 true로 변경한다.
   예: "Use the qa agent to verify F001 is complete"
-mode: subagent
+mode: all
 permission:
   lsp: deny
   skill: deny
