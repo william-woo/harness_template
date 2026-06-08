@@ -31,28 +31,17 @@ from .base import HostAdapter
 # Claude Code 대비 차이:
 #   write 없음  → edit 가 신규 파일 생성 겸용 (측정 02 PASS 근거)
 #   multiedit 없음 → edit 를 여러 번 호출하는 패턴으로 대체 (스킬 보강으로 안내, 결정 5)
-_TOOL_MAP: dict[str, str] = {
-    "bash": "bash",
-    "read": "read",
-    "write": "edit",       # OpenCode 에 write 없음 → edit 가 신규 파일 생성 겸용
-    "edit": "edit",
-    "multiedit": "edit",   # OpenCode 에 multiedit 없음 → edit 다회 호출로 대체
-    "glob": "glob",
-    "grep": "grep",
-    # 추가 Claude Code PascalCase 매핑 (agent frontmatter tools 파싱 시 정규화용)
-    "webfetch": "webfetch",
-    "task": "task",
-    "todowrite": "todowrite",
-    "websearch": "websearch",
-}
-
 # OpenCode 가 지원하는 전체 도구 집합 (ADR-009 결정 1, permission deny-list 생성에 사용)
 _OPENCODE_ALL_TOOLS: frozenset[str] = frozenset({
     "bash", "read", "edit", "glob", "grep",
     "webfetch", "task", "todowrite", "websearch", "lsp", "skill",
 })
 
-# Claude Code PascalCase → lowercase 정규화 맵 (agent frontmatter tools: 필드 파싱용)
+# 도구명 매핑 SSOT (Reviewer SHOULD: _TOOL_MAP 중복 제거 — 단일 출처).
+# Claude Code (PascalCase/canonical) → OpenCode (lowercase) 정규화.
+# tool_name() 과 _build_permission() 이 공통 참조하므로 신규 도구는 여기만 갱신한다.
+#   write 없음     → edit 가 신규 파일 생성 겸용 (측정 02 PASS)
+#   multiedit 없음 → edit 다회 호출로 대체 (결정 5)
 _CC_NORMALIZE: dict[str, str] = {
     "bash": "bash",
     "read": "read",
@@ -109,7 +98,7 @@ class OpenCodeAdapter(HostAdapter):
         Returns:
             str: OpenCode 도구명 (예: "bash" → "bash", "write" → "edit")
         """
-        return _TOOL_MAP.get(canonical.lower(), canonical.lower())
+        return _CC_NORMALIZE.get(canonical.lower(), canonical.lower())
 
     def command_invocation(self, name: str) -> str:
         """
@@ -148,6 +137,11 @@ class OpenCodeAdapter(HostAdapter):
 
     # ---------------------------------------------------------------------------
     # agent 포맷 변환 (ADR-009 결정 1 — 정적 렌더링)
+    #
+    # 주의 (Reviewer SHOULD): render_agent_md / render_agents 는 HostAdapter ABC 에
+    # 정의되지 않은 **opencode 전용 확장 메서드**다. host.py cmd_render_agents 는
+    # hasattr(adapter, "render_agents") 로 보유 여부를 동적 확인하며, 다른 어댑터
+    # (claude-code/codex/openclaw) 는 이 메서드가 없어 "미지원" 안내만 출력한다.
     # ---------------------------------------------------------------------------
 
     def render_agent_md(self, claude_agent_path: str | Path) -> str | None:
@@ -174,9 +168,13 @@ class OpenCodeAdapter(HostAdapter):
         """
         try:
             path = Path(claude_agent_path)
-            if not path.exists():
+            # 경계 검증 (Reviewer MUST): 공개 API 이므로 임의 경로 입력을 방어한다.
+            # agent 정의는 항상 .md 파일 — 비-.md 경로는 변환 대상이 아니다
+            # (/etc/passwd 같은 임의 시스템 파일을 OpenCode agent 로 감싸 출력하는 것을 차단).
+            if path.suffix != ".md" or not path.is_file():
                 return None
-            content = path.read_text(encoding="utf-8")
+            # CRLF 정규화 (Reviewer SHOULD): \r\n 파일에서 trailing \r 잔류 방지
+            content = path.read_text(encoding="utf-8").replace("\r\n", "\n")
 
             description, tools_raw, body = self._parse_claude_agent(content)
             permission = self._build_permission(tools_raw)
@@ -343,7 +341,9 @@ class OpenCodeAdapter(HostAdapter):
         .claude/agents/*.md 를 OpenCode 포맷으로 변환하여 .opencode/agent/ 에 저장한다.
 
         ADR-009 결정 1: 정적 렌더링. 호출 시점에 파일 생성.
-        기존 파일이 있으면 덮어쓴다 (멱등).
+        기존 파일이 있으면 덮어쓰고, 소스에서 사라진 stale 파일은 삭제한다 (완전 멱등).
+        (Reviewer SHOULD: 소스에서 삭제된 에이전트가 출력 디렉토리에 남으면
+         OpenCode 가 stale agent 를 인식하므로 동기화가 깨진다 — 정리 필요.)
 
         Args:
             agents_src_dir: 소스 디렉토리 (.claude/agents/)
@@ -364,5 +364,11 @@ class OpenCodeAdapter(HostAdapter):
             out_file = out / agent_file.name
             out_file.write_text(result, encoding="utf-8")
             generated.append(agent_file.name)
+
+        # stale 정리: 이번에 생성되지 않은 기존 .md 파일 삭제 (소스에서 사라진 에이전트)
+        generated_set = set(generated)
+        for existing in out.glob("*.md"):
+            if existing.name not in generated_set:
+                existing.unlink()
 
         return generated

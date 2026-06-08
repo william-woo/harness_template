@@ -125,6 +125,11 @@ opencode_permission = {tool: "deny" for tool in denied}
 
 **산출 위치**: `<project_root>/.opencode/agent/<name>.md` (7 파일)
 
+**멱등성** (Reviewer SHOULD): `render_agents` 는 호출 시 기존 파일을 덮어쓰고,
+**소스(`.claude/agents/`)에서 사라진 stale `.md` 파일은 출력 디렉토리에서 삭제**한다.
+소스에서 에이전트를 지웠는데 출력에 잔존하면 OpenCode 가 stale agent 를 인식하므로,
+완전 동기화를 위해 "이번에 생성되지 않은 .md" 를 정리한다. (멱등 2회 실행 → diff 0)
+
 ---
 
 ### 결정 2 — tool_name 매핑: 호스트 비대칭 흡수
