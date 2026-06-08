@@ -3,43 +3,43 @@ name: coding
 description: |
   코드 구현 시 참조하는 스킬. Developer 에이전트가 기능을 구현할 때 사용한다.
   패턴: 구현 → 테스트 → 커밋 → 인계
-  호스트: claude-code
+  호스트: opencode
 ---
 
 # Coding Skill
 
-> 이 파일은 `claude-code` 호스트 기준으로 렌더된 SKILL.md입니다.
+> 이 파일은 `opencode` 호스트 기준으로 렌더된 SKILL.md입니다.
 > 원본 템플릿: `coding/SKILL.md.template`
 
-## 도구 사용 안내 (claude-code)
+## 도구 사용 안내 (opencode)
 
 이 하네스에서 코드를 구현할 때 다음 도구를 사용하세요:
 
 | 용도 | 도구명 |
 |---|---|
-| 셸 명령 실행 | `Bash` |
-| 파일 읽기 | `Read` |
-| 파일 쓰기 | `Write` |
-| 파일 수정 | `Edit` |
-| 다중 파일 수정 | `MultiEdit` |
-| 파일 검색 | `Glob` |
-| 텍스트 검색 | `Grep` |
+| 셸 명령 실행 | `bash` |
+| 파일 읽기 | `read` |
+| 파일 쓰기 | `edit` |
+| 파일 수정 | `edit` |
+| 다중 파일 수정 | `edit` |
+| 파일 검색 | `glob` |
+| 텍스트 검색 | `grep` |
 
-## 커맨드 호출 안내 (claude-code)
+## 커맨드 호출 안내 (opencode)
 
 구현 완료 후 다음 커맨드로 인계하세요:
 
 ```
-/project:handoff
+opencode run --command handoff
 ```
 
 세션 시작 시:
 
 ```
-/project:start-session
+opencode run --command start-session
 ```
 
-프로젝트 루트는 `$CLAUDE_PROJECT_DIR` 환경변수에서 읽을 수 있습니다.
+프로젝트 루트는 `$PWD` 환경변수에서 읽을 수 있습니다.
 
 ## 경로 사용 안내 — 상대경로 우선 (로컬 LLM 보강)
 
@@ -51,7 +51,7 @@ description: |
 
 - ✅ `.claude/agents/developer.md`, `src/foo.ts`, `docs/adr/ADR-001.md`
 - ❌ `/home/obigo/project/.../developer.md` (절대경로 임의 생성 금지)
-- 절대경로가 꼭 필요하면 `$CLAUDE_PROJECT_DIR` 를 기준으로 조합하세요.
+- 절대경로가 꼭 필요하면 `$PWD` 를 기준으로 조합하세요.
 - 호스트가 cwd 기반(OpenCode 등)이면 현재 작업 디렉토리가 곧 프로젝트 루트입니다.
 
 이는 비용·보안 목적(d-2)과도 직결됩니다 — 작업 디렉토리 경계를 벗어나지 않아야
