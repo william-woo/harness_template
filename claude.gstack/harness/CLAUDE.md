@@ -573,7 +573,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~8 / F011 신설·F012 확장·F013 MR-8 추가).
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~9 / F011 신설·F012 확장·F013 MR-8·F015 MR-9 추가).
 
 ---
 

@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (7변형 — F011 신설, F012 확장: MR-6/MR-7, F013 추가: MR-8)
+  LINT-MR     변형 오버레이 정합 (8변형 — F011 신설, F012 확장: MR-6/MR-7, F013: MR-8, F015: MR-9)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -912,6 +912,33 @@ _VARIANTS_NO_ORCH = [
 # orch 오버레이를 보유해야 하는 변형 (MR-8: orch 변형만)
 _VARIANTS_WITH_ORCH = ["claude.gstack.auto.design.wiki.orch"]
 
+# d-2 오버레이 파일 (ⓑ⁵ localllm 변형에만 존재해야 함 — MR-9, F015 정식 등재)
+# 주의: opencode.py 는 d-2 오버레이가 아님 — gstack 등 6변형이 호스트 어댑터로 정당 보유.
+#       MR-9 는 OpenCode "런타임 산출물"(.opencode/) + 설치 스크립트 + PoC 문서만 격리 검사한다.
+_D2_OVERLAY_FILES = [
+    "harness/.opencode/AGENTS.md",
+    "harness/.claude/bin/opencode-setup.sh",
+]
+
+# d-2 상태/산출 디렉토리 (MR-9)
+_D2_OVERLAY_DIRS = [
+    "harness/.opencode/agent",
+    "harness/docs/poc",
+]
+
+# d-2 오버레이가 없어야 하는 변형 (MR-9: localllm 외 6 변형 — openai 는 별도 처리)
+_VARIANTS_NO_D2 = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+]
+
+# d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
+_VARIANTS_WITH_D2 = ["localllm"]
+
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
     "harness/.claude/bin/wiki-setup.sh",
@@ -1284,6 +1311,70 @@ def check_mirror_regression() -> list:
                     checker, INFO,
                     orch_variant_name,
                     f"{orch_variant_name} 변형 부재 (F013 미적용 가능)",
+                ))
+
+        # MR-9: localllm 외 6 변형에 d-2 오버레이(.opencode/ 런타임 + opencode-setup + docs/poc) 없어야 함
+        # (d-2 오버레이는 ⓑ⁵ localllm 에만 존재 — F015 정식 등재 / ADR-009 결정 6 개정)
+        all_d2_overlay = _D2_OVERLAY_FILES + _D2_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_D2:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_d2 = []
+            for rel in all_d2_overlay:
+                if (variant_dir / rel).exists():
+                    found_d2.append(rel)
+            if found_d2:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"d-2 오버레이가 {variant} 에 잘못 미러됨 (localllm 전용): {found_d2}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    variant,
+                    f"{variant} 변형에 d-2 오버레이 부재 OK",
+                ))
+
+        # MR-9 (계속): localllm 변형에 d-2 오버레이 + opencode 어댑터 구조 불변식 존재해야 함
+        # (구조만 검사 — 스킬·문서 본문은 검사하지 않아 PoC churn 마찰 없음)
+        for d2_variant_name in _VARIANTS_WITH_D2:
+            d2_variant = _HT / d2_variant_name
+            if not d2_variant.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    d2_variant_name,
+                    f"{d2_variant_name} 변형 부재 (F015 미적용 가능)",
+                ))
+                continue
+            missing_d2 = []
+            for rel in _D2_OVERLAY_FILES + _D2_OVERLAY_DIRS:
+                if not (d2_variant / rel).exists():
+                    missing_d2.append(rel)
+            # opencode 어댑터 구조 불변식: render_agents 보유 + host.json agent_type=opencode
+            adapter = d2_variant / "harness" / ".claude" / "bin" / "host_adapters" / "opencode.py"
+            if not (adapter.exists() and "def render_agents" in adapter.read_text(encoding="utf-8")):
+                missing_d2.append("opencode.py:render_agents")
+            host_json = d2_variant / "harness" / ".claude" / "host.json"
+            if not (host_json.exists() and '"agent_type": "opencode"' in host_json.read_text(encoding="utf-8")):
+                missing_d2.append("host.json:agent_type=opencode")
+            if missing_d2:
+                results.append(_issue(
+                    checker, CONCERN,
+                    d2_variant_name,
+                    f"{d2_variant_name} 변형에 일부 d-2 구조 부재: {missing_d2}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    d2_variant_name,
+                    f"{d2_variant_name} d-2 오버레이 + opencode 어댑터 구조 모두 존재 OK",
                 ))
 
     except Exception as exc:  # noqa: BLE001

@@ -12,6 +12,7 @@
 | `claude.gstack.auto.design/` | 0 | — | LINT-MR-7 |
 | **`claude.gstack.auto.design.wiki/`** | **허용** | Obsidian / qmd / Marp | LINT-MR-7 (반대 방향 — 허용 확인) |
 | **`claude.gstack.auto.design.wiki.orch/`** | **허용** (wiki 상속) | Obsidian / qmd / Marp (wiki 복사) | LINT-MR-7/MR-8 (orch 자체는 stdlib only) |
+| **`localllm/`** (d-2) | **허용** | OpenCode / Ollama | LINT-MR-9 (d-2 오버레이 격리 + 어댑터 구조) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
@@ -19,7 +20,13 @@
 - 허용 도구: Obsidian (graph view), qmd (BM25/vector 검색), Marp (슬라이드)
 - 핵심 wiki 기능 (.md + [[wikilink]] 노드 관리) 은 stdlib only — 외부 도구는 *향상*만
 - orch 변형은 wiki 의 외부 의존성 정책 상속 + orch 자체 (researcher/orchestrate) 는 stdlib only
-- 다른 5 변형은 이 예외를 절대 상속하지 않음 (LINT-MR-7 이 강제)
+- 다른 4 변형은 이 예외를 절대 상속하지 않음 (LINT-MR-7 이 강제)
+
+**localllm 변형 (d-2) 예외 계약**:
+- OpenCode + Ollama(로컬 LLM) 구동 — API 비용 0 + 오프라인 추론(보안). 외부 도구는 선택적(graceful degrade)
+- 핵심 어댑터(opencode.py)·헬퍼는 stdlib only — OpenCode/Ollama 는 *실행 환경*일 뿐
+- **검증 범위**: 단일역할(14B) E2E 검증 완료(측정 04). 멀티스텝(orchestrate)은 32B 환경 확보 시 측정 05 로 검증 — 현재 환경 부재로 보류
+- LINT-MR-9 가 d-2 오버레이(.opencode/ 런타임 + docs/poc + opencode-setup.sh) 의 localllm 전용 격리를 강제
 
 ---
 
