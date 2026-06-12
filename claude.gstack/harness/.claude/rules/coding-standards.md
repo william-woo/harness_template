@@ -13,6 +13,7 @@
 | **`claude.gstack.auto.design.wiki/`** | **허용** | Obsidian / qmd / Marp | LINT-MR-7 (반대 방향 — 허용 확인) |
 | **`claude.gstack.auto.design.wiki.orch/`** | **허용** (wiki 상속) | Obsidian / qmd / Marp (wiki 복사) | LINT-MR-7/MR-8 (orch 자체는 stdlib only) |
 | **`localllm/`** (d-2) | **허용** | OpenCode / Ollama | LINT-MR-9 (d-2 오버레이 격리 + 어댑터 구조) |
+| **`claude.hermes/`** | **허용** (wiki 상속) | Obsidian/qmd/Marp (hermes 기능은 stdlib) | LINT-MR-10 (hermes 오버레이 격리) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
@@ -27,6 +28,12 @@
 - 핵심 어댑터(opencode.py)·헬퍼는 stdlib only — OpenCode/Ollama 는 *실행 환경*일 뿐
 - **검증 범위**: 단일역할(14B) E2E 검증 완료(측정 04). 멀티스텝(orchestrate)은 32B 환경 확보 시 측정 05 로 검증 — 현재 환경 부재로 보류
 - LINT-MR-9 가 d-2 오버레이(.opencode/ 런타임 + docs/poc + opencode-setup.sh) 의 localllm 전용 격리를 강제
+
+**claude.hermes 변형 예외 계약** (ADR-010):
+- NousResearch/hermes-agent 패턴 이식 — FTS5 세션검색 + 스킬 자동생성/self-improve + agentskills.io 표준
+- 외부 의존성은 wiki 상속분(Obsidian/qmd/Marp)만 허용. **hermes 3종 기능(session_search/skill_forge)은 stdlib only**
+- Hermes 본체의 메시징 게이트웨이·유저모델링 등 무거운 부분은 **미이식** (개인비서 영역 — SDLC 하네스 목적과 불일치)
+- LINT-MR-10 이 hermes 오버레이(session_search.py + skill_forge.py + 커맨드 2종) 의 claude.hermes 전용 격리를 강제
 
 ---
 

@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (8변형 — F011 신설, F012 확장: MR-6/MR-7, F013: MR-8, F015: MR-9)
+  LINT-MR     변형 오버레이 정합 (9변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -934,10 +934,34 @@ _VARIANTS_NO_D2 = [
     "claude.gstack.auto.design",
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
+    "claude.hermes",
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
 _VARIANTS_WITH_D2 = ["localllm"]
+
+# hermes 오버레이 파일 (ⓑ⁶ claude.hermes 변형에만 존재해야 함 — MR-10, F016 신설)
+# Hermes Agent 패턴 이식: FTS5 세션검색 + 스킬 자동생성/self-improve (ADR-010)
+_HERMES_OVERLAY_FILES = [
+    "harness/.claude/bin/session_search.py",
+    "harness/.claude/bin/skill_forge.py",
+    "harness/.claude/commands/session-search.md",
+    "harness/.claude/commands/skill-forge.md",
+]
+
+# hermes 오버레이가 없어야 하는 변형 (MR-10: claude.hermes 외 7 변형 — openai 별도)
+_VARIANTS_NO_HERMES = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+]
+
+# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes 만)
+_VARIANTS_WITH_HERMES = ["claude.hermes"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1375,6 +1399,50 @@ def check_mirror_regression() -> list:
                     checker, PASS,
                     d2_variant_name,
                     f"{d2_variant_name} d-2 오버레이 + opencode 어댑터 구조 모두 존재 OK",
+                ))
+
+        # MR-10: claude.hermes 외 7 변형에 hermes 오버레이 없어야 함
+        # (hermes 오버레이는 ⓑ⁶ claude.hermes 에만 존재 — F016 / ADR-010)
+        for variant in _VARIANTS_NO_HERMES:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_hermes = [rel for rel in _HERMES_OVERLAY_FILES
+                            if (variant_dir / rel).exists()]
+            if found_hermes:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"hermes 오버레이가 {variant} 에 잘못 미러됨 (claude.hermes 전용): {found_hermes}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 hermes 오버레이 부재 OK",
+                ))
+
+        # MR-10 (계속): claude.hermes 변형에 hermes 오버레이 모두 존재해야 함
+        for hermes_variant_name in _VARIANTS_WITH_HERMES:
+            hv = _HT / hermes_variant_name
+            if not hv.exists():
+                results.append(_issue(
+                    checker, INFO, hermes_variant_name,
+                    f"{hermes_variant_name} 변형 부재 (F016 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _HERMES_OVERLAY_FILES if not (hv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, hermes_variant_name,
+                    f"{hermes_variant_name} 변형에 일부 hermes 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, hermes_variant_name,
+                    f"{hermes_variant_name} hermes 오버레이 모두 존재 OK",
                 ))
 
     except Exception as exc:  # noqa: BLE001

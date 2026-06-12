@@ -13,7 +13,8 @@ claude (baseline)
             └─ +design (디자인 시스템)
                  └─ +wiki (지식 그래프, 외부 의존성 허용)
                       └─ +orch (이종 에이전트 오케스트레이션, d-1)
-                           └─ localllm (OpenCode + 로컬 LLM, d-2)
+                           ├─ localllm (OpenCode + 로컬 LLM, d-2)
+                           └─ claude.hermes (영속기억·자가진화 — Hermes 패턴)
 openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 ```
 
@@ -29,6 +30,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | 프로젝트 지식을 그래프(Obsidian/wikilink)로 관리하고 싶다 | `claude.gstack.auto.design.wiki` |
 | 리서치+디자인+코딩을 한 흐름으로 지휘하고 싶다 | `claude.gstack.auto.design.wiki.orch` |
 | 로컬 LLM(OpenCode+Ollama)으로 비용·보안 최적화 | `localllm` (PoC) |
+| 세션 기억 검색 + 스킬 자동생성/self-improve 가 필요하다 | `claude.hermes` |
 | OpenAI Codex 호스트에서 쓴다 | `openai/.codex` (stub) |
 | Phase 0 원본 스냅샷이 필요하다 (참고용) | `claude` (baseline, 동결) |
 
@@ -109,6 +111,21 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 - **상태**: **PoC 변형 유지**(정식 졸업 보류, ADR-009 결정 6). 후속: 커맨드 미러링/hook plugin/32B 측정/정식 승격.
 - **외부 의존성**: 허용 (OpenCode/Ollama) — 선택적, graceful degrade.
 
+### ⓑ⁶ `claude.hermes/` — 영속 기억 + 자가 진화 (Hermes Agent 패턴 이식)
+- **무엇**: orch 변형 복사본 + **hermes 오버레이** (F016, ADR-010). NousResearch/hermes-agent
+  ("the agent that grows with you") 의 3가지를 SDLC 하네스에 이식.
+- **추가 오버레이**:
+  - `session_search.py` — **FTS5 세션 검색**: claude-progress.txt + 체크포인트를 SQLite FTS5 로
+    색인/검색 (cross-session recall). `/project:session-search`.
+  - `skill_forge.py` — **스킬 자동생성/self-improve + agentskills.io 검증**: 스킬 scaffold,
+    사용 추적(`record-use`)→개선 후보 `nudge`, 표준 적합성 `validate`. `/project:skill-forge`.
+  - **agentskills.io 표준**(Anthropic 원작): 기존 스킬은 이미 호환(name+description). validate 6/6 PASS.
+- **설계**: 헬퍼는 **결정론 부분**(구조·메타데이터·검증·사용추적)만, 스킬 **본문은 에이전트**가 작성
+  (Karpathy 추측 자동화 금지). hermes 3종 기능은 **stdlib only**.
+- **미이식**(의도): Hermes 의 메시징 게이트웨이/유저모델링 등 — 개인비서 영역, SDLC 목적과 불일치.
+- **언제**: "예전에 어떻게 했더라" 과거 세션 회상 / 반복 절차를 재사용 스킬로 승격·관리.
+- **외부 의존성**: wiki 상속분(Obsidian/qmd/Marp) 허용, hermes 기능 자체는 0.
+
 ### ⓒ `openai/` — Codex 호스트 (stub, 별도 계보)
 - **무엇**: OpenAI Codex 호스트용 `.codex/` 구조의 **정적 산출물**.
 - **정책**: F006 세션 2에서 수동 생성. 직접 손대지 말 것 — codex 어댑터가 실구현되는 후속 phase에서
@@ -129,6 +146,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | `claude.gstack.auto.design.wiki` | **허용** | Obsidian / qmd / Marp |
 | `claude.gstack.auto.design.wiki.orch` | **허용**(wiki 상속) | Obsidian / qmd / Marp |
 | `localllm` | **허용** | OpenCode / Ollama |
+| `claude.hermes` | **허용**(wiki 상속) | Obsidian/qmd/Marp (hermes 기능은 stdlib) |
 | `openai/.codex` | 0 | — |
 
 > 핵심 기능은 모두 **stdlib(bash + Python 표준)** 으로 동작하며, 외부 도구는 *향상*만 합니다(graceful degrade).

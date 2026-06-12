@@ -523,7 +523,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (8 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (9 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -534,7 +534,12 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
 | **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **claude.hermes 변형 (F016)**: NousResearch/hermes-agent 패턴 이식 (ADR-010). orch 변형 복사 +
+> FTS5 세션검색(`session_search.py`) + 스킬 자동생성/self-improve(`skill_forge.py`) + agentskills.io 표준.
+> hermes 3종 기능은 stdlib only (Hermes 의 메시징 게이트웨이 등은 미이식 — SDLC 목적과 불일치).
 
 > **localllm 변형 (F015 / d-2)**: Claude Code 가 아니라 **OpenCode + 로컬 LLM(Ollama)** 으로
 > 하네스를 구동하는 PoC 샌드박스 (orch 변형 복사본 + d-2 오버레이). 호스트 어댑터 `opencode.py` 가
@@ -573,7 +578,12 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~9 / F011 신설·F012 확장·F013 MR-8·F015 MR-9 추가).
+**hermes 오버레이** (claude.hermes 에만 — F016 신설):
+- `.claude/bin/session_search.py` (FTS5 세션 검색)
+- `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
+- `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~10 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10 추가).
 
 ---
 
