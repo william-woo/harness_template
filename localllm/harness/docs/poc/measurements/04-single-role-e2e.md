@@ -55,3 +55,43 @@ $ opencode run --agent developer ...
 (측정 04 보정 적용 완료). 멀티스텝 오케스트레이션(G4/G5)은 측정 03b 대로 여전히 14B 한계 — 32B+ 권장.
 
 → d-2 단일역할 작업(developer/reviewer/qa)은 **지금 로컬 14B 로 사용 가능**. (docs/poc/MODEL-GRADES.md)
+→ **단, 아래 후속 데모로 보정됨**: "생성형"은 14B OK, "검증형(reviewer/qa)"은 멀티스텝이라 14B 불안정.
+
+---
+
+## 후속 데모 (2026-06-10) — reviewer 검증형 역할은 14B 불안정 (생성형 ≠ 검증형)
+
+측정 04 직후, 같은 buggy 산출물(developer 가 만든 `slugify.js` — 정규식 `[\\^\w-]` 오타로
+부정 클래스가 풀려 `slugify('Hello World!') → "!"`, assert 2개 모두 실패)을
+**reviewer 에이전트(로컬 14B)** 에게 리뷰시켜 "검증형 단일역할"을 측정.
+
+| 시도 | 시간 | 결과 |
+|---|---|---|
+| 1 | 34s | `src/slugify.js` read + `node` 실행 → **"Assertion failed" ×2 직접 목격** (증거 수집 ✅) / 판정 미합성 |
+| 2 | 6.8s | `/src/slugify.js` **절대경로** 시도 → external_directory 가드 auto-reject → 무산 |
+| 3 | 4.2s | 상대경로 read OK / `node` bash 가 headless 권한 auto-reject → 무산 |
+| 4 | **5min 타임아웃** | 출력 0바이트 — 완전 hang (exit 124) |
+
+→ **4회 중 깔끔한 APPROVED/NEEDS REVISION 판정 0회.** developer(생성형)는 23초에 파일을 만든 반면,
+reviewer 는 한 번도 판정을 못 냄.
+
+### 핵심 발견 — "단일역할"에도 난이도 그라데이션이 있다
+
+| 구분 | 작업 성격 | 홉 수 | 14B |
+|---|---|---|---|
+| **생성형** (developer/architect/designer) | 프롬프트 → 산출 | 1홉 | ✅ (산출물은 "초안", 버그 가능) |
+| **검증형** (reviewer/qa) | read → 실행 → 해석 → 추론 → 판정 | 다홉 | ❌ 측정 03b 의 멀티스텝 한계에 근접 |
+
+검증형은 본질적으로 멀티스텝이라, 단일 에이전트 호출이어도 G4(멀티스텝 값 전달) 성격을 띤다.
+
+### 부수 재현
+- **절대경로 습관(시도 2)**: `/src/...` 로 읽으려다 안전가드 차단 — "상대경로 우선" 스킬 보강이 겨냥한
+  바로 그 문제. AGENTS.md 안내가 있어도 14B 가 지키지 못함.
+- **headless 권한 마찰(시도 3)**: `opencode run`(비대화) 에서 bash(node) 실행이 실행마다 들쭉날쭉
+  auto-reject. 안정 사용엔 OpenCode permission 설정/플러그인 보강 필요 (F017 인접 영역).
+
+### 함의
+로컬 14B 로 "developer 가 짜고 reviewer 가 검증"하는 자가 루프를 돌리려는 그림은 **reviewer 가 약한 고리**.
+→ **하이브리드 권장**: 생성(developer)은 로컬 14B, **검증(reviewer/qa)은 32B+ 또는 Claude Code(메인 하네스)/사람**.
+이는 메인 하네스가 QA passes 게이트를 자동 수치가 아닌 별도 검증으로 둔 설계의 정당성과 일치
+(autoresearch 의 "결과는 shipped improvement 가 아니라 starting hypothesis" 와 같은 정신).
