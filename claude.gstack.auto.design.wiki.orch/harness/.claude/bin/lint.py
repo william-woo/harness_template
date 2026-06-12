@@ -982,7 +982,7 @@ _OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 7 변형 미러 정합 점검 (F011 신설, F012 확장, F013 MR-8 추가).
+    """LINT-MR: 9 변형 미러 정합 점검 (F011 신설, F012 확장, F013 MR-8, F015 MR-9, F016 MR-10).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
     F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
@@ -1462,7 +1462,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (7변형 — F013 MR-8 추가)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (9변형 — F015 MR-9, F016 MR-10 추가)", check_mirror_regression),
 }
 
 

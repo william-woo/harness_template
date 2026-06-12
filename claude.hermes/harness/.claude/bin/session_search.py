@@ -87,7 +87,9 @@ def _parse_progress(path: Path) -> list[dict]:
 
     # 레거시 블록 형식: `[YYYY-MM-DD] <agent>: <제목>` ('===' 구분선 사이)
     # CLAUDE.md 가 두 형식 호환을 명시 — 신규 형식에 안 잡힌 헤더만 보강 수집.
-    pat_old = re.compile(r"^\[([A-Za-z0-9].*?)\]\s*([^:\s][^:]*?):\s*(.+)$", re.MULTILINE)
+    # ts 그룹에 날짜 앵커(\d{4}-\d{2}-\d{2})를 둬 마크다운 링크 `[a](url): ..` 오탐을 배제
+    # (Reviewer SHOULD). 빈 템플릿의 `[YYYY-MM-DD]` 플레이스홀더는 실세션 아님 → 미색인 정상.
+    pat_old = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*([^:\s][^:]*?):\s*(.+)$", re.MULTILINE)
     for m in pat_old.finditer(text):
         if any(b["ts"] == m.group(1).strip() and b["title"] == m.group(3).strip()
                for b in blocks):

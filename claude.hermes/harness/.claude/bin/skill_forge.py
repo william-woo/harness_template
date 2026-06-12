@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+from datetime import date as _date
 from pathlib import Path
 
 
@@ -230,8 +231,10 @@ def cmd_new(args) -> int:
     (skill_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (skill_dir / "references").mkdir(parents=True, exist_ok=True)
     title = name.replace("-", " ").title()
+    # last_improved 기본값은 실행 시점 날짜 (Reviewer SHOULD — 고정값이면 개선 이력 추적 불가)
     content = _SKILL_TEMPLATE.format(
-        name=name, description=desc, title=title, date=args.date or "2026-01-01")
+        name=name, description=desc, title=title,
+        date=args.date or _date.today().isoformat())
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
     print(f"[skill-forge] 생성: {(skill_dir / 'SKILL.md').relative_to(_ROOT)}")
     print("  → 에이전트가 본문(단계별 지침/예시/엣지케이스)을 채우세요.")
@@ -276,6 +279,11 @@ def _bump_metadata(md: Path, key: str, value: str) -> None:
     """SKILL.md frontmatter 의 metadata.<key> 값을 교체/추가한다 (라인 단위 안전 편집)."""
     text = md.read_text(encoding="utf-8")
     fm, body = _split_frontmatter(text)
+    if not fm:
+        # 경계 방어 (Reviewer MUST): frontmatter 없는 파일은 건드리지 않는다
+        # (빈 frontmatter 삽입으로 파일을 오염시키지 않도록 early-return).
+        print(f"[skill-forge] 경고: {md.name} — frontmatter 없음, {key} 갱신 건너뜀")
+        return
     lines = fm.splitlines()
     out, in_meta, replaced = [], False, False
     for ln in lines:
