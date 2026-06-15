@@ -8,7 +8,10 @@
       "Read(*)",
       "Glob(*)",
       "Grep(*)",
-      "MultiEdit(*)"
+      "MultiEdit(*)",
+      "Edit(**)",
+      "Write(**)",
+      "MultiEdit(**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
