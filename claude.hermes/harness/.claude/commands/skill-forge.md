@@ -6,11 +6,17 @@ Hermes Agent 의 "복잡 작업 후 재사용 스킬 자동 생성 + 사용 중 
 ## 사용법
 
 ```bash
-# 새 스킬 scaffold (표준 구조 + frontmatter)
+# 새 스킬 scaffold → draft 에 생성 (승인 전 활성 아님)
 python3 .claude/bin/skill_forge.py new <name> --description "<무엇 + 언제 사용>"
 
-# 누적 학습으로부터 스킬 초안 생성
+# 누적 학습으로부터 스킬 초안 생성 (draft)
 python3 .claude/bin/skill_forge.py from-learning <learning-key>
+
+# ★ 승인 게이트: draft 검증 후 활성화 (.claude/skills/ 로 이동)
+python3 .claude/bin/skill_forge.py approve <name>
+
+# 활성 스킬 개선: draft 사본 생성 → 개선 → approve 로 교체 (직접수정 금지)
+python3 .claude/bin/skill_forge.py improve <name>
 
 # agentskills.io 표준 검증 (미지정 시 전체 스킬)
 python3 .claude/bin/skill_forge.py validate [<skill-dir>]
@@ -18,8 +24,15 @@ python3 .claude/bin/skill_forge.py validate [<skill-dir>]
 # self-improve 추적
 python3 .claude/bin/skill_forge.py record-use <name>      # 사용 1회 기록
 python3 .claude/bin/skill_forge.py nudge --threshold 5    # 자주 쓰인 스킬 = 개선 후보
-python3 .claude/bin/skill_forge.py list                   # 목록 + uses/version
+python3 .claude/bin/skill_forge.py list                   # 활성 + draft 목록
 ```
+
+## 승인 게이트 (ADR-010 결정 7) — 중요
+
+스킬은 컨텍스트에 상시 로드되고 코드 생성을 지휘하므로 **자동 생성을 그대로 활성화하지 않는다**:
+- **생성/개선은 자동** → `.claude/state/skill-drafts/<name>/` (Claude Code 미로드 = 컨텍스트 미점유)
+- **활성화는 명시 승인** → `approve` 가 검증 후 `.claude/skills/` 로 이동해야 비로소 로드/사용됨
+- 활성 스킬 직접 수정 금지 — `improve` 로 draft 사본을 만들어 고친 뒤 `approve`
 
 ## 워크플로 (자동 생성 + self-improve 루프)
 

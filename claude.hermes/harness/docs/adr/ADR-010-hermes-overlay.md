@@ -67,6 +67,26 @@ hermes 오버레이(`session_search.py`, `skill_forge.py`, `commands/session-sea
 `commands/skill-forge.md`)는 **claude.hermes 에만** 존재해야 한다. 다른 8 변형에 누수 시 BLOCK.
 `lint.py check --only=LINT-MR` (MR-10) 가 자동 가드.
 
+### 결정 7 — 스킬 활성화 승인 게이트: **생성=자동(draft), 활성화=명시 승인(approve)**
+
+스킬은 다른 산출물과 위험 프로파일이 다르다: (a) progressive disclosure 가 모든 스킬의
+name+description 을 **시작 시 항상 로드** → junk 스킬이 컨텍스트 예산을 영구 점유, (b) 스킬은
+이후 코드 생성을 **지휘** → 잘못된 스킬은 blast radius 가 크다 (14B "plausible-but-buggy",
+autoresearch "결과는 가설이지 배포물 아님" 교훈). 따라서 **자동 생성을 그대로 활성화하면 안 된다.**
+
+게이트는 "생성"이 아니라 **"활성화"** 에 둔다 (무마찰 초안 유지 + 고위험 단계만 승인):
+
+| 단계 | 위치 | 자동? |
+|---|---|---|
+| 생성/개선 (draft) | `.claude/state/skill-drafts/<name>/` | ✅ 자동 (Claude Code 미로드 → 컨텍스트 미점유) |
+| 활성화 (approve) | `.claude/skills/<name>/` 로 이동 | ❌ **명시 승인 필요** (`skill_forge.py approve`) |
+
+- `new`/`from-learning` → draft 에만 생성. `approve` 가 검증(FAIL 시 거부) 후 활성 경로로 이동.
+- self-improve 도 동일: `improve` 가 활성 스킬을 draft 로 복사 → 개선 → `approve` 로 교체
+  (활성 스킬 직접 수정 금지).
+- autonomous 모드 정합: 초안은 workdir 내부라 자동(규칙 #1), 활성화는 의도적 promote 단계.
+- draft 디렉토리는 gitignore (승인 전 임시).
+
 ## 대안 검토
 
 | 옵션 | 장점 | 단점 |

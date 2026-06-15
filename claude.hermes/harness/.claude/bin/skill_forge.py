@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import date as _date
 from pathlib import Path
@@ -41,6 +42,9 @@ def _project_root() -> Path:
 
 _ROOT = _project_root()
 _SKILLS = _ROOT / ".claude" / "skills"
+# 승인 게이트 (ADR-010 결정 7): 자동 생성·개선은 draft 로만, 활성화는 approve 로만.
+# draft 는 .claude/skills/ 밖이라 Claude Code 가 로드하지 않음 → 컨텍스트 미점유.
+_DRAFTS = _ROOT / ".claude" / "state" / "skill-drafts"
 
 _NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
@@ -214,32 +218,100 @@ metadata:
 
 
 def cmd_new(args) -> int:
-    """agentskills.io 표준에 맞는 새 스킬 폴더를 scaffold 한다."""
+    """
+    agentskills.io 표준에 맞는 새 스킬을 **draft 로** scaffold 한다 (ADR-010 결정 7).
+
+    자동 생성은 활성 스킬 경로(.claude/skills/)가 아니라 draft 경로
+    (.claude/state/skill-drafts/)에 만든다 → Claude Code 가 로드하지 않아 컨텍스트
+    미점유. 활성화하려면 `skill_forge.py approve <name>` (승인 게이트) 를 거쳐야 한다.
+    """
     name = args.name.strip()
     if not _NAME_RE.match(name) or len(name) > 64:
         print(f"[skill-forge] ❌ 잘못된 name '{name}' — 소문자·숫자·하이픈만, "
               "선·후행/연속 하이픈 금지, 64자 이하")
         return 1
-    skill_dir = _SKILLS / name
-    if skill_dir.exists() and not args.force:
-        print(f"[skill-forge] 이미 존재: {skill_dir.relative_to(_ROOT)} (--force 로 덮어쓰기)")
+    if (_SKILLS / name).exists():
+        print(f"[skill-forge] ⚠️ 이미 활성 스킬 존재: .claude/skills/{name} "
+              "— 개선하려면 `improve` 사용")
+        return 1
+    draft_dir = _DRAFTS / name
+    if draft_dir.exists() and not args.force:
+        print(f"[skill-forge] draft 이미 존재: {draft_dir.relative_to(_ROOT)} (--force 로 덮어쓰기)")
         return 1
     desc = (args.description or
             f"{name} 작업을 수행하는 스킬. {name} 관련 요청 시 사용한다.").strip()
     if len(desc) > 1024:
         desc = desc[:1021] + "..."
-    (skill_dir / "scripts").mkdir(parents=True, exist_ok=True)
-    (skill_dir / "references").mkdir(parents=True, exist_ok=True)
+    (draft_dir / "scripts").mkdir(parents=True, exist_ok=True)
+    (draft_dir / "references").mkdir(parents=True, exist_ok=True)
     title = name.replace("-", " ").title()
     # last_improved 기본값은 실행 시점 날짜 (Reviewer SHOULD — 고정값이면 개선 이력 추적 불가)
     content = _SKILL_TEMPLATE.format(
         name=name, description=desc, title=title,
         date=args.date or _date.today().isoformat())
-    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
-    print(f"[skill-forge] 생성: {(skill_dir / 'SKILL.md').relative_to(_ROOT)}")
+    (draft_dir / "SKILL.md").write_text(content, encoding="utf-8")
+    print(f"[skill-forge] draft 생성: {(draft_dir / 'SKILL.md').relative_to(_ROOT)}")
     print("  → 에이전트가 본문(단계별 지침/예시/엣지케이스)을 채우세요.")
-    errs = _validate_skill(skill_dir)
+    errs = _validate_skill(draft_dir)
     print(f"  표준 검증: {'PASS' if not errs else 'FAIL — ' + '; '.join(errs)}")
+    print(f"  활성화: 검토 후 `skill_forge.py approve {name}` (승인 게이트)")
+    return 0
+
+
+def cmd_approve(args) -> int:
+    """
+    draft 스킬을 검증 후 활성 경로(.claude/skills/)로 이동해 활성화한다 (승인 게이트).
+
+    ADR-010 결정 7: 자동 생성/개선은 draft 까지만 자동, **활성화는 이 명시적 단계**로만.
+    표준 검증 FAIL 이면 활성화하지 않는다 (--force 로 강제 가능).
+    """
+    name = args.name.strip()
+    draft_dir = _DRAFTS / name
+    if not (draft_dir / "SKILL.md").exists():
+        print(f"[skill-forge] draft 없음: .claude/state/skill-drafts/{name}")
+        return 1
+    errs = _validate_skill(draft_dir)
+    if errs and not args.force:
+        print(f"[skill-forge] ❌ 표준 검증 FAIL — 활성화 거부 (--force 로 강제):")
+        for e in errs:
+            print(f"      - {e}")
+        return 1
+    active_dir = _SKILLS / name
+    if active_dir.exists() and not args.force:
+        print(f"[skill-forge] ⚠️ 활성 스킬 이미 존재: .claude/skills/{name} (--force 로 교체)")
+        return 1
+    if active_dir.exists():
+        shutil.rmtree(active_dir)
+    _SKILLS.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(draft_dir), str(active_dir))
+    print(f"[skill-forge] ✅ 활성화: .claude/skills/{name} (draft → 활성)")
+    print("  이제 Claude Code 가 이 스킬을 로드한다 (progressive disclosure).")
+    return 0
+
+
+def cmd_improve(args) -> int:
+    """
+    활성 스킬을 draft 로 복사해 안전하게 개선하도록 한다 (ADR-010 결정 7 — 개선도 게이트).
+
+    self-improve(nudge) 가 가리키는 스킬을 직접 고치지 않고, draft 사본에서 개선 후
+    `approve` 로 교체한다. 활성 스킬의 검증 안 된 변경을 방지.
+    """
+    name = args.name.strip()
+    active = _SKILLS / name
+    if not (active / "SKILL.md").exists():
+        print(f"[skill-forge] 활성 스킬 없음: .claude/skills/{name}")
+        return 1
+    draft_dir = _DRAFTS / name
+    if draft_dir.exists() and not args.force:
+        print(f"[skill-forge] draft 이미 존재: {draft_dir.relative_to(_ROOT)} (--force 로 덮어쓰기)")
+        return 1
+    if draft_dir.exists():
+        shutil.rmtree(draft_dir)
+    _DRAFTS.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(active, draft_dir)
+    print(f"[skill-forge] 개선용 draft 생성: .claude/state/skill-drafts/{name}")
+    print("  → 에이전트가 draft 본문 개선 + metadata.version 증가 후 "
+          f"`skill_forge.py approve {name}` 로 교체.")
     return 0
 
 
@@ -342,24 +414,33 @@ def cmd_nudge(args) -> int:
     print(f"[skill-forge] self-improve 후보 (uses>={args.threshold}):\n")
     for name, uses, ver, last in sorted(flagged, key=lambda x: -x[1]):
         print(f"  ● {name}: uses={uses} v{ver} (last_improved={last})")
-    print("\n  → 에이전트가 본문을 개선 후 metadata.version 증가 + last_improved 갱신 권장.")
+    print("\n  → `improve <name>` 로 draft 사본 생성 → 본문 개선 + metadata.version 증가 "
+          "→ `approve <name>` 로 교체 (활성 스킬 직접 수정 금지, ADR-010 결정 7).")
     return 0
 
 
-def cmd_list(args) -> int:
-    """스킬 목록 + 사용 횟수/버전을 표시한다."""
-    if not _SKILLS.is_dir():
-        print("[skill-forge] 스킬 디렉토리 없음")
-        return 0
-    print("[skill-forge] 스킬 목록:")
-    for d in sorted(_SKILLS.iterdir()):
-        if not d.is_dir() or not (d / "SKILL.md").exists():
-            continue
+def _list_dir(label: str, base: Path) -> None:
+    """활성/draft 디렉토리의 스킬 목록을 출력한다."""
+    if not base.is_dir():
+        return
+    rows = [d for d in sorted(base.iterdir())
+            if d.is_dir() and (d / "SKILL.md").exists()]
+    if not rows:
+        return
+    print(f"  [{label}]")
+    for d in rows:
         fm, _ = _split_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
         data = _parse_frontmatter(fm)
         meta = data.get("metadata", {})
-        print(f"  ● {d.name:22} uses={meta.get('uses','0'):>3} "
-              f"v{meta.get('version','?'):4} — {str(data.get('description',''))[:60]}")
+        print(f"    ● {d.name:20} uses={meta.get('uses','0'):>3} "
+              f"v{meta.get('version','?'):4} — {str(data.get('description',''))[:55]}")
+
+
+def cmd_list(args) -> int:
+    """활성 스킬 + 대기 중 draft 목록을 표시한다."""
+    print("[skill-forge] 스킬 목록:")
+    _list_dir("활성 (.claude/skills/)", _SKILLS)
+    _list_dir("draft (승인 대기 — approve 필요)", _DRAFTS)
     return 0
 
 
@@ -372,7 +453,7 @@ def main() -> None:
     p_new.add_argument("name", help="스킬 이름 (소문자·하이픈, 디렉토리명=name)")
     p_new.add_argument("--description", help="무엇+언제 (1-1024자)")
     p_new.add_argument("--force", action="store_true", help="기존 덮어쓰기")
-    p_new.add_argument("--date", help="last_improved 날짜 (기본 2026-01-01)")
+    p_new.add_argument("--date", help="last_improved 날짜 (기본: 오늘)")
 
     p_fl = sub.add_parser("from-learning", help="learnings.jsonl 항목으로 스킬 초안 생성")
     p_fl.add_argument("key", help="learnings.jsonl 의 key")
@@ -388,12 +469,21 @@ def main() -> None:
     p_nudge = sub.add_parser("nudge", help="self-improve 후보 표시")
     p_nudge.add_argument("--threshold", type=int, default=5, help="uses 임계치 (기본 5)")
 
-    sub.add_parser("list", help="스킬 목록 + 사용/버전")
+    p_app = sub.add_parser("approve", help="draft → 활성 스킬로 이동 (승인 게이트)")
+    p_app.add_argument("name")
+    p_app.add_argument("--force", action="store_true", help="검증 FAIL/기존 활성 무시하고 강제")
+
+    p_imp = sub.add_parser("improve", help="활성 스킬을 draft 로 복사해 개선 (직접수정 금지)")
+    p_imp.add_argument("name")
+    p_imp.add_argument("--force", action="store_true", help="기존 draft 덮어쓰기")
+
+    sub.add_parser("list", help="활성 + draft 스킬 목록")
 
     args = parser.parse_args()
     handlers = {
         "new": cmd_new, "from-learning": cmd_from_learning, "validate": cmd_validate,
         "record-use": cmd_record_use, "nudge": cmd_nudge, "list": cmd_list,
+        "approve": cmd_approve, "improve": cmd_improve,
     }
     if args.command is None:
         parser.print_help()

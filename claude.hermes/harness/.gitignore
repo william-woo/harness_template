@@ -65,6 +65,9 @@ htmlcov/
 # 세션 검색 FTS5 색인 (claude.hermes — 로컬 캐시, 언제든 재색인. ADR-010)
 .claude/state/sessions.db
 
+# 스킬 draft (claude.hermes — 승인 전 임시. approve 로 .claude/skills/ 이동. ADR-010 결정 7)
+.claude/state/skill-drafts/
+
 # Wiki 런타임 산출물 (wiki.py graph --output 생성 — git 제외)
 wiki/graph.md
 
