@@ -14,10 +14,16 @@
 
 이 작업 환경은 자율 진행 정책을 채택합니다. 3 규칙이 핵심:
 
-### 규칙 #1 — 작업 디렉토리 내부는 자율 진행
+### 규칙 #1 — 작업 디렉토리 내부는 자율 진행 (단, 파일 삭제는 승인)
 `$CLAUDE_PROJECT_DIR` 하위의 모든 액션은 **사용자 승인 요청 없이 진행**됩니다.
-`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(*)`, `Write(*)` 광범위
-패턴이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
+`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(**)`, `Write(**)`,
+`MultiEdit(**)` 광범위 패턴(중첩 경로 포함)이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
+
+> **예외 — 파일 삭제는 승인 필요**: `permissions.ask` 에 `rm`/`rmdir`/`unlink`/`shred`/
+> `git clean`/`trash`/`find … -delete` 를 등재해, 자동 허용을 오버라이드하고 **삭제 명령은
+> 프롬프트**가 뜬다 (precedence: deny > ask > allow). `rm -rf /`·`~`·`$HOME` 류는 deny 로 완전 차단.
+> 선언 규칙이 못 잡는 삭제 경로(예: `python3` 스크립트 내 삭제)는 에이전트가 **행동 규칙으로
+> 삭제 전 확인**한다.
 
 ### 규칙 #2 — 모호한 경우 에이전트 간 검토
 판단이 불확실한 액션은 사용자에게 묻지 말고 **Gatekeeper 에이전트** 호출 →
