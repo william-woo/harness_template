@@ -574,7 +574,7 @@ F012 `wiki.py lint` 는 vault 정합성 (고아 노드 / 끊긴 wikilink / stale
 | WIKI-ORPHAN | 고아 노드 (다른 노드에서 참조 0) | 모든 노드 파일을 순회 → `[[wikilink]]` + frontmatter `related` 그래프 구성 → in-degree 0 노드 추출 | CONCERN (BLOCK 아님 — 신규 노드는 일시적 고아 정상) |
 | WIKI-DEAD-LINK | 끊긴 wikilink | 본문 `[[X]]` 추출 → X.md 파일 존재 여부 확인 | BLOCK (끊긴 링크는 오류) |
 | WIKI-STALE | stale 페이지 (frontmatter `status: stale` 또는 90 일 이상 미수정 + source 변경) | frontmatter `status` 직접 검사 + git log 로 vault 외부 source 의 최근 변경 시각 비교 | CONCERN |
-| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | INFO (BLOCK 아님 — 메타 불완전이지 그래프 깨짐 아님) |
+| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | BLOCK |
 
 **근거**:
 
@@ -1018,3 +1018,27 @@ CLAUDE.md 갱신 분량 (세션 3):
 ---
 
 *작성: architect 에이전트 | 날짜: 2026-06-03 | 상태: Proposed*
+
+---
+
+## 개정 (2026-06-16) — vault 데이터 보존(retention) 운영정책
+
+초기 설계엔 데이터 증가 상한·정리 정책이 없어 두 곳이 무한 증가 가능했다. 다음을 추가한다:
+
+### A. log.md 로테이션 (무한 누적 차단)
+`_append_log` 은 매 ingest/query/lint/prune 마다 항목을 prepend 하므로 무한 증가했다.
+→ 항목이 **200개 초과 시 오래된 항목을 `wiki/log-archive.md` 로 자동 이동**, log.md 는 최근
+100개만 유지 (`_LOG_CAP=200` / `_LOG_KEEP=100`). claude-progress.txt 아카이브 패턴과 동일.
+
+### B. `wiki prune` — dangling 노드 정리
+원본(ADR/feature/source-file)을 삭제해도 vault 노드는 남았다 (lint 는 탐지만, 삭제 안 함).
+→ `prune` 추가: 노드 frontmatter `source_ref` 의 베이스 경로가 프로젝트에 없으면 dangling 으로
+판정해 정리. **기본 미리보기(dry-run), `--apply` 만 실제 삭제** — autonomous "삭제=승인" 정책과
+일치(삭제는 명시 단계). 삭제 시 log 에 기록.
+
+### 노드 증가 특성 (명시)
+ingest 는 산출물 1:1 멱등 노드라 폭증은 없으나 **상한도 없다** — 산출물·learning 이 늘면 선형
+증가. 장기 프로젝트에서 learning 노드가 누적되면 필요 시 `prune` + 수동 아카이브로 관리한다.
+
+> 적용 변형: wiki 오버레이 보유 4 변형 (wiki / orch / localllm / claude.hermes).
+> 운영정책 A/B 는 wiki.py 에 구현, `/project:wiki prune` 으로 노출.

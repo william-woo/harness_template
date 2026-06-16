@@ -288,8 +288,29 @@ def _build_index_content(vault_dir: Path) -> str:
     return "\n".join(lines)
 
 
+# 로그 로테이션 정책 (운영정책 A — 무한 누적 방지)
+# log.md 항목이 _LOG_CAP 초과 시 오래된 항목을 log-archive.md 로 이동, 최근 _LOG_KEEP 만 유지.
+_LOG_CAP = 200
+_LOG_KEEP = 100
+_LOG_HEADER = (
+    "# Wiki 변경 로그\n\n"
+    "> F009 prefix 컨벤션: `## [YYYY-MM-DD HH:MM] <action> | <요약>`\n\n"
+    "> 200개 항목 초과 시 오래된 항목은 `log-archive.md` 로 자동 이동 (ADR-007 운영정책).\n\n"
+    "---\n"
+)
+
+
+def _split_log_entries(body: str) -> list[str]:
+    """로그 본문을 `## [` 항목 단위로 분리한다 (각 항목은 선행 개행 포함)."""
+    parts = re.split(r"(?=\n## \[)", body)
+    return [p for p in parts if p.strip()]
+
+
 def _append_log(vault_dir: Path, action: str, summary: str) -> None:
-    """wiki/log.md 에 항목을 prepend (F009 prefix 컨벤션).
+    """wiki/log.md 에 항목을 prepend 하고, 상한 초과 시 오래된 항목을 아카이브한다.
+
+    운영정책 A: 항목 수가 _LOG_CAP 을 넘으면 최근 _LOG_KEEP 만 log.md 에 남기고
+    나머지(오래된 것)는 wiki/log-archive.md 로 이동 → log.md 무한 증가 방지.
 
     Args:
         vault_dir: vault 루트 경로
@@ -300,25 +321,43 @@ def _append_log(vault_dir: Path, action: str, summary: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     new_entry = f"\n## [{ts}] {action} | {summary}\n"
 
+    header = _LOG_HEADER
+    body = ""
     if log_path.exists():
         existing = log_path.read_text(encoding="utf-8")
-        # 헤더 라인 유지 + 새 항목 삽입
         header_end = existing.find("\n---\n")
         if header_end != -1:
             header = existing[: header_end + 5]
             body = existing[header_end + 5:]
-            content = header + new_entry + body
         else:
-            content = existing + new_entry
-    else:
-        content = (
-            "# Wiki 변경 로그\n\n"
-            "> F009 prefix 컨벤션: `## [YYYY-MM-DD HH:MM] <action> | <요약>`\n\n"
-            "---\n"
-            + new_entry
-        )
+            body = "\n" + existing
+    body = new_entry + body  # 신규 항목을 맨 위(최신)에
 
-    log_path.write_text(content, encoding="utf-8")
+    # 로테이션: 항목 수 상한 초과 시 오래된 항목 아카이브
+    entries = _split_log_entries(body)
+    if len(entries) > _LOG_CAP:
+        keep, archived = entries[:_LOG_KEEP], entries[_LOG_KEEP:]
+        _archive_log(vault_dir, archived)
+        body = "".join(keep)
+
+    log_path.write_text(header + body, encoding="utf-8")
+
+
+def _archive_log(vault_dir: Path, archived_entries: list[str]) -> None:
+    """오래된 로그 항목을 wiki/log-archive.md 에 prepend 한다 (최신 아카이브가 위)."""
+    if not archived_entries:
+        return
+    arc_path = vault_dir / "log-archive.md"
+    arc_header = "# Wiki 변경 로그 — 아카이브\n\n> log.md 에서 로테이션된 오래된 항목.\n\n---\n"
+    block = "".join(archived_entries)
+    if arc_path.exists():
+        existing = arc_path.read_text(encoding="utf-8")
+        he = existing.find("\n---\n")
+        if he != -1:
+            arc_path.write_text(
+                existing[: he + 5] + block + existing[he + 5:], encoding="utf-8")
+            return
+    arc_path.write_text(arc_header + block, encoding="utf-8")
 
 
 # ─── ingest: feature_list.json → nodes/features/ ─────────────────────────────
@@ -1724,10 +1763,69 @@ def _build_parser() -> argparse.ArgumentParser:
         help="출력 파일 경로 (지정 시 파일 저장, 기본: stdout)",
     )
 
+    # prune (운영정책 B — dangling 노드 정리)
+    prune_p = sub.add_parser(
+        "prune", help="source 원본이 사라진 dangling 노드 정리 (기본 미리보기)")
+    prune_p.add_argument(
+        "--apply", action="store_true", default=False,
+        help="실제 삭제 (미지정 시 미리보기만 — 삭제=명시 단계)")
+
     # self
     self_p = sub.add_parser("self", help="의존성·환경 점검 (graceful degrade 상태)")
 
     return parser
+
+
+def cmd_prune(args) -> int:
+    """source_ref 원본이 사라진 dangling 노드를 정리한다 (운영정책 B).
+
+    기본은 **미리보기(dry-run)** — 후보만 출력하고 삭제하지 않는다.
+    `--apply` 지정 시에만 실제 삭제 (삭제=명시 단계, "삭제 승인" 정책과 일치).
+    판정: 노드 frontmatter 의 source_ref 베이스 경로가 프로젝트에 더 이상 존재하지 않으면 dangling.
+
+    Returns:
+        int: exit code (항상 0 — graceful)
+    """
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    if not vault_dir.exists():
+        print(f"[wiki prune] vault 없음: {vault_dir}")
+        return 0
+    all_nodes = _collect_all_nodes(vault_dir)
+    dangling: list[tuple[str, Path, str]] = []
+    for node_id, node_path in all_nodes.items():
+        try:
+            fm = _parse_frontmatter(node_path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        src = fm.get("source_ref", "")
+        if not src:
+            continue  # vault-내부 노드(index/log 등)는 source_ref 없음 → 대상 아님
+        base = src.split("#")[0]
+        if not (_PROJECT_ROOT / base).exists():
+            dangling.append((node_id, node_path, src))
+
+    if not dangling:
+        print("[wiki prune] dangling 노드 없음 — 모든 source_ref 원본이 존재합니다 ✅")
+        return 0
+
+    apply = getattr(args, "apply", False)
+    head = "삭제" if apply else "미리보기 (실제 삭제하려면 --apply)"
+    print(f"[wiki prune] source 원본이 사라진 노드 {len(dangling)}개 — {head}\n")
+    removed = 0
+    for node_id, node_path, src in dangling:
+        rel = node_path.relative_to(vault_dir)
+        if apply:
+            node_path.unlink()
+            removed += 1
+            print(f"  삭제: {rel}  (원본 없음: {src})")
+        else:
+            print(f"  후보: {rel}  (원본 없음: {src})")
+    if apply:
+        _append_log(vault_dir, "prune", f"{removed}개 dangling 노드 삭제")
+        print(f"\n[wiki prune] {removed}개 삭제 완료 — `wiki lint` 로 정합성 재확인 권장.")
+    else:
+        print("\n[wiki prune] 미리보기만 수행 (파일 변경 없음). 삭제: `wiki prune --apply`")
+    return 0
 
 
 def main() -> int:
@@ -1754,6 +1852,8 @@ def main() -> int:
             return cmd_graph(args)
         elif args.command == "self":
             return cmd_self(args)
+        elif args.command == "prune":
+            return cmd_prune(args)
         else:
             parser.print_help()
             return 0

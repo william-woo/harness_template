@@ -23,6 +23,8 @@
 /project:wiki graph                          # mermaid 텍스트 그래프 (기본)
 /project:wiki graph --format=dot             # DOT 텍스트 그래프
 /project:wiki graph --output=wiki/graph.md   # 파일 저장
+/project:wiki prune                          # source 원본이 사라진 dangling 노드 — 미리보기
+/project:wiki prune --apply                  # dangling 노드 실제 삭제 (삭제=명시 단계)
 /project:wiki self                           # 의존성·graceful degrade 상태 점검
 
 # 외부 도구 설치 (선택 — 검색·시각화 향상)
@@ -44,7 +46,7 @@ python3 .claude/bin/wiki.py self
 
 ---
 
-## 5 서브커맨드
+## 6 서브커맨드
 
 | 서브커맨드 | 동작 | LLM 호출 |
 |---|---|---|
@@ -52,7 +54,16 @@ python3 .claude/bin/wiki.py self
 | **query `<검색어>`** | vault 검색. qmd 있으면 BM25, 없으면 stdlib grep fallback (graceful degrade) | 없음 |
 | **lint** | vault 정합성 점검 (WIKI-ORPHAN / WIKI-DEAD-LINK / WIKI-STALE / WIKI-FRONTMATTER) | 없음 |
 | **graph** | vault 그래프를 mermaid (기본) 또는 DOT / JSON 텍스트로 출력 | 없음 |
+| **prune** | source_ref 원본이 사라진 dangling 노드 정리. 기본 미리보기, `--apply` 시 삭제 | 없음 |
 | **self** | 셀프 dry-run (vault 디렉토리 존재 / 외부 도구 감지 / graceful degrade 상태) | 없음 |
+
+## 운영정책 — 무한 증가 방지 (ADR-007)
+
+- **log.md 로테이션**: 변경 로그가 200개 항목 초과 시 오래된 항목을 `wiki/log-archive.md` 로
+  자동 이동, log.md 는 최근 100개만 유지 → 무한 증가 차단 (claude-progress.txt 아카이브 패턴).
+- **prune**: 원본(ADR/feature/source-file)이 삭제되면 vault 에 dangling 노드가 남는다.
+  `prune` 으로 정리. **기본 미리보기**, 삭제는 `--apply` 명시 단계 (autonomous "삭제=승인" 정책 일치).
+- **노드 멱등성**: ingest 는 산출물 1:1 노드 (재실행 중복 X). 노드 수는 산출물·learning 수에 비례.
 
 ---
 
