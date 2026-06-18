@@ -1042,3 +1042,29 @@ ingest 는 산출물 1:1 멱등 노드라 폭증은 없으나 **상한도 없다
 
 > 적용 변형: wiki 오버레이 보유 4 변형 (wiki / orch / localllm / claude.hermes).
 > 운영정책 A/B 는 wiki.py 에 구현, `/project:wiki prune` 으로 노출.
+
+---
+
+## 개정 (2026-06-19) — agent-driven 의미 추출 `enrich` (F017)
+
+기존 ingest/graph 의 엣지는 **식별자 패턴**(FXXX/ADR-NNN/[[wikilink]]) 기반이라, 문서 내용의
+**의미 관계**는 잡지 못했다. 카파시 LLM Wiki 패턴(LLM 이 소스를 읽어 개념·관계를 점진 컴파일)의
+의미 그래프를 `enrich` 로 추가한다.
+
+### LLM 접근 = agent-driven (helper 는 LLM 비호출)
+사용자 결정: 4개 옵션(에이전트주도 / 로컬LLM / 클라우드API) 중 **에이전트 주도** 채택.
+- `enrich prepare <doc>` → 문서내용 + 추출 프롬프트(JSON 스키마) 출력
+- 세션 에이전트(LLM)가 concepts/relations JSON 생성 (이 단계가 "LLM")
+- `enrich apply <doc> --json <f>` → 스키마 검증 후 **concept 노드 + 라벨 의미 엣지** 결정론 생성
+- **근거**: skill_forge 와 동일 패턴(헬퍼=결정론/에이전트=LLM). stdlib only → 무인증(#3-A 회피)·
+  무외부의존성·전 호스트 호환. 클라우드 API 안은 API키 인증경계+외부의존성+비용으로 기각.
+
+### 산출
+- 신규 노드 타입 `concept` (`wiki/concepts/<slug>.md`), `_collect_all_nodes`/graph type_order 에 등록.
+- 관계는 `related` 엣지 + `## 관계` 섹션(라벨 보존). 멱등(created 보존).
+- **부수 수정**: mermaid/DOT 그래프가 비-ASCII(한글) 노드 ID 를 `__` 로 뭉개 충돌하던 버그 →
+  안정적 ASCII alias(n0,n1..) + 실제 라벨 표시로 수정 (한글 concept 정상 렌더).
+
+### 한계 (정직)
+- 무인 자동 아님 — 추출 단계에 에이전트가 루프에 있어야 함.
+- PDF/docx 직접 미지원 (md 변환 후 사용). graph json 은 단순 노드/엣지 (카파시식 JSON-LD 아님 — 후속 옵션).

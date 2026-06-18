@@ -1172,7 +1172,7 @@ def _collect_all_nodes(vault_dir: Path) -> dict[str, Path]:
         dict: {node_id: 파일 경로}
     """
     nodes: dict[str, Path] = {}
-    node_dirs = ["features", "adrs", "learnings", "pages", "sources"]
+    node_dirs = ["features", "adrs", "learnings", "pages", "sources", "concepts"]
     for nd in node_dirs:
         d = vault_dir / nd
         if not d.exists():
@@ -1473,25 +1473,27 @@ def cmd_graph(args: argparse.Namespace) -> int:
     if graph_format == "mermaid":
         lines = ["graph LR"]
 
+        # 노드 ID → 안정적 ASCII alias (n0, n1, ...). 비-ASCII(한글) ID 충돌·깨짐 방지.
+        # 실제 ID 는 대괄호 라벨로 표시 (mermaid 라벨은 비-ASCII 허용).
+        alias = {nid: f"n{i}" for i, nid in enumerate(sorted(all_used_ids))}
+
         # subgraph 로 타입 그룹핑
-        type_order = ["feature", "adr", "learning", "page", "source", "unknown"]
+        type_order = ["feature", "adr", "learning", "page", "source", "concept", "unknown"]
         for node_type in type_order:
             ids = type_nodes.get(node_type, [])
             if not ids:
                 continue
-            # mermaid subgraph: 특수문자 이스케이프
             safe_type = node_type.replace("-", "_")
             lines.append(f'  subgraph {safe_type}["{node_type}"]')
             for nid in sorted(ids):
-                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", nid)
-                lines.append(f'    {safe_id}["{nid}"]')
+                label = nid.replace('"', "'")
+                lines.append(f'    {alias[nid]}["{label}"]')
             lines.append("  end")
 
-        # 엣지
+        # 엣지 (alias 사용)
         for from_id, to_id in edges:
-            safe_from = re.sub(r"[^A-Za-z0-9_-]", "_", from_id)
-            safe_to = re.sub(r"[^A-Za-z0-9_-]", "_", to_id)
-            lines.append(f"  {safe_from} --> {safe_to}")
+            if from_id in alias and to_id in alias:
+                lines.append(f"  {alias[from_id]} --> {alias[to_id]}")
 
         graph_text = "\n".join(lines)
 
@@ -1516,12 +1518,16 @@ def cmd_graph(args: argparse.Namespace) -> int:
             "learning": "#7BC67E",
             "page": "#B39DDB",
             "source": "#EF9A9A",
+            "concept": "#80CBC4",
             "unknown": "#CFD8DC",
         }
 
+        # 노드 ID → 안정적 ASCII alias (한글 ID 충돌 방지, 실제 ID 는 label 로)
+        alias = {nid: f"n{i}" for i, nid in enumerate(sorted(all_used_ids))}
+
         dot_lines = ['digraph wiki {', '  rankdir=LR;', '  node [shape=box, style=filled];']
 
-        for node_type in ["feature", "adr", "learning", "page", "source", "unknown"]:
+        for node_type in ["feature", "adr", "learning", "page", "source", "concept", "unknown"]:
             ids = type_nodes.get(node_type, [])
             if not ids:
                 continue
@@ -1529,15 +1535,14 @@ def cmd_graph(args: argparse.Namespace) -> int:
             dot_lines.append(f'  // {node_type}')
             dot_lines.append(f'  {{ node [fillcolor="{color}"]')
             for nid in sorted(ids):
-                safe_id = re.sub(r"[^A-Za-z0-9_]", "_", nid)
-                dot_lines.append(f'    {safe_id} [label="{nid}"];')
+                label = nid.replace('"', "'")
+                dot_lines.append(f'    {alias[nid]} [label="{label}"];')
             dot_lines.append("  }")
 
         dot_lines.append("")
         for from_id, to_id in edges:
-            safe_from = re.sub(r"[^A-Za-z0-9_]", "_", from_id)
-            safe_to = re.sub(r"[^A-Za-z0-9_]", "_", to_id)
-            dot_lines.append(f"  {safe_from} -> {safe_to};")
+            if from_id in alias and to_id in alias:
+                dot_lines.append(f"  {alias[from_id]} -> {alias[to_id]};")
 
         dot_lines.append("}")
         graph_text = "\n".join(dot_lines)
@@ -1763,6 +1768,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="출력 파일 경로 (지정 시 파일 저장, 기본: stdout)",
     )
 
+    # enrich (F017 — agent-driven 의미 추출 지식그래프)
+    enrich_p = sub.add_parser(
+        "enrich", help="LLM 의미 추출 — 문서 내용에서 개념/관계 그래프 (agent-driven)")
+    enrich_p.add_argument("enrich_action", choices=["prepare", "apply"],
+                          help="prepare: 추출 프롬프트 출력 / apply: 추출 JSON 적용")
+    enrich_p.add_argument("source", nargs="?", help="문서 경로 (prepare/apply 공통)")
+    enrich_p.add_argument("--json", dest="json", default=None,
+                          help="apply: 에이전트가 만든 추출 JSON 파일 경로")
+
     # prune (운영정책 B — dangling 노드 정리)
     prune_p = sub.add_parser(
         "prune", help="source 원본이 사라진 dangling 노드 정리 (기본 미리보기)")
@@ -1774,6 +1788,141 @@ def _build_parser() -> argparse.ArgumentParser:
     self_p = sub.add_parser("self", help="의존성·환경 점검 (graceful degrade 상태)")
 
     return parser
+
+
+_ENRICH_SCHEMA = """{
+  "source": "<문서 제목 또는 핵심 주제>",
+  "concepts": [
+    {"label": "개념명 (짧게)", "summary": "이 개념이 무엇인지 1~2문장"}
+  ],
+  "relations": [
+    {"from": "개념A", "to": "개념B", "label": "관계 설명 (예: 의존한다 / 구성요소 / 대안)"}
+  ]
+}"""
+
+
+def cmd_enrich(args) -> int:
+    """LLM 의미 추출(agent-driven) — 문서 내용에서 개념/관계 지식그래프를 만든다 (F017).
+
+    하네스 패턴(헬퍼=결정론 / 에이전트=LLM): 헬퍼는 LLM 을 직접 호출하지 않는다.
+      prepare: 문서 내용 + 추출 프롬프트(JSON 스키마) 를 출력 → 세션 에이전트가 JSON 생성
+      apply:   에이전트가 만든 JSON 을 검증 후 concept 노드 + 의미 엣지로 결정론적 변환
+
+    stdlib only. 식별자 패턴(FXXX)이 아닌 **의미 기반** 그래프 (개념 노드 + 라벨 엣지).
+
+    Returns:
+        int: exit code
+    """
+    action = getattr(args, "enrich_action", None)
+    if action == "prepare":
+        return _enrich_prepare(args)
+    if action == "apply":
+        return _enrich_apply(args)
+    print("[wiki enrich] 사용법: enrich prepare <문서.md>  |  enrich apply <문서.md> --json <추출.json>")
+    return 0
+
+
+def _enrich_prepare(args) -> int:
+    """문서 내용 + 추출 프롬프트를 출력한다 (에이전트가 이걸 보고 JSON 생성)."""
+    doc = Path(args.source)
+    if not doc.exists():
+        print(f"[wiki enrich prepare] 문서 없음: {doc}")
+        return 0
+    content = doc.read_text(encoding="utf-8")
+    if len(content) > 12000:
+        content = content[:12000] + "\n...(생략)..."
+    print(f"[wiki enrich prepare] 문서: {doc}\n")
+    print("=" * 70)
+    print("아래 문서를 읽고, 핵심 **개념(concepts)** 과 그들 사이의 **관계(relations)** 를")
+    print("추출해 다음 JSON 스키마로만 출력하라 (식별자가 아니라 의미 단위로):\n")
+    print(_ENRICH_SCHEMA)
+    print("\n규칙: concepts[].label 은 고유·간결. relations 의 from/to 는 concepts 의 label 과")
+    print("정확히 일치. 문서에 근거 없는 개념·관계는 만들지 말 것.")
+    print("생성한 JSON 을 파일로 저장 후: "
+          f"wiki.py enrich apply {doc} --json <그_파일>")
+    print("=" * 70)
+    print("\n--- 문서 내용 ---\n")
+    print(content)
+    return 0
+
+
+def _enrich_apply(args) -> int:
+    """에이전트가 만든 추출 JSON 을 검증 후 concept 노드 + 의미 엣지로 변환한다."""
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    json_path = Path(args.json)
+    if not json_path.exists():
+        print(f"[wiki enrich apply] JSON 없음: {json_path}")
+        return 1
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[wiki enrich apply] JSON 파싱 실패: {e}")
+        return 1
+
+    # ── 스키마 검증 (결정론적 가드) ──────────────────────────────────────────
+    concepts = data.get("concepts", [])
+    relations = data.get("relations", [])
+    if not isinstance(concepts, list) or not concepts:
+        print("[wiki enrich apply] concepts 가 비어있음 — 추출 실패로 간주, 중단")
+        return 1
+    labels = {}
+    for c in concepts:
+        if not isinstance(c, dict) or not c.get("label", "").strip():
+            print(f"[wiki enrich apply] 잘못된 concept 항목: {c}")
+            return 1
+        labels[c["label"].strip()] = _slug_from_text(c["label"].strip(), 40)
+    bad = [r for r in relations
+           if not isinstance(r, dict) or r.get("from") not in labels or r.get("to") not in labels]
+    if bad:
+        print(f"[wiki enrich apply] from/to 가 concepts 에 없는 relation {len(bad)}건 — 무시하고 진행")
+    relations = [r for r in relations if r not in bad]
+
+    source_ref = str(args.source) if getattr(args, "source", None) else "(enrich)"
+    concepts_dir = vault_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+
+    # 개념별 아웃바운드 관계 모으기
+    out_rel: dict[str, list[tuple[str, str]]] = {lbl: [] for lbl in labels}
+    for r in relations:
+        out_rel[r["from"]].append((labels[r["to"]], r.get("label", "관련")))
+
+    created = 0
+    for c in concepts:
+        lbl = c["label"].strip()
+        slug = labels[lbl]
+        node_path = concepts_dir / f"{slug}.md"
+        now = _now_iso()
+        existing_created = _extract_created(node_path.read_text(encoding="utf-8")) \
+            if node_path.exists() else None
+        ts_created = existing_created or now
+        rel_slugs = [t for t, _ in out_rel[lbl]]
+        related_yaml = json.dumps(rel_slugs, ensure_ascii=False)
+        body_rel = "".join(f"- [[{t}]] — {lab}\n" for t, lab in out_rel[lbl]) or "- (없음)\n"
+        node = (
+            "---\n"
+            f"type: concept\n"
+            f"id: {slug}\n"
+            f"created: {ts_created}\n"
+            f"updated: {now}\n"
+            f"source_ref: {source_ref}\n"
+            f"tags: {json.dumps(['concept'])}\n"
+            f"related: {related_yaml}\n"
+            "status: active\n"
+            "---\n\n"
+            f"# {lbl}\n\n"
+            f"> 의미 추출(agent-driven enrich) 개념 노드. 원본: `{source_ref}`\n\n"
+            f"{c.get('summary', '').strip()}\n\n"
+            "## 관계\n"
+            f"{body_rel}"
+        )
+        node_path.write_text(node, encoding="utf-8")
+        created += 1
+
+    _append_log(vault_dir, "enrich",
+                f"{source_ref} — concept {created}개 / relation {len(relations)}개")
+    print(f"[wiki enrich apply] concept 노드 {created}개 + 의미 엣지 {len(relations)}개 생성")
+    print(f"  → wiki/concepts/ | 그래프: wiki.py graph --format mermaid")
+    return 0
 
 
 def cmd_prune(args) -> int:
@@ -1852,6 +2001,8 @@ def main() -> int:
             return cmd_graph(args)
         elif args.command == "self":
             return cmd_self(args)
+        elif args.command == "enrich":
+            return cmd_enrich(args)
         elif args.command == "prune":
             return cmd_prune(args)
         else:

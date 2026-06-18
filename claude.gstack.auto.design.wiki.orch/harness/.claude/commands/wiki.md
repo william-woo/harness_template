@@ -23,6 +23,8 @@
 /project:wiki graph                          # mermaid 텍스트 그래프 (기본)
 /project:wiki graph --format=dot             # DOT 텍스트 그래프
 /project:wiki graph --output=wiki/graph.md   # 파일 저장
+/project:wiki enrich prepare <문서.md>       # LLM 의미추출 프롬프트 출력 (agent-driven)
+/project:wiki enrich apply <문서.md> --json <추출.json>   # 추출 JSON → concept 노드+의미엣지
 /project:wiki prune                          # source 원본이 사라진 dangling 노드 — 미리보기
 /project:wiki prune --apply                  # dangling 노드 실제 삭제 (삭제=명시 단계)
 /project:wiki self                           # 의존성·graceful degrade 상태 점검
@@ -46,16 +48,36 @@ python3 .claude/bin/wiki.py self
 
 ---
 
-## 6 서브커맨드
+## 7 서브커맨드
 
 | 서브커맨드 | 동작 | LLM 호출 |
 |---|---|---|
-| **ingest** | 산출물(feature/ADR/learning) 또는 외부 .md → vault 노드 (결정론적 매핑) | 없음 (정적). `--enrich-llm` 플래그 시만 LLM 보강 (옵트인) |
+| **ingest** | 산출물(feature/ADR/learning) 또는 외부 .md → vault 노드 (결정론적 매핑) | 없음 (정적) |
 | **query `<검색어>`** | vault 검색. qmd 있으면 BM25, 없으면 stdlib grep fallback (graceful degrade) | 없음 |
 | **lint** | vault 정합성 점검 (WIKI-ORPHAN / WIKI-DEAD-LINK / WIKI-STALE / WIKI-FRONTMATTER) | 없음 |
 | **graph** | vault 그래프를 mermaid (기본) 또는 DOT / JSON 텍스트로 출력 | 없음 |
+| **enrich** | **LLM 의미 추출 (agent-driven)** — 문서 내용 → 개념(concept) 노드 + 라벨 의미 엣지 | **에이전트(LLM)** — prepare 가 프롬프트 출력, 에이전트가 추출, apply 가 결정론 변환 |
 | **prune** | source_ref 원본이 사라진 dangling 노드 정리. 기본 미리보기, `--apply` 시 삭제 | 없음 |
 | **self** | 셀프 dry-run (vault 디렉토리 존재 / 외부 도구 감지 / graceful degrade 상태) | 없음 |
+
+## enrich — 의미 기반 지식그래프 (F017, agent-driven)
+
+`ingest`/`graph` 의 엣지는 **식별자 패턴**(FXXX/ADR-NNN/[[wikilink]]) 기반이다. `enrich` 는
+문서 **내용의 의미**를 LLM(세션 에이전트)이 읽어 **개념(concept) 노드 + 라벨 관계 엣지**를 만든다
+(카파시 LLM Wiki 패턴과 동일 방향).
+
+```bash
+# ① 추출 프롬프트 출력 (문서내용 + JSON 스키마)
+python3 .claude/bin/wiki.py enrich prepare docs/adr/ADR-007-....md
+# ② 에이전트가 출력을 읽고 concepts/relations JSON 을 파일로 저장 (LLM 단계)
+# ③ 검증 후 concept 노드 + 의미 엣지 생성
+python3 .claude/bin/wiki.py enrich apply docs/adr/ADR-007-....md --json /tmp/extract.json
+```
+
+- **헬퍼는 LLM 을 직접 호출하지 않음** (stdlib only) — 세션 에이전트가 LLM 역할 (skill_forge 패턴).
+  → 무인증·무외부의존성·전 호스트 호환. 단 무인 자동은 아님(에이전트가 루프에 있어야).
+- concept 노드: `wiki/concepts/<slug>.md` (type: concept), 관계는 `## 관계` 섹션 + related 엣지.
+- 멱등: 같은 추출 재apply 시 created 보존.
 
 ## 운영정책 — 무한 증가 방지 (ADR-007)
 
