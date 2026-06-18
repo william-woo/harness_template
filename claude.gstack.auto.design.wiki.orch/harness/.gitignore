@@ -65,6 +65,10 @@ htmlcov/
 # Wiki 런타임 산출물 (wiki.py graph --output 생성 — git 제외)
 wiki/graph.md
 
+# wiki 운영 로그 (읽기 동작마다 갱신 — git 노이즈 방지로 로컬 전용. ADR-007 운영정책)
+wiki/log.md
+wiki/log-archive.md
+
 # Orch 핸드오프 런타임 산출물 (task-id 디렉토리 — gitignore, ADR-008 결정 3)
 # .gitkeep + README.md 는 포함 대상 (디렉토리 보존 + 규약 설명)
 .claude/state/orch/*/
