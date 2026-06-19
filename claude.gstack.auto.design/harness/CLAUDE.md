@@ -631,6 +631,27 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
+## 🧭 product-cycle 호출 기준 (Phase 13 — F018, claude.productmgr 전용)
+
+다음 중 하나에 해당하면 `/project:product-cycle` (PM 주도 통합 라이프사이클):
+
+- **아이디어 → 출시**를 한 흐름으로 (제품 발견부터 배포 게이트까지)
+- 제품 관점(사용자·가치·**성공지표**)이 중요한 신규 기능
+- 기획·설계·개발·검증이 모두 필요한 복합 제품 작업
+
+해당 없으면:
+- 단일 역할(버그 수정 등) → 해당 에이전트 직접 호출
+- 실행 라우팅만(제품 brief 불필요) → `/project:orchestrate`
+- 설계 체인만 → `/project:plan-full`
+
+**5단계**: 기획(product-manager→planner) → 설계(architect/designer) → 개발(developer) →
+검증(reviewer→qa) → 배포(lint→ship→backup-sync). PM 이 성공지표 기준으로 각 단계 게이트.
+**배포**=하네스 게이트, 실제 prod CI/CD 는 다운스트림 위임.
+
+**claude.productmgr 변형 전용**: 다른 변형엔 product-manager.md / product-cycle.md 가 없어 미인식.
+
+---
+
 ## 🪞 메인 ↔ 변형 미러 정책 (10 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |

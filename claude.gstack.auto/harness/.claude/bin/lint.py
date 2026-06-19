@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (9변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10)
+  LINT-MR     변형 오버레이 정합 (10변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -961,8 +961,9 @@ _VARIANTS_NO_HERMES = [
     "localllm",
 ]
 
-# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes 만)
-_VARIANTS_WITH_HERMES = ["claude.hermes"]
+# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 claude.productmgr)
+# productmgr 는 hermes 복사본이므로 hermes 4파일을 정당 보유 — 존재 검증 대상에 포함 (Reviewer SHOULD).
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
