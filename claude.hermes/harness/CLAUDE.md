@@ -631,7 +631,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (9 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (10 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -643,7 +643,13 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
 | **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
+| **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
+> 에이전트**가 사용자와 협력해 제품 발견·요구·성공지표를 정의하고, `/project:product-cycle` 로
+> **기획→설계→개발→검증→배포** 전 과정을 supervisor 로 조율. PM=why·what(제품 brief) /
+> planner=feature 분해. 배포=하네스 게이트(lint→ship→backup), 실제 prod CI/CD 는 다운스트림.
 
 > **claude.hermes 변형 (F016)**: NousResearch/hermes-agent 패턴 이식 (ADR-010). orch 변형 복사 +
 > ① FTS5 세션 검색(`session_search.py`) ② 스킬 자동생성/self-improve(`skill_forge.py`)
@@ -687,12 +693,17 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-**hermes 오버레이** (claude.hermes 에만 — F016 신설):
+**hermes 오버레이** (claude.hermes + claude.productmgr 에 존재 — F016 신설):
 - `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~10 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10 추가).
+**pm 오버레이** (claude.productmgr 에만 — F018 신설):
+- `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
+- `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
+- `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~11 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11 추가).
 
 ---
 

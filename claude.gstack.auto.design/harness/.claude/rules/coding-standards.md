@@ -14,6 +14,7 @@
 | **`claude.gstack.auto.design.wiki.orch/`** | **허용** (wiki 상속) | Obsidian / qmd / Marp (wiki 복사) | LINT-MR-7/MR-8 (orch 자체는 stdlib only) |
 | **`localllm/`** (d-2) | **허용** | OpenCode / Ollama | LINT-MR-9 (d-2 오버레이 격리 + 어댑터 구조) |
 | **`claude.hermes/`** | **허용** (wiki 상속) | Obsidian/qmd/Marp (hermes 기능은 stdlib) | LINT-MR-10 (hermes 오버레이 격리) |
+| **`claude.productmgr/`** | **허용** (hermes 상속) | Obsidian/qmd/Marp (pm 오버레이는 stdlib/문서) | LINT-MR-11 (pm 오버레이 격리) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
@@ -34,6 +35,13 @@
 - 외부 의존성은 wiki 상속분(Obsidian/qmd/Marp)만 허용. **hermes 3종 기능(session_search/skill_forge)은 stdlib only**
 - Hermes 본체의 메시징 게이트웨이·유저모델링 등 무거운 부분은 **미이식** (개인비서 영역 — SDLC 하네스 목적과 불일치)
 - LINT-MR-10 이 hermes 오버레이(session_search.py + skill_forge.py + 커맨드 2종) 의 claude.hermes 전용 격리를 강제
+
+**claude.productmgr 변형 예외 계약** (ADR-011):
+- hermes 변형 복사 + pm 오버레이 — Product Manager 주도 통합 SDLC(기획→설계→개발→검증→배포)
+- 외부 의존성은 hermes 상속분(Obsidian/qmd/Marp)만. **pm 오버레이(product-manager.md/product-cycle.md)는 stdlib/문서뿐 — 신규 의존성 0**
+- PM=제품 brief(why·what·성공지표) / planner=feature 분해. PM 은 passes·코드 직접 수정 안 함 (조율자)
+- "배포"=하네스 게이트(lint→ship→backup-sync). 실제 prod CI/CD 는 다운스트림 위임
+- LINT-MR-11 이 pm 오버레이의 claude.productmgr 전용 격리를 강제
 
 ---
 

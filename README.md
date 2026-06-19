@@ -14,7 +14,8 @@ claude (baseline)
                  └─ +wiki (지식 그래프, 외부 의존성 허용)
                       └─ +orch (이종 에이전트 오케스트레이션, d-1)
                            ├─ localllm (OpenCode + 로컬 LLM, d-2)
-                           └─ claude.hermes (영속기억·자가진화 — Hermes 패턴)
+                           ├─ claude.hermes (영속기억·자가진화 — Hermes 패턴)
+                           └─ claude.productmgr (PM 주도 통합 SDLC)
 openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 ```
 
@@ -31,6 +32,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | 리서치+디자인+코딩을 한 흐름으로 지휘하고 싶다 | `claude.gstack.auto.design.wiki.orch` |
 | 로컬 LLM(OpenCode+Ollama)으로 비용·보안 최적화 | `localllm` (PoC) |
 | 세션 기억 검색 + 스킬 자동생성/self-improve 가 필요하다 | `claude.hermes` |
+| 제품 기획부터 배포까지 PM 주도로 통합 진행 | `claude.productmgr` |
 | OpenAI Codex 호스트에서 쓴다 | `openai/.codex` (stub) |
 | Phase 0 원본 스냅샷이 필요하다 (참고용) | `claude` (baseline, 동결) |
 
@@ -126,6 +128,19 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 - **언제**: "예전에 어떻게 했더라" 과거 세션 회상 / 반복 절차를 재사용 스킬로 승격·관리.
 - **외부 의존성**: wiki 상속분(Obsidian/qmd/Marp) 허용, hermes 기능 자체는 0.
 
+### ⓑ⁷ `claude.productmgr/` — Product Manager 주도 통합 SDLC
+- **무엇**: hermes 변형 복사 + **pm 오버레이** (F018, ADR-011). PM 이 사용자와 협력해 제품을
+  기획부터 배포까지 한 흐름으로 조율하는 통합 에이전트.
+- **추가 오버레이**:
+  - `product-manager.md` — 제품 발견·요구·우선순위·**성공지표**·로드맵 정의 + 라이프사이클 supervisor.
+    PM=why·what(제품 brief) / planner=feature 분해(how-much). PM 은 passes·코드 직접수정 안 함(조율자).
+  - `/project:product-cycle` — **기획→설계→개발→검증→배포** 5단계 PM 주도 통합 흐름.
+    각 단계 산출물을 제품 brief 의 성공지표 기준으로 게이트, 어긋나면 재작업 요청. orchestrate 를 제품 관점으로 감쌈.
+  - `.claude/state/product-cycle/` 사이클 핸드오프 디렉토리.
+- **배포 정의**: 하네스 게이트(`lint --strict` → `/project:ship` → `backup.py sync`). 실제 prod CI/CD 는 다운스트림.
+- **언제**: 아이디어→출시를 한 흐름으로, 제품 관점(사용자·가치·성공지표)이 중요한 신규 기능.
+- **외부 의존성**: hermes 상속분(Obsidian/qmd/Marp) 허용, pm 오버레이는 stdlib/문서뿐.
+
 ### ⓒ `openai/` — Codex 호스트 (stub, 별도 계보)
 - **무엇**: OpenAI Codex 호스트용 `.codex/` 구조의 **정적 산출물**.
 - **정책**: F006 세션 2에서 수동 생성. 직접 손대지 말 것 — codex 어댑터가 실구현되는 후속 phase에서
@@ -147,6 +162,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | `claude.gstack.auto.design.wiki.orch` | **허용**(wiki 상속) | Obsidian / qmd / Marp |
 | `localllm` | **허용** | OpenCode / Ollama |
 | `claude.hermes` | **허용**(wiki 상속) | Obsidian/qmd/Marp (hermes 기능은 stdlib) |
+| `claude.productmgr` | **허용**(hermes 상속) | Obsidian/qmd/Marp (pm 오버레이는 stdlib/문서) |
 | `openai/.codex` | 0 | — |
 
 > 핵심 기능은 모두 **stdlib(bash + Python 표준)** 으로 동작하며, 외부 도구는 *향상*만 합니다(graceful degrade).

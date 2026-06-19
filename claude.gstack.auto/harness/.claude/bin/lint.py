@@ -935,6 +935,7 @@ _VARIANTS_NO_D2 = [
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
     "claude.hermes",
+    "claude.productmgr",
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
@@ -963,6 +964,28 @@ _VARIANTS_NO_HERMES = [
 # hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes 만)
 _VARIANTS_WITH_HERMES = ["claude.hermes"]
 
+# pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
+# Product Manager 주도 통합 SDLC (ADR-011)
+_PM_OVERLAY_FILES = [
+    "harness/.claude/agents/product-manager.md",
+    "harness/.claude/commands/product-cycle.md",
+]
+
+# pm 오버레이가 없어야 하는 변형 (MR-11: claude.productmgr 외 8 변형 — openai 별도)
+_VARIANTS_NO_PM = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+    "claude.hermes",
+]
+
+# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr 만)
+_VARIANTS_WITH_PM = ["claude.productmgr"]
+
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
     "harness/.claude/bin/wiki-setup.sh",
@@ -982,7 +1005,7 @@ _OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 9 변형 미러 정합 점검 (F011 신설, F012 확장, F013 MR-8, F015 MR-9, F016 MR-10).
+    """LINT-MR: 10 변형 미러 정합 점검 (F011~F013, F015 MR-9, F016 MR-10, F018 MR-11).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
     F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
@@ -1445,6 +1468,49 @@ def check_mirror_regression() -> list:
                     f"{hermes_variant_name} hermes 오버레이 모두 존재 OK",
                 ))
 
+        # MR-11: claude.productmgr 외 8 변형에 pm 오버레이 없어야 함
+        # (pm 오버레이는 ⓑ⁷ claude.productmgr 에만 존재 — F018 / ADR-011)
+        for variant in _VARIANTS_NO_PM:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_pm = [rel for rel in _PM_OVERLAY_FILES if (variant_dir / rel).exists()]
+            if found_pm:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"pm 오버레이가 {variant} 에 잘못 미러됨 (claude.productmgr 전용): {found_pm}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 pm 오버레이 부재 OK",
+                ))
+
+        # MR-11 (계속): claude.productmgr 변형에 pm 오버레이 모두 존재해야 함
+        for pm_variant_name in _VARIANTS_WITH_PM:
+            pv = _HT / pm_variant_name
+            if not pv.exists():
+                results.append(_issue(
+                    checker, INFO, pm_variant_name,
+                    f"{pm_variant_name} 변형 부재 (F018 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _PM_OVERLAY_FILES if not (pv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, pm_variant_name,
+                    f"{pm_variant_name} 변형에 일부 pm 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, pm_variant_name,
+                    f"{pm_variant_name} pm 오버레이 모두 존재 OK",
+                ))
+
     except Exception as exc:  # noqa: BLE001
         results.append(_issue(checker, INFO, "LINT-MR", f"검사 중 오류 — {exc}"))
 
@@ -1462,7 +1528,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (9변형 — F015 MR-9, F016 MR-10 추가)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (10변형 — F016 MR-10, F018 MR-11 추가)", check_mirror_regression),
 }
 
 
