@@ -1067,4 +1067,9 @@ ingest 는 산출물 1:1 멱등 노드라 폭증은 없으나 **상한도 없다
 
 ### 한계 (정직)
 - 무인 자동 아님 — 추출 단계에 에이전트가 루프에 있어야 함.
-- PDF/docx 직접 미지원 (md 변환 후 사용). graph json 은 단순 노드/엣지 (카파시식 JSON-LD 아님 — 후속 옵션).
+- PDF/docx 직접 미지원 (md 변환 후 사용).
+
+### graph 형식에 JSON-LD 추가 (Schema.org — 카파시 graph.jsonld 호환)
+`graph --format jsonld` 추가: `@context`(schema.org) + `@graph`(노드별 @id/@type/isRelatedTo).
+노드 타입 → schema.org 매핑(concept→DefinedTerm, adr→TechArticle, feature→CreativeWork 등).
+기존 `--format json`(단순 노드/엣지)은 하위호환으로 유지. 카파시 LLM Wiki 의 머신리더블 그래프와 정합.

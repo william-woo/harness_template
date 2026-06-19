@@ -22,6 +22,7 @@
 /project:wiki lint --strict                  # dead-link 있으면 exit 1
 /project:wiki graph                          # mermaid 텍스트 그래프 (기본)
 /project:wiki graph --format=dot             # DOT 텍스트 그래프
+/project:wiki graph --format=jsonld          # Schema.org JSON-LD (카파시 graph.jsonld 호환)
 /project:wiki graph --output=wiki/graph.md   # 파일 저장
 /project:wiki enrich prepare <문서.md>       # LLM 의미추출 프롬프트 출력 (agent-driven)
 /project:wiki enrich apply <문서.md> --json <추출.json>   # 추출 JSON → concept 노드+의미엣지

@@ -1578,6 +1578,51 @@ def cmd_graph(args: argparse.Namespace) -> int:
 
         print(f"  노드 {len(nodes_list)}개 / 엣지 {len(edges_list)}개")
 
+    # ── JSON-LD 출력 (Schema.org — 카파시 LLM Wiki graph.jsonld 호환) ─────────────
+    elif graph_format == "jsonld":
+        # 노드 타입 → schema.org @type 매핑
+        schema_type = {
+            "feature": "CreativeWork", "adr": "TechArticle", "learning": "CreativeWork",
+            "source": "CreativeWork", "page": "WebPage", "concept": "DefinedTerm",
+            "unknown": "Thing",
+        }
+        out_edges: dict[str, list[str]] = {}
+        for f, t in edges:
+            out_edges.setdefault(f, []).append(t)
+
+        graph_items = []
+        for node_type, ids in type_nodes.items():
+            for nid in sorted(ids):
+                item = {
+                    "@id": f"wiki:{nid}",
+                    "@type": schema_type.get(node_type, "Thing"),
+                    "name": nid,
+                    "additionalType": f"harness:{node_type}",
+                }
+                rel = out_edges.get(nid, [])
+                if rel:
+                    item["isRelatedTo"] = [{"@id": f"wiki:{t}"} for t in rel]
+                graph_items.append(item)
+
+        doc = {
+            "@context": {
+                "@vocab": "https://schema.org/",
+                "wiki": "#",
+                "harness": "https://harness.local/ns#",
+                "isRelatedTo": {"@id": "https://schema.org/isRelatedTo", "@type": "@id"},
+            },
+            "@graph": graph_items,
+        }
+        graph_text = json.dumps(doc, ensure_ascii=False, indent=2)
+
+        if output_path_str:
+            out_path = Path(output_path_str)
+            _atomic_write(out_path, graph_text)
+            print(f"\n  저장: {out_path}")
+        else:
+            print(graph_text)
+        print(f"  노드 {len(graph_items)}개 / 엣지 {len(edges)}개 (Schema.org JSON-LD)")
+
     _append_log(
         vault_dir,
         "graph",
@@ -1756,9 +1801,9 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_p.add_argument(
         "--format",
         dest="graph_format",
-        choices=["mermaid", "dot", "json"],
+        choices=["mermaid", "dot", "json", "jsonld"],
         default="mermaid",
-        help="그래프 출력 형식",
+        help="그래프 출력 형식 (jsonld = Schema.org, 카파시 graph.jsonld 호환)",
     )
     graph_p.add_argument("--node-type", dest="node_type_filter", help="노드 타입 필터")
     graph_p.add_argument(
