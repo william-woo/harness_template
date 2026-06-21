@@ -27,6 +27,10 @@
 - 차별점: PM 이 각 단계 산출물을 **제품 brief 의 성공지표 기준으로 게이트**, 어긋나면 재작업 요청.
 - single-host (Task spawn, 같은 컨텍스트 풀 — ADR-008 결정 5 상속). d-3 분산 아님.
 - 핸드오프: `.claude/state/product-cycle/<cycle-id>/` (00-brief~05-deploy), 런타임 gitignore.
+- **중간 진입 `--from=<stage>` / 조기 종료 `--to=<stage>`** (stage: plan|design|develop|verify|deploy):
+  이미 brief·설계·코드가 있으면 해당 단계부터 진입. PM 이 진입 전제조건(상위 산출물 존재)을 점검하고,
+  brief 없으면 feature 의 acceptance_criteria 를 성공지표로 채택하는 **경량 intake** 수행. 전제조건
+  미충족 시 막지 않고 경고+더 앞 단계 권고 (autonomous — 사용자 판단 존중).
 
 ### 결정 4 — "배포(deploy)" 정의: 하네스 게이트 (prod CI/CD 는 다운스트림)
 하네스엔 실제 프로덕션 배포가 없으므로, 배포 단계 = `lint --strict`(0 BLOCK) + `/project:ship`

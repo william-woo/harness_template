@@ -647,6 +647,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 **5단계**: 기획(product-manager→planner) → 설계(architect/designer) → 개발(developer) →
 검증(reviewer→qa) → 배포(lint→ship→backup-sync). PM 이 성공지표 기준으로 각 단계 게이트.
 **배포**=하네스 게이트, 실제 prod CI/CD 는 다운스트림 위임.
+**중간 진입**: `--from=<plan|design|develop|verify|deploy>` 로 설계/개발/검증부터 시작 가능 (PM 이
+상위 산출물 존재 점검 + brief 없으면 acceptance_criteria 를 성공지표로 채택하는 경량 intake). `--to=` 로 조기 종료.
 
 **claude.productmgr 변형 전용**: 다른 변형엔 product-manager.md / product-cycle.md 가 없어 미인식.
 

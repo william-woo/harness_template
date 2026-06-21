@@ -13,10 +13,15 @@ Product Manager 가 supervisor 가 되어 **기획 → 설계 → 개발 → 검
 ## 사용법
 
 ```
-/project:product-cycle "<제품 아이디어 / 요구사항>"
-/project:product-cycle "<요청>" --from=design     # 특정 단계부터 시작 (기획 brief 이미 있을 때)
-/project:product-cycle --feature=F0XX             # 기존 feature 를 사이클에 태움
+/project:product-cycle "<제품 아이디어 / 요구사항>"          # 전체 (기획부터)
+/project:product-cycle "<요청>" --from=design              # 중간 진입 (설계부터)
+/project:product-cycle --feature=F0XX --from=develop       # 기존 feature 를 개발부터
+/project:product-cycle --feature=F0XX --from=verify        # 구현된 코드를 검증부터
+/project:product-cycle "<요청>" --from=design --to=develop # 구간 실행 (설계~개발만)
 ```
+
+> `--from=<stage>` 미지정 시 `plan`(전체). `--to=<stage>` 미지정 시 `deploy`(끝까지).
+> 단계 토큰: `plan | design | develop | verify | deploy`.
 
 ---
 
@@ -60,6 +65,36 @@ Product Manager 가 supervisor 가 되어 **기획 → 설계 → 개발 → 검
 | ③ 개발 | ✅ developer | — | — |
 | ④ 검증 | ✅ reviewer→qa | design-review/qa-browser(UI) | — |
 | ⑤ 배포 | ✅ lint | ship, backup-sync | — |
+
+## 진입점 선택 — 중간 단계부터 시작 (`--from` / `--to`)
+
+라이프사이클은 항상 기획부터 시작할 필요가 없다. 이미 brief·설계·코드가 있으면 해당 지점부터 진입한다.
+
+### 단계 순서 + 진입 전제조건
+PM 은 `--from=<stage>` 진입 시, 그 단계가 필요로 하는 **상위 산출물이 실제로 존재하는지 먼저 점검**한다.
+
+| `--from` | 진입 전제조건 (없으면 경고 + 더 앞 단계 권고) | 진입 시 PM 이 하는 일 |
+|---|---|---|
+| `plan` (기본) | 없음 | 전체 — 문제 발견부터 |
+| `design` | 제품 brief 또는 feature_list 항목 존재 | brief/feature 를 컨텍스트로 로드 → 설계로 |
+| `develop` | 대상 feature(`--feature=F0XX`) + (설계 필요시) ADR | feature 의 acceptance_criteria 를 성공지표로 채택 → 개발로 |
+| `verify` | 구현된 코드(diff/feature status≥review) | 성공지표 기준 검증만 (reviewer→qa) |
+| `deploy` | 검증 통과(passes:true 또는 리뷰 완료) | 하네스 게이트만 (lint→ship→backup) |
+
+### 경량 intake (brief 없이 중간 진입 시)
+`--from=develop|verify` 인데 제품 brief 가 없으면, PM 은 **풀 제품 발견을 건너뛰고** 다음만 한다:
+- 대상 feature 의 `acceptance_criteria` 를 **성공지표로 채택** (이미 측정 가능 기준이므로)
+- 누락된 성공지표가 있으면 1~2개만 사용자에게 확인 (전체 brief 요구 X)
+- `00-brief.md` 에 "경량 intake (from=<stage>)" 로 최소 기록
+
+### 전제조건 미충족 시
+PM 은 진입을 막지 않되 **명시적으로 경고**하고 더 앞 단계를 권고한다:
+> "⚠️ `--from=verify` 인데 구현 흔적이 없음 (feature status=todo). `--from=develop` 또는 `plan` 권장."
+사용자가 그대로 진행을 원하면 진행 (autonomous — 사용자 판단 존중).
+
+### `--to=<stage>` (조기 종료)
+지정 단계까지만 실행하고 멈춘다. 예: `--from=design --to=develop` = 설계+개발만 (검증·배포 스킵).
+핸드오프 디렉토리엔 실행한 단계 파일만 생성된다.
 
 ## PM supervisor 의 역할 (핵심 차별점)
 

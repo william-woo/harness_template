@@ -87,6 +87,11 @@ python3 .claude/bin/session_search.py search "<관련 키워드>" 2>/dev/null ||
 > PM 은 각 단계 산출물이 **제품 brief 의 성공지표에 부합하는지** 확인하고, 어긋나면 해당
 > 단계 에이전트에 재작업을 요청한다. 직접 코드/문서를 고치지 않는다 (조율자).
 
+**중간 진입 (`--from=<stage>`)**: 사이클은 기획부터일 필요 없다. 설계/코드가 이미 있으면 해당
+단계부터 진입한다. PM 은 진입 시 ① 그 단계의 **상위 산출물 존재를 점검**하고(없으면 경고+더 앞 단계
+권고), ② brief 가 없으면 대상 feature 의 `acceptance_criteria` 를 **성공지표로 채택하는 경량 intake**
+만 수행한다 (풀 제품 발견 생략). 자세한 진입 전제조건은 `/project:product-cycle` 의 "진입점 선택" 참조.
+
 ## 출력물
 - `docs/product/<slug>-brief.md` (제품 brief)
 - Planner 에게 전달할 분해 요청 (요구사항 + 성공지표)
