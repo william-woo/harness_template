@@ -654,7 +654,28 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (10 변형 매트릭스)
+## 🤝 consortium 호출 기준 (Phase 14 — F019, claude.productnw 전용, d-3)
+
+다음 중 하나에 해당하면 `/project:consortium` (분산 멀티팀 컨소시엄):
+
+- 여러 팀/조직이 **한 제품을 분담**해 만들 때 (팀별 전문성 분리)
+- 단계별로 다른 팀이 담당 (예: A팀 기획·PM, B팀 디자인, C팀 개발) — 멀티팀 product-cycle
+- 팀 간 메시지로 작업을 핸드오프·통합해야 할 때
+
+해당 없으면:
+- 한 팀 내 통합 흐름 → `/project:product-cycle`
+- 한 팀 내 실행 라우팅 → `/project:orchestrate`
+
+**정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
+Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 SDK·웹훅이 필요해 **다운스트림이 봇
+연동**(codex/openclaw stub 와 동일 패턴). 같은 머신/공유 볼륨이면 로컬 큐로 컨소시엄 흐름을 검증 가능.
+팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
+
+**claude.productnw 변형 전용**: 다른 변형엔 consortium.py / consortium.md 가 없어 미인식.
+
+---
+
+## 🪞 메인 ↔ 변형 미러 정책 (11 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -667,7 +688,15 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
+> 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
+> 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, Teams/Slack/Telegram 게이트웨이는
+> **stub**(codex/openclaw 처럼 안내+graceful degrade — 실제 봇 transport 는 다운스트림 책임). 팀 내부는
+> single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
 
 > **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
 > 에이전트**가 사용자와 협력해 제품 발견·요구·성공지표를 정의하고, `/project:product-cycle` 로
@@ -716,17 +745,22 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-**hermes 오버레이** (claude.hermes + claude.productmgr 에 존재 — F016 신설):
+**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw 에 존재 — F016 신설):
 - `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-**pm 오버레이** (claude.productmgr 에만 — F018 신설):
+**pm 오버레이** (claude.productmgr + claude.productnw 에 존재 — F018 신설):
 - `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
 - `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~11 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11 추가).
+**nw(컨소시엄) 오버레이** (claude.productnw 에만 — F019 신설):
+- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub — stdlib)
+- `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
+- `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~12 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12 추가).
 
 ---
 
