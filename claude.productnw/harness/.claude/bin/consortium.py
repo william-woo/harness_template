@@ -32,6 +32,8 @@ import json
 import os
 import re
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,12 +52,15 @@ _ROSTER = _STATE / "roster.json"
 _INBOX = _STATE / "inbox"
 _OUTBOX = _STATE / "outbox"
 
-# 게이트웨이 어댑터 — 모두 stub (실제 transport 는 다운스트림이 봇 연동)
+# 게이트웨이 어댑터 — teams 는 발신(단방향) 실구현, slack/telegram 은 stub.
 _GATEWAYS = {
     "slack": "Slack (Incoming Webhook 또는 Bolt 봇 + bot token)",
-    "teams": "MS Teams (Incoming Webhook 또는 Bot Framework + app 등록)",
+    "teams": "MS Teams (Incoming Webhook — 채널 커넥터/Workflows)",
     "telegram": "Telegram (Bot API + BotFather 토큰)",
 }
+
+# Teams 발신 어댑터: 웹훅 URL 은 자격증명(autonomous #3-A) — 셸 노출 금지, 환경변수로만 주입.
+_TEAMS_WEBHOOK_ENV = "CONSORTIUM_TEAMS_WEBHOOK"
 
 _TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -184,9 +189,80 @@ def cmd_inbox(args) -> int:
     return 0
 
 
+def _build_teams_card(m: dict) -> dict:
+    """컨소시엄 메시지를 Teams 웹훅 페이로드로 변환한다.
+    MessageCard 키(구형 Connector 렌더) + top-level text(Workflows 템플릿이 흔히 참조) 동시 포함."""
+    title = f"[consortium] {m.get('from_team','?')} → {m.get('to_team','?')} (cycle {m.get('cycle_id','?')})"
+    flat = (f"{title}\n역할: {m.get('role','-')} · 단계: {m.get('stage') or '-'} · "
+            f"{m.get('ts','-')}\n{m.get('msg','')}")
+    return {
+        "@type": "MessageCard",
+        "@context": "http://schema.org/extensions",
+        "themeColor": "0076D7",
+        "summary": f"consortium {m.get('from_team','?')}→{m.get('to_team','?')}",
+        "title": title,
+        "text": flat,  # Workflows 템플릿 호환 (triggerBody()?['text'])
+        "sections": [{
+            "facts": [
+                {"name": "role", "value": str(m.get("role", "-"))},
+                {"name": "stage", "value": str(m.get("stage") or "-")},
+                {"name": "ts", "value": str(m.get("ts", "-"))},
+            ],
+            "text": str(m.get("msg", "")),
+        }],
+    }
+
+
+def _post_teams(webhook: str, payload: dict) -> tuple[bool, str]:
+    """Teams 웹훅으로 페이로드를 POST 한다. (성공여부, 응답/오류) 반환. 네트워크=경계 방어."""
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        webhook, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", "replace").strip()
+            return (200 <= resp.status < 300, f"HTTP {resp.status} {body[:200]}")
+    except urllib.error.HTTPError as exc:
+        return (False, f"HTTP {exc.code} {exc.read().decode('utf-8', 'replace')[:200]}")
+    except (urllib.error.URLError, OSError) as exc:
+        return (False, f"전송 실패: {exc}")
+
+
+def _send_teams() -> int:
+    """outbox 의 미발신 메시지를 Teams 채널로 발신하고, 성공분을 outbox/sent/ 로 이동한다."""
+    webhook = os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip()
+    if not webhook:
+        print(f"[consortium] ❌ 환경변수 {_TEAMS_WEBHOOK_ENV} 미설정 — 웹훅 URL 을 셸에 노출하지 말고")
+        print(f"  `export {_TEAMS_WEBHOOK_ENV}='https://...webhook.office.com/...'` 로 주입 후 재실행.")
+        print("  (Teams 채널 → 커넥터/Workflows 에서 'Incoming Webhook' URL 발급)")
+        return 1
+    if not _OUTBOX.exists():
+        print("[consortium] outbox 없음 — `init`/`send` 먼저 실행")
+        return 0
+    pending = sorted(p for p in _OUTBOX.glob("*.json"))
+    if not pending:
+        print("[consortium] 발신할 outbox 메시지 없음")
+        return 0
+    sent_dir = _OUTBOX / "sent"
+    sent_dir.mkdir(exist_ok=True)
+    ok_count = 0
+    for mf in pending:
+        m = json.loads(mf.read_text(encoding="utf-8"))
+        ok, detail = _post_teams(webhook, _build_teams_card(m))
+        tag = "✅" if ok else "❌"
+        print(f"  {tag} {m.get('from_team','?')}→{m.get('to_team','?')} cycle={m.get('cycle_id','?')} — {detail}")
+        if ok:
+            mf.rename(sent_dir / mf.name)
+            ok_count += 1
+    print(f"[consortium] Teams 발신 완료: {ok_count}/{len(pending)} (성공분 → outbox/sent/)")
+    return 0 if ok_count == len(pending) else 1
+
+
 def cmd_gateway(args) -> int:
-    """메시징 게이트웨이 어댑터 (STUB — 실제 transport 는 다운스트림이 봇 연동)."""
+    """메시징 게이트웨이 어댑터 (teams=발신 실구현 / slack·telegram=stub)."""
     platform = args.platform
+    if platform == "teams" and getattr(args, "send", False):
+        return _send_teams()
     desc = _GATEWAYS.get(platform, "?")
     print(f"[consortium] gateway: {platform} — {desc}")
     print("  ⚠️ STUB: 이 하네스는 메시지 계약·로스터·로컬 큐(inbox/outbox)만 stdlib 로 제공합니다.")
@@ -196,7 +272,9 @@ def cmd_gateway(args) -> int:
         print("    - Incoming Webhook 으로 outbox 메시지 POST, Events API 로 수신→inbox")
         print("    - 또는 slack_bolt 봇 (SLACK_BOT_TOKEN, 채널별 cycle_id 매핑)")
     elif platform == "teams":
-        print("    - Incoming Webhook(채널 커넥터) 또는 Bot Framework + Azure 앱 등록")
+        print("    - ✅ 발신 실구현됨: `gateway teams --send` (outbox→채널 POST)")
+        print(f"      웹훅 URL 은 `export {_TEAMS_WEBHOOK_ENV}=...` 환경변수로 주입 (셸 노출 금지)")
+        print("    - 수신(채널→inbox)은 Bot Framework + Azure 앱 등록 필요 (다운스트림)")
     elif platform == "telegram":
         print("    - Bot API sendMessage(outbox), getUpdates/webhook(수신→inbox). BotFather 토큰")
     else:
@@ -217,7 +295,8 @@ def cmd_self(args) -> int:
     print(f"  등록 팀: {len(roster.get('teams', {}))}개")
     print(f"  outbox: {len(list(_OUTBOX.glob('*.json'))) if _OUTBOX.exists() else 0}건 / "
           f"inbox: {len(list(_INBOX.glob('*.json'))) if _INBOX.exists() else 0}건")
-    print(f"  게이트웨이: {', '.join(_GATEWAYS)} (모두 stub — 다운스트림 봇 연동)")
+    teams_ready = "ready" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else f"{_TEAMS_WEBHOOK_ENV} 미설정"
+    print(f"  게이트웨이: teams=발신 실구현({teams_ready}) / slack·telegram=stub (다운스트림 봇 연동)")
     return 0
 
 
@@ -244,9 +323,11 @@ def main() -> None:
     p_inbox = sub.add_parser("inbox", help="수신 메시지 목록/표시")
     p_inbox.add_argument("--team", help="특정 수신 팀만 필터")
 
-    p_gw = sub.add_parser("gateway", help="메시징 게이트웨이 어댑터 (stub)")
+    p_gw = sub.add_parser("gateway", help="메시징 게이트웨이 (teams=발신 실구현 / 그외 stub)")
     p_gw.add_argument("platform", choices=list(_GATEWAYS), help="slack|teams|telegram")
     p_gw.add_argument("action", nargs="?", default="status", choices=["status", "setup"])
+    p_gw.add_argument("--send", action="store_true",
+                      help=f"(teams) outbox 메시지를 실제 발신 — 웹훅은 {_TEAMS_WEBHOOK_ENV} 환경변수")
 
     sub.add_parser("self", help="환경·의존성 점검")
 

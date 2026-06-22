@@ -32,10 +32,16 @@ python3 .claude/bin/consortium.py roster                      # 컨소시엄 팀
 python3 .claude/bin/consortium.py send --to team-beta --role designer --cycle PCYC-01 --stage design --msg "결제 화면 토큰 요청"
 python3 .claude/bin/consortium.py inbox                        # 수신 메시지 (게이트웨이가 외부→inbox)
 
-# 게이트웨이 (stub — 연동 가이드 출력)
-python3 .claude/bin/consortium.py gateway slack
+# 게이트웨이 — teams 발신 실구현 / slack·telegram stub
+python3 .claude/bin/consortium.py gateway teams                # 연동 안내
+CONSORTIUM_TEAMS_WEBHOOK="$(cat ~/.config/consortium/teams_webhook.txt)" \
+  python3 .claude/bin/consortium.py gateway teams --send       # outbox→Teams 채널 실제 발신
 python3 .claude/bin/consortium.py self                         # 환경 점검
 ```
+
+> **게이트웨이 설치**: MS Teams 웹훅 발급·연동 절차는
+> [docs/consortium-gateway-setup.md](../../docs/consortium-gateway-setup.md) 참조.
+> 발신(outbox→채널)은 실동작, 수신(채널→inbox)은 다운스트림 봇 인프라 필요.
 
 ## 메시지 계약 (팀 간 상호운용 표준)
 
