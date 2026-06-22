@@ -86,9 +86,10 @@ wiki/log-archive.md
 !.claude/state/product-cycle/.gitkeep
 !.claude/state/product-cycle/README.md
 
-# consortium 런타임 (roster.json + inbox/outbox — gitignore, ADR-012)
+# consortium 런타임 (roster.json + inbox/outbox + 수신 seen — gitignore, ADR-012)
 .claude/state/consortium/roster.json
 .claude/state/consortium/inbox/
 .claude/state/consortium/outbox/
+.claude/state/consortium/received-seen.json
 !.claude/state/consortium/.gitkeep
 !.claude/state/consortium/README.md

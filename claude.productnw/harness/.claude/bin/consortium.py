@@ -28,10 +28,12 @@ consortium.py — 분산 멀티팀 에이전트 컨소시엄 (d-3, claude.produc
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -61,6 +63,17 @@ _GATEWAYS = {
 
 # Teams 발신 어댑터: 웹훅 URL 은 자격증명(autonomous #3-A) — 셸 노출 금지, 환경변수로만 주입.
 _TEAMS_WEBHOOK_ENV = "CONSORTIUM_TEAMS_WEBHOOK"
+
+# Teams 수신(Graph 폴링) 자격증명 — 모두 환경변수로만 주입 (#3-A).
+_TEAMS_TOKEN_ENV = "CONSORTIUM_TEAMS_TOKEN"      # OAuth Bearer 토큰 (앱 등록 + ChannelMessage.Read.All)
+_TEAMS_TEAM_ENV = "CONSORTIUM_TEAMS_TEAM_ID"     # Graph team(group) id
+_TEAMS_CHANNEL_ENV = "CONSORTIUM_TEAMS_CHANNEL_ID"  # Graph channel id
+_GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+# 계약 봉투 — 사람용 카드 안에 기계가 무손실 복원할 원본 계약 JSON 을 base64 로 심는다.
+# 수신측은 메시지 어디에 박혀 있든 이 마커를 스캔해 원본 메시지를 그대로 복원한다.
+_ENVELOPE_PREFIX = "[[consortium-msg]]"
+_ENVELOPE_RE = re.compile(re.escape(_ENVELOPE_PREFIX) + r"([A-Za-z0-9+/=]+)")
 
 _TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -193,8 +206,11 @@ def _build_teams_card(m: dict) -> dict:
     """컨소시엄 메시지를 Teams 웹훅 페이로드로 변환한다.
     MessageCard 키(구형 Connector 렌더) + top-level text(Workflows 템플릿이 흔히 참조) 동시 포함."""
     title = f"[consortium] {m.get('from_team','?')} → {m.get('to_team','?')} (cycle {m.get('cycle_id','?')})"
+    # 원본 계약을 base64 봉투로 심어 수신측이 무손실 복원 (사람은 무시, 기계는 파싱).
+    envelope = _ENVELOPE_PREFIX + base64.b64encode(
+        json.dumps(m, ensure_ascii=False).encode("utf-8")).decode("ascii")
     flat = (f"{title}\n역할: {m.get('role','-')} · 단계: {m.get('stage') or '-'} · "
-            f"{m.get('ts','-')}\n{m.get('msg','')}")
+            f"{m.get('ts','-')}\n{m.get('msg','')}\n{envelope}")
     return {
         "@type": "MessageCard",
         "@context": "http://schema.org/extensions",
@@ -258,11 +274,108 @@ def _send_teams() -> int:
     return 0 if ok_count == len(pending) else 1
 
 
+def _self_team() -> str:
+    """이 노드의 팀 id (로스터의 첫 등록 팀). 수신 시 '나에게 온 메시지'만 거른다."""
+    teams = list(_load_roster().get("teams", {}))
+    return teams[0] if teams else ""
+
+
+def _graph_get(url: str, token: str) -> tuple[bool, dict | str]:
+    """Graph API GET (Bearer). (성공여부, JSON|오류문자열). 네트워크=경계 방어."""
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return True, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code} {exc.read().decode('utf-8', 'replace')[:300]}"
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        return False, f"요청 실패: {exc}"
+
+
+def _extract_envelope(msg: dict) -> dict | None:
+    """Graph 메시지 어디에 박혀 있든 계약 봉투(base64)를 스캔·복원한다. 없으면 None."""
+    blob = json.dumps(msg, ensure_ascii=False)  # body·attachments 어디든 마커가 있으면 잡힘
+    hit = _ENVELOPE_RE.search(blob)
+    if not hit:
+        return None
+    try:
+        return json.loads(base64.b64decode(hit.group(1)).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError):
+        return None
+
+
+def _receive_teams() -> int:
+    """Graph API 로 채널 메시지를 폴링 → consortium 계약 봉투를 가진 것만 inbox 에 적재.
+    토큰/team/channel id 는 환경변수로만 주입. seen 집합으로 멱등(중복 적재 방지)."""
+    token = os.environ.get(_TEAMS_TOKEN_ENV, "").strip()
+    team_id = os.environ.get(_TEAMS_TEAM_ENV, "").strip()
+    channel_id = os.environ.get(_TEAMS_CHANNEL_ENV, "").strip()
+    if not (token and team_id and channel_id):
+        print("[consortium] ❌ Graph 수신 자격증명 미설정 — 환경변수로 주입 (셸 노출 금지):")
+        print(f"  {_TEAMS_TOKEN_ENV} (Bearer 토큰, ChannelMessage.Read.All)")
+        print(f"  {_TEAMS_TEAM_ENV} / {_TEAMS_CHANNEL_ENV} (Graph team·channel id)")
+        print("  발급 절차: docs/consortium-gateway-setup.md §8 (Graph 폴링 수신)")
+        return 1
+    me = _self_team()
+    if not me:
+        print("[consortium] ❌ 로스터에 팀 없음 — `init <team>` 먼저 실행")
+        return 1
+
+    _INBOX.mkdir(parents=True, exist_ok=True)
+    seen_file = _STATE / "received-seen.json"
+    seen = set(json.loads(seen_file.read_text(encoding="utf-8"))) if seen_file.exists() else set()
+
+    url = f"{_GRAPH_BASE}/teams/{team_id}/channels/{channel_id}/messages?$top=50"
+    ok, data = _graph_get(url, token)
+    if not ok:
+        print(f"[consortium] ❌ Graph 폴링 실패 — {data}")
+        return 1
+
+    ingested = skipped = 0
+    for msg in data.get("value", []):
+        gid = msg.get("id", "")
+        if gid in seen:
+            continue
+        seen.add(gid)  # 봉투 유무와 무관하게 본 메시지는 기록 (재스캔 방지)
+        contract = _extract_envelope(msg)
+        if not contract:
+            continue  # consortium 메시지 아님
+        # 나에게 온 것만, 내가 보낸 건 제외
+        if contract.get("to_team") != me or contract.get("from_team") == me:
+            skipped += 1
+            continue
+        contract["status"] = "received"
+        contract["graph_msg_id"] = gid
+        safe_ts = str(contract.get("ts", "")).replace(":", "").replace("-", "") or gid
+        out = _INBOX / f"{safe_ts}__from-{contract.get('from_team','?')}__{gid[-6:]}.json"
+        out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
+              f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
+        ingested += 1
+
+    seen_file.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+    print(f"[consortium] Teams 수신 완료: {ingested}건 inbox 적재 "
+          f"(타팀행 {skipped}건 제외, 누적 seen {len(seen)})")
+    return 0
+
+
 def cmd_gateway(args) -> int:
     """메시징 게이트웨이 어댑터 (teams=발신 실구현 / slack·telegram=stub)."""
     platform = args.platform
     if platform == "teams" and getattr(args, "send", False):
         return _send_teams()
+    if platform == "teams" and getattr(args, "receive", False):
+        interval = getattr(args, "poll", 0) or 0
+        if interval <= 0:
+            return _receive_teams()
+        print(f"[consortium] Teams 수신 폴링 — {interval}s 간격 (Ctrl-C 종료)")
+        try:
+            while True:
+                _receive_teams()
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\n[consortium] 폴링 종료")
+            return 0
     desc = _GATEWAYS.get(platform, "?")
     print(f"[consortium] gateway: {platform} — {desc}")
     print("  ⚠️ STUB: 이 하네스는 메시지 계약·로스터·로컬 큐(inbox/outbox)만 stdlib 로 제공합니다.")
@@ -272,9 +385,11 @@ def cmd_gateway(args) -> int:
         print("    - Incoming Webhook 으로 outbox 메시지 POST, Events API 로 수신→inbox")
         print("    - 또는 slack_bolt 봇 (SLACK_BOT_TOKEN, 채널별 cycle_id 매핑)")
     elif platform == "teams":
-        print("    - ✅ 발신 실구현됨: `gateway teams --send` (outbox→채널 POST)")
-        print(f"      웹훅 URL 은 `export {_TEAMS_WEBHOOK_ENV}=...` 환경변수로 주입 (셸 노출 금지)")
-        print("    - 수신(채널→inbox)은 Bot Framework + Azure 앱 등록 필요 (다운스트림)")
+        print("    - ✅ 발신: `gateway teams --send` (outbox→채널 POST)")
+        print(f"      웹훅 URL → `export {_TEAMS_WEBHOOK_ENV}=...` (셸 노출 금지)")
+        print("    - ✅ 수신: `gateway teams --receive [--poll N]` (Graph 폴링 채널→inbox)")
+        print(f"      토큰/ID → {_TEAMS_TOKEN_ENV}/{_TEAMS_TEAM_ENV}/{_TEAMS_CHANNEL_ENV}")
+        print("      (앱 등록 + ChannelMessage.Read.All — docs/consortium-gateway-setup.md §8)")
     elif platform == "telegram":
         print("    - Bot API sendMessage(outbox), getUpdates/webhook(수신→inbox). BotFather 토큰")
     else:
@@ -295,8 +410,11 @@ def cmd_self(args) -> int:
     print(f"  등록 팀: {len(roster.get('teams', {}))}개")
     print(f"  outbox: {len(list(_OUTBOX.glob('*.json'))) if _OUTBOX.exists() else 0}건 / "
           f"inbox: {len(list(_INBOX.glob('*.json'))) if _INBOX.exists() else 0}건")
-    teams_ready = "ready" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else f"{_TEAMS_WEBHOOK_ENV} 미설정"
-    print(f"  게이트웨이: teams=발신 실구현({teams_ready}) / slack·telegram=stub (다운스트림 봇 연동)")
+    send_ok = "✓" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else "✗"
+    recv_ok = "✓" if all(os.environ.get(e, "").strip()
+                         for e in (_TEAMS_TOKEN_ENV, _TEAMS_TEAM_ENV, _TEAMS_CHANNEL_ENV)) else "✗"
+    print(f"  게이트웨이: teams=발신[{send_ok}]+수신[{recv_ok}] 실구현 / slack·telegram=stub")
+    print("    (✓=자격증명 준비됨 / ✗=환경변수 미설정 — 기능은 구현됨)")
     return 0
 
 
@@ -328,6 +446,10 @@ def main() -> None:
     p_gw.add_argument("action", nargs="?", default="status", choices=["status", "setup"])
     p_gw.add_argument("--send", action="store_true",
                       help=f"(teams) outbox 메시지를 실제 발신 — 웹훅은 {_TEAMS_WEBHOOK_ENV} 환경변수")
+    p_gw.add_argument("--receive", action="store_true",
+                      help=f"(teams) Graph 폴링으로 채널→inbox 수신 — {_TEAMS_TOKEN_ENV}/TEAM_ID/CHANNEL_ID 환경변수")
+    p_gw.add_argument("--poll", type=int, default=0, metavar="SEC",
+                      help="(teams --receive) 주기 폴링 간격(초). 0=1회만")
 
     sub.add_parser("self", help="환경·의존성 점검")
 

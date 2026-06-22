@@ -13,11 +13,12 @@
 
 | 방향 | 상태 | 비고 |
 |---|---|---|
-| **발신** outbox → Teams 채널 | ✅ **실구현** (`gateway teams --send`) | 이 가이드로 즉시 동작 |
-| **수신** Teams 채널 → inbox | 🔸 stub | Bot Framework + Azure 앱 등록 필요 → 다운스트림 몫 |
+| **발신** outbox → Teams 채널 | ✅ **실구현** (`gateway teams --send`) | §2~4 — 웹훅 URL |
+| **수신** Teams 채널 → inbox | ✅ **실구현** (`gateway teams --receive`) | §8 — Graph 폴링 + OAuth 토큰 |
 
-→ 이 가이드는 **단방향 발신**을 켠다. "팀이 보낸 메시지가 진짜 Teams 채널에 뜬다"를 검증하는 게 목표.
-양방향 자동 수신은 별도 봇 인프라가 필요하다 (localllm 의 32B 위임과 같은 정직한 경계).
+→ 발신·수신 모두 stdlib `urllib` 로 동작한다. 발신은 **웹훅 URL**(§2), 수신은 **Graph OAuth 토큰 +
+team/channel id**(§8)가 필요하다. 둘 다 갖추면 **에이전트↔에이전트 완전 자동 왕복**이 된다
+(A→Teams→B 수신→B답변→Teams→A 수신). 자격증명·앱등록은 사용자/다운스트림 책임 (d-3 경계).
 
 ---
 
@@ -104,6 +105,8 @@ CONSORTIUM_TEAMS_WEBHOOK="$(cat ~/.config/consortium/teams_webhook.txt)" \
 
 - ✅ 지정한 **Teams 채널에 카드/메시지가 게시**되면 성공.
 - 발신 성공한 메시지는 `outbox/sent/` 로 이동 → 재실행해도 중복 발송 안 됨.
+- 발신 페이로드의 본문에는 **base64 계약 봉투**(`[[consortium-msg]]...`)가 함께 실린다 — 사람은
+  무시하지만 수신측(§8)이 이걸 스캔해 원본 메시지를 무손실 복원한다.
 
 ---
 
@@ -135,8 +138,76 @@ Workflows 템플릿을 커스터마이즈해 다른 필드(`@{triggerBody()?['ti
 ## 7. 보안·운영 메모
 
 - 웹훅 URL 유출 시 누구나 채널에 글쓰기 가능 → **즉시 Teams 에서 URL 재발급(rotate)**.
-- 발신 전용이라 채널 내용을 **읽지는 못한다** (수신 stub).
+- 발신/수신 자격증명(웹훅·토큰)은 **환경변수로만** 주입 — 코드·설정·로그·채팅 노출 금지.
 - 발송량이 많으면 Teams 측 rate limit 가능 — 배치 발신 시 간격을 둔다 (현재 어댑터는 순차 발신).
+
+---
+
+## 8. 수신 — Graph API 폴링 (채널 → inbox)
+
+발신의 역방향. Teams 채널 메시지를 **Microsoft Graph** 로 폴링해, consortium 계약 봉투(§4)를
+가진 메시지만 골라 **나(이 팀)에게 온 것**을 `inbox/` 에 적재한다. 이게 채워지면 **완전 자동 왕복**
+(A→Teams→B 수신→B답변→Teams→A 수신)이 된다. stdlib `urllib` 만 사용.
+
+### 8-1. Azure 앱 등록 (1회)
+
+1. [Azure Portal](https://portal.azure.com) → **Microsoft Entra ID → App registrations → New registration**
+2. 이름 지정 → 등록. **Application (client) ID** + **Directory (tenant) ID** 기록
+3. **API permissions → Add → Microsoft Graph**:
+   - 봇처럼 무인 폴링 → **Application permission** `ChannelMessage.Read.All`
+   - **Grant admin consent** 클릭 (관리자 동의 필수)
+4. **Certificates & secrets → New client secret** → 값 복사 (한 번만 보임)
+
+### 8-2. team / channel id 확보
+
+- Teams 채널 → ⋯ → **Get link to channel** → URL 의 `groupId`(=team id) 와 `channelId` 추출, 또는
+- Graph 탐색: `GET /me/joinedTeams` → team id, `GET /teams/{team-id}/channels` → channel id
+
+### 8-3. 액세스 토큰 발급 (client credentials)
+
+```bash
+curl -s -X POST "https://login.microsoftonline.com/<TENANT_ID>/oauth2/v2.0/token" \
+  -d "client_id=<CLIENT_ID>" \
+  -d "client_secret=<CLIENT_SECRET>" \
+  -d "scope=https://graph.microsoft.com/.default" \
+  -d "grant_type=client_credentials" | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])"
+```
+> 토큰은 보통 1시간 만료 → 폴링 루프를 길게 돌릴 땐 토큰 갱신 래퍼가 필요(다운스트림). 단발/단시간은 그대로.
+
+### 8-4. 자격증명 주입 + 수신 실행
+
+```bash
+export CONSORTIUM_TEAMS_TOKEN="$(< ~/.config/consortium/teams_token.txt)"   # 위에서 받은 토큰
+export CONSORTIUM_TEAMS_TEAM_ID='<team(group) id>'
+export CONSORTIUM_TEAMS_CHANNEL_ID='<channel id>'
+
+python3 .claude/bin/consortium.py gateway teams --receive          # 1회 폴링
+python3 .claude/bin/consortium.py gateway teams --receive --poll 30  # 30초 간격 연속 폴링
+python3 .claude/bin/consortium.py inbox                            # 적재된 수신 메시지 확인
+```
+
+기대 출력:
+```
+  ⬇ team-alpha → team-beta [designer] cycle=PCYC-01: 디자인 토큰 요청
+[consortium] Teams 수신 완료: 1건 inbox 적재 (타팀행 0건 제외, 누적 seen 1)
+```
+
+### 8-5. 동작 규칙
+
+- **봉투 복원**: 메시지 body·attachment 어디에 박혀 있든 `[[consortium-msg]]<base64>` 마커를
+  스캔해 원본 계약 JSON 을 무손실 복원 (사람용 카드 렌더와 무관).
+- **지목 필터**: 계약의 `to_team` 이 **내 팀**이고 `from_team` 이 내가 아닌 것만 적재 (내가 보낸 건 제외).
+- **멱등성**: 처리한 Graph 메시지 id 를 `state/consortium/received-seen.json` 에 기록 → 재폴링해도 중복 적재 없음.
+
+### 8-6. 수신 트러블슈팅
+
+| 증상 | 원인 / 해결 |
+|---|---|
+| `자격증명 미설정` | §8-4 환경변수 3종(`TOKEN`/`TEAM_ID`/`CHANNEL_ID`) 주입 확인 |
+| `HTTP 401` | 토큰 만료/오류 — §8-3 재발급 |
+| `HTTP 403` | 권한 부족 — `ChannelMessage.Read.All` + **관리자 동의** 확인 |
+| `HTTP 404` | team/channel id 오류 — §8-2 재확인 |
+| 0건 적재(메시지는 있는데) | 발신측이 봉투 포함 버전(`--send`)으로 보냈는지, `to_team` 이 내 팀인지 확인 |
 
 ---
 
