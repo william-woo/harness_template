@@ -211,6 +211,56 @@ python3 .claude/bin/consortium.py inbox                            # 적재된 �
 
 ---
 
+## 9. OpenClaw host — 네이티브 채널 브리지 (ADR-013)
+
+§2~8 은 **claude-code/codex host** 기준(우리가 webhook+Graph 를 직접 plumbing). 그런데 host 가
+**OpenClaw** 면 OpenClaw 가 Teams/Slack/Telegram 등 **20+ 채널을 네이티브 지원**(로컬 Gateway 데몬,
+채널↔에이전트 라우팅)하므로, 우리 webhook/Graph 를 다시 짜지 않고 **OpenClaw 에 위임**한다.
+
+consortium 게이트웨이는 **host-aware** 다 (`HARNESS_AGENT_TYPE` > `host.json` agent_type):
+
+| host | transport |
+|---|---|
+| `claude-code` / `codex` | Teams webhook(발신) + Graph 폴링(수신) — §2~8 |
+| `openclaw` | **핸드오프 브리지** — OpenClaw Gateway(에이전트=courier)에 위임 |
+
+### 9-1. 동작 구조
+
+consortium 과 OpenClaw 에이전트(courier) 사이의 경계는 **두 핸드오프 디렉토리**다:
+
+```
+state/consortium/openclaw-outbound/   consortium → OpenClaw (채널로 발신할 메시지)
+state/consortium/openclaw-inbound/    OpenClaw → consortium (채널에서 받은 메시지)
+```
+
+- `gateway <channel> --send` (host=openclaw) → outbox 메시지를 **openclaw-outbound/** 에 핸드오프
+  레코드(채널·conversation_ref·본문+base64 계약 봉투)로 적재.
+- OpenClaw 에이전트(courier)가 이를 읽어 **자기 채널 reply 도구**로 실제 채널에 전송
+  (답장은 OpenClaw 가 conversation_ref 로 원 스레드에 복귀).
+- 반대로 OpenClaw 가 채널에서 받은 메시지를 **openclaw-inbound/** 에 드롭하면,
+  `gateway <channel> --receive` 가 계약을 복원해 `inbox/` 로 적재 (지목 필터 + processed/ 멱등).
+
+### 9-2. 사용
+
+```bash
+export HARNESS_AGENT_TYPE=openclaw   # 또는 .claude/host.json 의 agent_type=openclaw
+python3 .claude/bin/consortium.py gateway teams --send       # → openclaw-outbound/
+python3 .claude/bin/consortium.py gateway teams --receive    # openclaw-inbound/ → inbox
+python3 .claude/bin/consortium.py self                       # host=openclaw transport 확인
+```
+
+OpenClaw 채널 설정(Azure Bot·`~/.openclaw/openclaw.json`·터널)은 OpenClaw 문서를 따른다:
+- 공식: https://docs.openclaw.ai/channels/msteams (Azure Bot + RSC 권한 + `/api/messages` + 터널)
+
+### 9-3. courier 바인딩 (정직한 경계)
+
+- consortium 쪽 **계약↔핸드오프 매핑 + 지목/멱등 라우팅** 은 stdlib 로 **실재·테스트**됨.
+- 핸드오프 레코드를 **실제 OpenClaw 채널로 싣고 내리는 courier**(OpenClaw 에이전트의 채널 도구
+  호출, 또는 Gateway 플로/ACP)는 OpenClaw 런타임에 바인딩 — §2~8 Teams stub→real 과 같은 seam.
+- 같은 머신에서 courier 를 모킹하면 **완전 왕복 검증 가능** (실 OpenClaw 연결은 다운스트림 몫).
+
+---
+
 ## 부록 — Slack / Telegram (아직 stub)
 
 같은 outbox→플랫폼 패턴이며 transport 만 다르다. 현재 `consortium.py` 는 안내만 출력한다.

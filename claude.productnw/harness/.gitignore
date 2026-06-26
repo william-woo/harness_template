@@ -91,5 +91,8 @@ wiki/log-archive.md
 .claude/state/consortium/inbox/
 .claude/state/consortium/outbox/
 .claude/state/consortium/received-seen.json
+# OpenClaw 채널 브리지 핸드오프 런타임 (ADR-013)
+.claude/state/consortium/openclaw-outbound/
+.claude/state/consortium/openclaw-inbound/
 !.claude/state/consortium/.gitkeep
 !.claude/state/consortium/README.md

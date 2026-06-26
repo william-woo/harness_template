@@ -54,6 +54,26 @@ _ROSTER = _STATE / "roster.json"
 _INBOX = _STATE / "inbox"
 _OUTBOX = _STATE / "outbox"
 
+# OpenClaw 채널 브리지 핸드오프 디렉토리 (ADR-013) — host=openclaw 일 때만 사용.
+# consortium ↔ OpenClaw 에이전트(courier) 사이의 interop 경계.
+_OC_OUTBOUND = _STATE / "openclaw-outbound"  # consortium → OpenClaw(채널로 발신)
+_OC_INBOUND = _STATE / "openclaw-inbound"    # OpenClaw(채널 수신) → consortium
+
+
+def _detect_host() -> str:
+    """현재 host 를 감지한다 (HARNESS_AGENT_TYPE > host.json agent_type > 기본 claude-code).
+    consortium 게이트웨이 transport 선택에 쓰인다 (ADR-013)."""
+    env = os.environ.get("HARNESS_AGENT_TYPE", "").strip()
+    if env:
+        return env
+    host_json = _ROOT / ".claude" / "host.json"
+    if host_json.exists():
+        try:
+            return json.loads(host_json.read_text(encoding="utf-8")).get("agent_type", "claude-code")
+        except (json.JSONDecodeError, OSError):
+            pass
+    return "claude-code"
+
 # 게이트웨이 어댑터 — teams 는 발신(단방향) 실구현, slack/telegram 은 stub.
 _GATEWAYS = {
     "slack": "Slack (Incoming Webhook 또는 Bolt 봇 + bot token)",
@@ -359,12 +379,110 @@ def _receive_teams() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# OpenClaw 채널 브리지 (ADR-013) — host=openclaw 일 때 transport.
+# webhook/Graph 를 직접 안 쓰고, OpenClaw Gateway(에이전트=courier)에 위임한다.
+# consortium 은 핸드오프 디렉토리에 계약을 싣고/내릴 뿐 — 실제 채널 I/O 는 courier 몫.
+# ---------------------------------------------------------------------------
+def _send_openclaw(platform: str) -> int:
+    """outbox 메시지를 OpenClaw outbound 핸드오프로 적재한다.
+    OpenClaw 에이전트(courier)가 이를 읽어 자기 채널 reply 도구로 platform 채널에 전송한다."""
+    if not _OUTBOX.exists():
+        print("[consortium] outbox 없음 — `init`/`send` 먼저 실행")
+        return 0
+    pending = sorted(_OUTBOX.glob("*.json"))
+    if not pending:
+        print("[consortium] 발신할 outbox 메시지 없음")
+        return 0
+    _OC_OUTBOUND.mkdir(parents=True, exist_ok=True)
+    sent_dir = _OUTBOX / "sent"
+    sent_dir.mkdir(exist_ok=True)
+    for mf in pending:
+        m = json.loads(mf.read_text(encoding="utf-8"))
+        card = _build_teams_card(m)  # 사람용 text + base64 계약 봉투 재사용 (무손실)
+        record = {
+            "channel": platform,                         # msteams/slack/telegram …
+            "conversation_ref": m.get("conversation_ref", ""),  # 원 스레드 복귀용 (있으면)
+            "text": card["text"],                        # 봉투 포함 본문
+            "consortium_msg": m,                         # 원본 계약 (courier 편의)
+        }
+        out = _OC_OUTBOUND / mf.name
+        out.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        mf.rename(sent_dir / mf.name)
+        print(f"  ↪ {m.get('from_team','?')}→{m.get('to_team','?')} [{m.get('role','?')}] "
+              f"cycle={m.get('cycle_id','?')} → openclaw-outbound/ ({platform})")
+    print(f"[consortium] OpenClaw outbound 적재: {len(pending)}건 "
+          f"→ OpenClaw 에이전트(courier)가 채널로 전송")
+    return 0
+
+
+def _receive_openclaw() -> int:
+    """OpenClaw inbound 핸드오프(채널에서 받은 메시지)를 읽어 계약을 복원·inbox 적재한다.
+    OpenClaw courier 가 채널 수신분을 openclaw-inbound/ 에 드롭한다. 지목 필터 + 멱등."""
+    me = _self_team()
+    if not me:
+        print("[consortium] ❌ 로스터에 팀 없음 — `init <team>` 먼저 실행")
+        return 1
+    if not _OC_INBOUND.exists() or not any(_OC_INBOUND.glob("*.json")):
+        print("[consortium] openclaw-inbound 비어있음 — OpenClaw courier 가 채널 수신분을 여기 드롭")
+        return 0
+    _INBOX.mkdir(parents=True, exist_ok=True)
+    processed_dir = _OC_INBOUND / "processed"
+    processed_dir.mkdir(exist_ok=True)
+    ingested = skipped = 0
+    for rf in sorted(_OC_INBOUND.glob("*.json")):
+        record = json.loads(rf.read_text(encoding="utf-8"))
+        # 계약 복원: 명시 consortium_msg 우선, 없으면 text 의 base64 봉투 스캔
+        contract = record.get("consortium_msg") or _extract_envelope(record)
+        if not contract:
+            rf.rename(processed_dir / rf.name)
+            continue  # consortium 메시지 아님
+        if contract.get("to_team") != me or contract.get("from_team") == me:
+            rf.rename(processed_dir / rf.name)
+            skipped += 1
+            continue
+        contract["status"] = "received"
+        if record.get("conversation_ref"):
+            contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
+        safe_ts = str(contract.get("ts", "")).replace(":", "").replace("-", "") or rf.stem
+        out = _INBOX / f"{safe_ts}__from-{contract.get('from_team','?')}.json"
+        out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+        rf.rename(processed_dir / rf.name)
+        print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
+              f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
+        ingested += 1
+    print(f"[consortium] OpenClaw 수신 완료: {ingested}건 inbox 적재 "
+          f"(타팀행 {skipped}건 제외, openclaw-inbound/processed/ 로 이동)")
+    return 0
+
+
 def cmd_gateway(args) -> int:
     """메시징 게이트웨이 어댑터 (teams=발신 실구현 / slack·telegram=stub)."""
     platform = args.platform
-    if platform == "teams" and getattr(args, "send", False):
+    host = _detect_host()
+    do_send = getattr(args, "send", False)
+    do_recv = getattr(args, "receive", False)
+
+    # host=openclaw → OpenClaw Gateway 위임 (ADR-013): webhook/Graph 대신 핸드오프 브리지.
+    if host == "openclaw" and (do_send or do_recv):
+        if do_send:
+            return _send_openclaw(platform)
+        interval = getattr(args, "poll", 0) or 0
+        if interval <= 0:
+            return _receive_openclaw()
+        print(f"[consortium] OpenClaw 수신 폴링 — {interval}s 간격 (Ctrl-C 종료)")
+        try:
+            while True:
+                _receive_openclaw()
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            print("\n[consortium] 폴링 종료")
+            return 0
+
+    # claude-code/codex host → Teams webhook(발신) + Graph(수신) 직접 transport.
+    if platform == "teams" and do_send:
         return _send_teams()
-    if platform == "teams" and getattr(args, "receive", False):
+    if platform == "teams" and do_recv:
         interval = getattr(args, "poll", 0) or 0
         if interval <= 0:
             return _receive_teams()
@@ -377,7 +495,13 @@ def cmd_gateway(args) -> int:
             print("\n[consortium] 폴링 종료")
             return 0
     desc = _GATEWAYS.get(platform, "?")
-    print(f"[consortium] gateway: {platform} — {desc}")
+    print(f"[consortium] gateway: {platform} — {desc}  (host={host})")
+    if host == "openclaw":
+        print("  ✅ host=openclaw → OpenClaw Gateway 위임 (ADR-013): `--send`/`--receive` 로")
+        print("     openclaw-outbound/·openclaw-inbound/ 핸드오프 브리지 사용 (webhook/Graph 불요).")
+        print("     OpenClaw 에이전트(courier)가 네이티브 채널과 핸드오프 사이를 잇는다.")
+        print("     설치: docs/consortium-gateway-setup.md §9 (OpenClaw host)")
+        return 0
     print("  ⚠️ STUB: 이 하네스는 메시지 계약·로스터·로컬 큐(inbox/outbox)만 stdlib 로 제공합니다.")
     print("  실제 전송(outbox→플랫폼, 플랫폼→inbox)은 자격증명(#3-A)·외부 SDK·웹훅이 필요해")
     print("  **다운스트림이 봇을 붙입니다**. 권장 연동:")
@@ -410,11 +534,20 @@ def cmd_self(args) -> int:
     print(f"  등록 팀: {len(roster.get('teams', {}))}개")
     print(f"  outbox: {len(list(_OUTBOX.glob('*.json'))) if _OUTBOX.exists() else 0}건 / "
           f"inbox: {len(list(_INBOX.glob('*.json'))) if _INBOX.exists() else 0}건")
-    send_ok = "✓" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else "✗"
-    recv_ok = "✓" if all(os.environ.get(e, "").strip()
-                         for e in (_TEAMS_TOKEN_ENV, _TEAMS_TEAM_ENV, _TEAMS_CHANNEL_ENV)) else "✗"
-    print(f"  게이트웨이: teams=발신[{send_ok}]+수신[{recv_ok}] 실구현 / slack·telegram=stub")
-    print("    (✓=자격증명 준비됨 / ✗=환경변수 미설정 — 기능은 구현됨)")
+    host = _detect_host()
+    if host == "openclaw":
+        oc_out = len(list(_OC_OUTBOUND.glob("*.json"))) if _OC_OUTBOUND.exists() else 0
+        oc_in = len(list(_OC_INBOUND.glob("*.json"))) if _OC_INBOUND.exists() else 0
+        print(f"  host: openclaw → transport=OpenClaw 채널 브리지 (ADR-013)")
+        print(f"    핸드오프: outbound {oc_out}건 / inbound {oc_in}건 "
+              f"(OpenClaw courier 가 네이티브 채널과 연결)")
+    else:
+        send_ok = "✓" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else "✗"
+        recv_ok = "✓" if all(os.environ.get(e, "").strip()
+                             for e in (_TEAMS_TOKEN_ENV, _TEAMS_TEAM_ENV, _TEAMS_CHANNEL_ENV)) else "✗"
+        print(f"  host: {host} → transport=Teams webhook+Graph")
+        print(f"    게이트웨이: teams=발신[{send_ok}]+수신[{recv_ok}] / slack·telegram=stub")
+        print("    (✓=자격증명 준비됨 / ✗=환경변수 미설정 — 기능은 구현됨)")
     return 0
 
 

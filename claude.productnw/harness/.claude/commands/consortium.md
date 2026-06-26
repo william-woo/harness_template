@@ -32,16 +32,21 @@ python3 .claude/bin/consortium.py roster                      # 컨소시엄 팀
 python3 .claude/bin/consortium.py send --to team-beta --role designer --cycle PCYC-01 --stage design --msg "결제 화면 토큰 요청"
 python3 .claude/bin/consortium.py inbox                        # 수신 메시지 (게이트웨이가 외부→inbox)
 
-# 게이트웨이 — teams 발신 실구현 / slack·telegram stub
-python3 .claude/bin/consortium.py gateway teams                # 연동 안내
+# 게이트웨이 — host-aware transport (ADR-013)
+python3 .claude/bin/consortium.py gateway teams                # 연동 안내 (host 표시)
+# claude-code/codex host: Teams webhook(발신) + Graph 폴링(수신)
 CONSORTIUM_TEAMS_WEBHOOK="$(cat ~/.config/consortium/teams_webhook.txt)" \
-  python3 .claude/bin/consortium.py gateway teams --send       # outbox→Teams 채널 실제 발신
-python3 .claude/bin/consortium.py self                         # 환경 점검
+  python3 .claude/bin/consortium.py gateway teams --send       # outbox→Teams 채널 발신
+python3 .claude/bin/consortium.py gateway teams --receive      # Graph 폴링 채널→inbox
+# openclaw host: OpenClaw Gateway 위임 (핸드오프 브리지, webhook/Graph 불요)
+HARNESS_AGENT_TYPE=openclaw python3 .claude/bin/consortium.py gateway teams --send
+python3 .claude/bin/consortium.py self                         # host/transport 점검
 ```
 
-> **게이트웨이 설치**: MS Teams 웹훅 발급·연동 절차는
-> [docs/consortium-gateway-setup.md](../../docs/consortium-gateway-setup.md) 참조.
-> 발신(outbox→채널)은 실동작, 수신(채널→inbox)은 다운스트림 봇 인프라 필요.
+> **게이트웨이 설치**: [docs/consortium-gateway-setup.md](../../docs/consortium-gateway-setup.md) 참조.
+> - claude-code/codex host: §2~8 (Teams 웹훅 발신 + Graph 폴링 수신, 완전 왕복)
+> - **openclaw host**: §9 (OpenClaw 네이티브 채널에 위임 — 핸드오프 브리지, ADR-013)
+> consortium 게이트웨이는 host(`HARNESS_AGENT_TYPE`/host.json)에 따라 transport 를 자동 선택한다.
 
 ## 메시지 계약 (팀 간 상호운용 표준)
 
