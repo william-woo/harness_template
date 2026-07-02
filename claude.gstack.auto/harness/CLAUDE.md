@@ -14,10 +14,16 @@
 
 이 작업 환경은 자율 진행 정책을 채택합니다. 3 규칙이 핵심:
 
-### 규칙 #1 — 작업 디렉토리 내부는 자율 진행
+### 규칙 #1 — 작업 디렉토리 내부는 자율 진행 (단, 파일 삭제는 승인)
 `$CLAUDE_PROJECT_DIR` 하위의 모든 액션은 **사용자 승인 요청 없이 진행**됩니다.
-`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(*)`, `Write(*)` 광범위
-패턴이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
+`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(**)`, `Write(**)`,
+`MultiEdit(**)` 광범위 패턴(중첩 경로 포함)이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
+
+> **예외 — 파일 삭제는 승인 필요**: `permissions.ask` 에 `rm`/`rmdir`/`unlink`/`shred`/
+> `git clean`/`trash`/`find … -delete` 를 등재해, 자동 허용을 오버라이드하고 **삭제 명령은
+> 프롬프트**가 뜬다 (precedence: deny > ask > allow). `rm -rf /`·`~`·`$HOME` 류는 deny 로 완전 차단.
+> 선언 규칙이 못 잡는 삭제 경로(예: `python3` 스크립트 내 삭제)는 에이전트가 **행동 규칙으로
+> 삭제 전 확인**한다.
 
 ### 규칙 #2 — 모호한 경우 에이전트 간 검토
 판단이 불확실한 액션은 사용자에게 묻지 말고 **Gatekeeper 에이전트** 호출 →
@@ -625,7 +631,51 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (7 변형 매트릭스)
+## 🧭 product-cycle 호출 기준 (Phase 13 — F018, claude.productmgr 전용)
+
+다음 중 하나에 해당하면 `/project:product-cycle` (PM 주도 통합 라이프사이클):
+
+- **아이디어 → 출시**를 한 흐름으로 (제품 발견부터 배포 게이트까지)
+- 제품 관점(사용자·가치·**성공지표**)이 중요한 신규 기능
+- 기획·설계·개발·검증이 모두 필요한 복합 제품 작업
+
+해당 없으면:
+- 단일 역할(버그 수정 등) → 해당 에이전트 직접 호출
+- 실행 라우팅만(제품 brief 불필요) → `/project:orchestrate`
+- 설계 체인만 → `/project:plan-full`
+
+**5단계**: 기획(product-manager→planner) → 설계(architect/designer) → 개발(developer) →
+검증(reviewer→qa) → 배포(lint→ship→backup-sync). PM 이 성공지표 기준으로 각 단계 게이트.
+**배포**=하네스 게이트, 실제 prod CI/CD 는 다운스트림 위임.
+**중간 진입**: `--from=<plan|design|develop|verify|deploy>` 로 설계/개발/검증부터 시작 가능 (PM 이
+상위 산출물 존재 점검 + brief 없으면 acceptance_criteria 를 성공지표로 채택하는 경량 intake). `--to=` 로 조기 종료.
+
+**claude.productmgr 변형 전용**: 다른 변형엔 product-manager.md / product-cycle.md 가 없어 미인식.
+
+---
+
+## 🤝 consortium 호출 기준 (Phase 14 — F019, claude.productnw 전용, d-3)
+
+다음 중 하나에 해당하면 `/project:consortium` (분산 멀티팀 컨소시엄):
+
+- 여러 팀/조직이 **한 제품을 분담**해 만들 때 (팀별 전문성 분리)
+- 단계별로 다른 팀이 담당 (예: A팀 기획·PM, B팀 디자인, C팀 개발) — 멀티팀 product-cycle
+- 팀 간 메시지로 작업을 핸드오프·통합해야 할 때
+
+해당 없으면:
+- 한 팀 내 통합 흐름 → `/project:product-cycle`
+- 한 팀 내 실행 라우팅 → `/project:orchestrate`
+
+**정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
+Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 SDK·웹훅이 필요해 **다운스트림이 봇
+연동**(codex/openclaw stub 와 동일 패턴). 같은 머신/공유 볼륨이면 로컬 큐로 컨소시엄 흐름을 검증 가능.
+팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
+
+**claude.productnw 변형 전용**: 다른 변형엔 consortium.py / consortium.md 가 없어 미인식.
+
+---
+
+## 🪞 메인 ↔ 변형 미러 정책 (11 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -635,7 +685,34 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
+| **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
+| **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
+> 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
+> 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, Teams/Slack/Telegram 게이트웨이는
+> **stub**(codex/openclaw 처럼 안내+graceful degrade — 실제 봇 transport 는 다운스트림 책임). 팀 내부는
+> single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
+
+> **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
+> 에이전트**가 사용자와 협력해 제품 발견·요구·성공지표를 정의하고, `/project:product-cycle` 로
+> **기획→설계→개발→검증→배포** 전 과정을 supervisor 로 조율. PM=why·what(제품 brief) /
+> planner=feature 분해. 배포=하네스 게이트(lint→ship→backup), 실제 prod CI/CD 는 다운스트림.
+
+> **claude.hermes 변형 (F016)**: NousResearch/hermes-agent 패턴 이식 (ADR-010). orch 변형 복사 +
+> ① FTS5 세션 검색(`session_search.py`) ② 스킬 자동생성/self-improve(`skill_forge.py`)
+> ③ agentskills.io 표준 적합성. hermes 3종 기능은 **stdlib only** (Hermes 의 메시징 게이트웨이 등
+> 무거운 부분은 미이식 — 개인비서 영역이라 SDLC 하네스 목적과 불일치). 기존 스킬은 이미 표준 호환(6/6 PASS).
+
+> **localllm 변형 (F015 / d-2)**: Claude Code 가 아니라 **OpenCode(오픈소스 agent framework) +
+> 로컬 LLM(Ollama)** 으로 하네스를 구동하는 PoC 샌드박스 (orch 변형 복사본 + d-2 오버레이).
+> 호스트 어댑터 `opencode.py` 가 `.claude/agents/*.md` 를 OpenCode 포맷 `.opencode/agent/*.md`
+> (`mode: all` + permission deny-list) 로 변환한다. 단일역할(developer/reviewer/qa)은 로컬 14B 로
+> 즉시 가능, 멀티스텝 오케스트레이션은 32B+ 필요 (측정 04 / docs/poc/MODEL-GRADES.md).
 
 **자율 오버레이 4 파일** (claude.gstack 에서 제외):
 - `.claude/agents/gatekeeper.md`
@@ -655,13 +732,58 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/commands/wiki.md`
 - `wiki/` vault 디렉토리
 
-**orch 오버레이** (claude.gstack.auto.design.wiki.orch 에만 — F013 신설):
+**orch 오버레이** (claude.gstack.auto.design.wiki.orch + localllm 에 존재 — F013 신설):
 - `.claude/agents/researcher.md`
 - `.claude/commands/orchestrate.md`
 - `.claude/state/orch/` (핸드오프 디렉토리)
 - `docs/orch-examples/` (흐름 예시 시나리오)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~8 / F011 신설·F012 확장·F013 MR-8 추가).
+**d-2 오버레이** (localllm 에만 — F015 신설):
+- `.opencode/AGENTS.md` (OpenCode 프로젝트 컨텍스트 — CLAUDE.md 상당, 4대 차이 명시)
+- `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
+- `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
+- `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
+- coding 스킬 "상대경로 우선" 보강
+
+**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw 에 존재 — F016 신설):
+- `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
+- `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
+- `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
+
+**pm 오버레이** (claude.productmgr + claude.productnw 에 존재 — F018 신설):
+- `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
+- `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
+- `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
+
+**nw(컨소시엄) 오버레이** (claude.productnw 에만 — F019 신설):
+- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub — stdlib)
+- `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
+- `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~12 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12 추가).
+
+---
+
+## 🖥️ 로컬 LLM 어댑터 — render-agents (Phase 11 — F015, localllm/opencode 전용)
+
+> **사용 가능 변형**: `localllm/` (d-2 PoC) — OpenCode + 로컬 LLM(Ollama) 구동.
+> 호스트 어댑터 `opencode.py` 가 Claude Code agent 정의를 OpenCode 포맷으로 변환한다.
+
+```
+# .claude/agents/*.md → .opencode/agent/*.md 변환 (OpenCode 포맷)
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents --agents-out <경로>
+
+# OpenCode + Ollama 환경 설정 (전역 설치 — autonomous #3-B 승인 필요)
+bash .claude/bin/opencode-setup.sh
+opencode agent list                                       # 변환된 agent 인식 확인
+opencode run --agent developer --model ollama/<model> "<요청>"   # 단일역할 직접 호출
+```
+
+> **변환 규칙** (ADR-009): `name:` 드롭(파일명=agent명), `model:` 드롭(`--model`/opencode.jsonc),
+> `description:` 유지, `tools:` allow-list → `permission:` **deny-list 역변환**, `mode: all` (측정 04 보정),
+> 도구명 매핑 `write/multiedit → edit`. claude-code/codex/openclaw 어댑터는 render-agents 미지원 안내만 출력.
+> **모델 등급**: 단일역할 14B / 멀티스텝 오케스트레이션 32B+ (docs/poc/MODEL-GRADES.md).
 
 ---
 

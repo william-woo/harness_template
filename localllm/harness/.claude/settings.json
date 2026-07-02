@@ -8,7 +8,10 @@
       "Read(*)",
       "Glob(*)",
       "Grep(*)",
-      "MultiEdit(*)"
+      "MultiEdit(*)",
+      "Edit(**)",
+      "Write(**)",
+      "MultiEdit(**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
@@ -17,6 +20,16 @@
       "Bash(rm -rf ~/*)",
       "Bash(rm -rf $HOME)",
       "Bash(rm -rf $HOME/*)"
+    ],
+    "ask": [
+      "Bash(rm *)",
+      "Bash(rm)",
+      "Bash(rmdir *)",
+      "Bash(unlink *)",
+      "Bash(shred *)",
+      "Bash(git clean *)",
+      "Bash(trash *)",
+      "Bash(find * -delete*)"
     ]
   },
   "hooks": {

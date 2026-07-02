@@ -574,7 +574,7 @@ F012 `wiki.py lint` 는 vault 정합성 (고아 노드 / 끊긴 wikilink / stale
 | WIKI-ORPHAN | 고아 노드 (다른 노드에서 참조 0) | 모든 노드 파일을 순회 → `[[wikilink]]` + frontmatter `related` 그래프 구성 → in-degree 0 노드 추출 | CONCERN (BLOCK 아님 — 신규 노드는 일시적 고아 정상) |
 | WIKI-DEAD-LINK | 끊긴 wikilink | 본문 `[[X]]` 추출 → X.md 파일 존재 여부 확인 | BLOCK (끊긴 링크는 오류) |
 | WIKI-STALE | stale 페이지 (frontmatter `status: stale` 또는 90 일 이상 미수정 + source 변경) | frontmatter `status` 직접 검사 + git log 로 vault 외부 source 의 최근 변경 시각 비교 | CONCERN |
-| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | INFO (BLOCK 아님 — 메타 불완전이지 그래프 깨짐 아님) |
+| WIKI-FRONTMATTER | frontmatter 누락·필수 필드 부재 | YAML 파싱 → `type` / `created` 필수 필드 확인 | BLOCK |
 
 **근거**:
 
@@ -1018,3 +1018,58 @@ CLAUDE.md 갱신 분량 (세션 3):
 ---
 
 *작성: architect 에이전트 | 날짜: 2026-06-03 | 상태: Proposed*
+
+---
+
+## 개정 (2026-06-16) — vault 데이터 보존(retention) 운영정책
+
+초기 설계엔 데이터 증가 상한·정리 정책이 없어 두 곳이 무한 증가 가능했다. 다음을 추가한다:
+
+### A. log.md 로테이션 (무한 누적 차단)
+`_append_log` 은 매 ingest/query/lint/prune 마다 항목을 prepend 하므로 무한 증가했다.
+→ 항목이 **200개 초과 시 오래된 항목을 `wiki/log-archive.md` 로 자동 이동**, log.md 는 최근
+100개만 유지 (`_LOG_CAP=200` / `_LOG_KEEP=100`). claude-progress.txt 아카이브 패턴과 동일.
+
+### B. `wiki prune` — dangling 노드 정리
+원본(ADR/feature/source-file)을 삭제해도 vault 노드는 남았다 (lint 는 탐지만, 삭제 안 함).
+→ `prune` 추가: 노드 frontmatter `source_ref` 의 베이스 경로가 프로젝트에 없으면 dangling 으로
+판정해 정리. **기본 미리보기(dry-run), `--apply` 만 실제 삭제** — autonomous "삭제=승인" 정책과
+일치(삭제는 명시 단계). 삭제 시 log 에 기록.
+
+### 노드 증가 특성 (명시)
+ingest 는 산출물 1:1 멱등 노드라 폭증은 없으나 **상한도 없다** — 산출물·learning 이 늘면 선형
+증가. 장기 프로젝트에서 learning 노드가 누적되면 필요 시 `prune` + 수동 아카이브로 관리한다.
+
+> 적용 변형: wiki 오버레이 보유 4 변형 (wiki / orch / localllm / claude.hermes).
+> 운영정책 A/B 는 wiki.py 에 구현, `/project:wiki prune` 으로 노출.
+
+---
+
+## 개정 (2026-06-19) — agent-driven 의미 추출 `enrich` (F017)
+
+기존 ingest/graph 의 엣지는 **식별자 패턴**(FXXX/ADR-NNN/[[wikilink]]) 기반이라, 문서 내용의
+**의미 관계**는 잡지 못했다. 카파시 LLM Wiki 패턴(LLM 이 소스를 읽어 개념·관계를 점진 컴파일)의
+의미 그래프를 `enrich` 로 추가한다.
+
+### LLM 접근 = agent-driven (helper 는 LLM 비호출)
+사용자 결정: 4개 옵션(에이전트주도 / 로컬LLM / 클라우드API) 중 **에이전트 주도** 채택.
+- `enrich prepare <doc>` → 문서내용 + 추출 프롬프트(JSON 스키마) 출력
+- 세션 에이전트(LLM)가 concepts/relations JSON 생성 (이 단계가 "LLM")
+- `enrich apply <doc> --json <f>` → 스키마 검증 후 **concept 노드 + 라벨 의미 엣지** 결정론 생성
+- **근거**: skill_forge 와 동일 패턴(헬퍼=결정론/에이전트=LLM). stdlib only → 무인증(#3-A 회피)·
+  무외부의존성·전 호스트 호환. 클라우드 API 안은 API키 인증경계+외부의존성+비용으로 기각.
+
+### 산출
+- 신규 노드 타입 `concept` (`wiki/concepts/<slug>.md`), `_collect_all_nodes`/graph type_order 에 등록.
+- 관계는 `related` 엣지 + `## 관계` 섹션(라벨 보존). 멱등(created 보존).
+- **부수 수정**: mermaid/DOT 그래프가 비-ASCII(한글) 노드 ID 를 `__` 로 뭉개 충돌하던 버그 →
+  안정적 ASCII alias(n0,n1..) + 실제 라벨 표시로 수정 (한글 concept 정상 렌더).
+
+### 한계 (정직)
+- 무인 자동 아님 — 추출 단계에 에이전트가 루프에 있어야 함.
+- PDF/docx 직접 미지원 (md 변환 후 사용).
+
+### graph 형식에 JSON-LD 추가 (Schema.org — 카파시 graph.jsonld 호환)
+`graph --format jsonld` 추가: `@context`(schema.org) + `@graph`(노드별 @id/@type/isRelatedTo).
+노드 타입 → schema.org 매핑(concept→DefinedTerm, adr→TechArticle, feature→CreativeWork 등).
+기존 `--format json`(단순 노드/엣지)은 하위호환으로 유지. 카파시 LLM Wiki 의 머신리더블 그래프와 정합.

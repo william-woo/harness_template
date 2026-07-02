@@ -14,6 +14,11 @@
 | 03 | 에이전트 포맷 인식 (.claude/agents/) | ❌ 미인식 — 어댑터 변환 필요 |
 | 03 | subagent spawn 메커니즘 (general) | ✅ PASS |
 | 03b | 멀티스텝 값 전달 (subagent 결과 치환) | ❌ **FAIL (14B 한계)** |
+| 04 | 단일역할 E2E (변환된 .opencode/agent/ + developer) | ✅ **PASS** (mode:all 보정 후) |
+
+> **측정 04 (F015 세션 3)**: 변환된 `.opencode/agent/developer` 로 단일파일 코딩(add.js/sub.js)
+> 을 로컬 14B 가 end-to-end 완성 (node assert 통과). 단, 직접 진입엔 **mode: all** 필수
+> (subagent 는 fallback). 변환기 보정 완료. → docs/poc/measurements/04-single-role-e2e.md
 
 ## 3대 결론
 

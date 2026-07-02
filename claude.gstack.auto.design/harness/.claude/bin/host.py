@@ -9,6 +9,7 @@ Python stdlib만 사용. 외부 의존성 없음.
   info            호스트 정보 + 도구 매핑 + 커맨드 표기 예시
   set <type>      host.json 업데이트 → render-skills 자동 호출
   render-skills   .template 파일을 읽어 SKILL.md 토큰 치환
+  render-agents   .claude/agents/*.md → .opencode/agent/*.md 변환 (opencode 전용, ADR-009 결정 1)
   check           무결성 점검 (무회귀 검증)
 
 호스트 감지 우선순위 (높음 → 낮음):
@@ -338,6 +339,91 @@ def cmd_render_skills(args) -> None:
         print(f"[ERROR] render-skills 명령 실패: {e}", file=sys.stderr)
 
 
+def cmd_render_agents(args) -> None:
+    """
+    .claude/agents/*.md 를 OpenCode 포맷(.opencode/agent/*.md)으로 변환한다.
+
+    ADR-009 결정 1: 정적 렌더링. opencode 어댑터 전용.
+    다른 어댑터(claude-code/openclaw/codex)는 안내만 출력하고 파일을 수정하지 않는다.
+
+    --agents-src: 소스 디렉토리 (기본: .claude/agents/)
+    --agents-out: 출력 디렉토리 (기본: .opencode/agent/ — _PROJECT_ROOT 기준)
+
+    Args:
+        args: argparse.Namespace
+            args.agents_src: 소스 디렉토리 (str | None)
+            args.agents_out: 출력 디렉토리 (str | None)
+    """
+    try:
+        agent_type, source = _detect_agent_type()
+        print(f"render-agents: agent_type={agent_type} (source: {source})")
+        print()
+
+        adapter = _load_adapter(agent_type)
+
+        if adapter is None:
+            print("[WARN] 어댑터 로드 실패 — render-agents 건너뜀")
+            return
+
+        if not hasattr(adapter, "render_agents"):
+            print(
+                f"[INFO] {agent_type} 어댑터는 render-agents 를 지원하지 않습니다.\n"
+                "  render-agents 는 opencode 어댑터 전용입니다.\n"
+                "  HARNESS_AGENT_TYPE=opencode python3 host.py render-agents"
+            )
+            return
+
+        if adapter.is_stub:
+            stub_info = getattr(adapter, "stub_info", "")
+            print(f"[INFO] {agent_type} 는 stub 어댑터 — render-agents 건너뜀")
+            if stub_info:
+                print(stub_info)
+            return
+
+        # 소스 / 출력 디렉토리 결정
+        agents_src_arg = getattr(args, "agents_src", None)
+        agents_out_arg = getattr(args, "agents_out", None)
+
+        if agents_src_arg:
+            agents_src = (
+                Path(agents_src_arg) if Path(agents_src_arg).is_absolute()
+                else _PROJECT_ROOT / agents_src_arg
+            )
+        else:
+            agents_src = _PROJECT_ROOT / ".claude" / "agents"
+
+        if agents_out_arg:
+            agents_out = (
+                Path(agents_out_arg) if Path(agents_out_arg).is_absolute()
+                else _PROJECT_ROOT / agents_out_arg
+            )
+        else:
+            agents_out = _PROJECT_ROOT / ".opencode" / "agent"
+
+        print(f"  소스: {agents_src}")
+        print(f"  출력: {agents_out}")
+        print()
+
+        if not agents_src.exists():
+            print(f"[WARN] 소스 디렉토리 없음: {agents_src} — render-agents 건너뜀")
+            return
+
+        generated = adapter.render_agents(agents_src, agents_out)
+
+        for fname in generated:
+            try:
+                rel = (agents_out / fname).relative_to(_PROJECT_ROOT)
+            except ValueError:
+                rel = agents_out / fname
+            print(f"  변환 완료: {rel}")
+
+        print()
+        print(f"render-agents 완료: {len(generated)}개 파일 생성됨")
+
+    except Exception as e:
+        print(f"[ERROR] render-agents 명령 실패: {e}", file=sys.stderr)
+
+
 def cmd_check(args) -> None:
     """
     무결성 점검을 수행한다.
@@ -433,6 +519,32 @@ def main() -> None:
                 "예: src/harness_template/openai/harness/.codex/skills"
             ),
         )
+
+        p_ragents = sub.add_parser(
+            "render-agents",
+            help=".claude/agents/*.md → .opencode/agent/*.md 변환 (opencode 전용, ADR-009 결정 1)",
+        )
+        p_ragents.add_argument(
+            "--agents-src",
+            dest="agents_src",
+            default=None,
+            metavar="PATH",
+            help=(
+                "소스 디렉토리 (기본: .claude/agents/). "
+                "절대경로 또는 project root 기준 상대경로."
+            ),
+        )
+        p_ragents.add_argument(
+            "--agents-out",
+            dest="agents_out",
+            default=None,
+            metavar="PATH",
+            help=(
+                "출력 디렉토리 (기본: .opencode/agent/). "
+                "절대경로 또는 project root 기준 상대경로."
+            ),
+        )
+
         sub.add_parser("check", help="무결성 점검 (무회귀 검증)")
 
         args = parser.parse_args()
@@ -442,6 +554,7 @@ def main() -> None:
             "info": cmd_info,
             "set": cmd_set,
             "render-skills": cmd_render_skills,
+            "render-agents": cmd_render_agents,
             "check": cmd_check,
         }
 

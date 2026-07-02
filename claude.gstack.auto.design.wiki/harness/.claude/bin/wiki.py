@@ -288,8 +288,29 @@ def _build_index_content(vault_dir: Path) -> str:
     return "\n".join(lines)
 
 
+# 로그 로테이션 정책 (운영정책 A — 무한 누적 방지)
+# log.md 항목이 _LOG_CAP 초과 시 오래된 항목을 log-archive.md 로 이동, 최근 _LOG_KEEP 만 유지.
+_LOG_CAP = 200
+_LOG_KEEP = 100
+_LOG_HEADER = (
+    "# Wiki 변경 로그\n\n"
+    "> F009 prefix 컨벤션: `## [YYYY-MM-DD HH:MM] <action> | <요약>`\n\n"
+    "> 200개 항목 초과 시 오래된 항목은 `log-archive.md` 로 자동 이동 (ADR-007 운영정책).\n\n"
+    "---\n"
+)
+
+
+def _split_log_entries(body: str) -> list[str]:
+    """로그 본문을 `## [` 항목 단위로 분리한다 (각 항목은 선행 개행 포함)."""
+    parts = re.split(r"(?=\n## \[)", body)
+    return [p for p in parts if p.strip()]
+
+
 def _append_log(vault_dir: Path, action: str, summary: str) -> None:
-    """wiki/log.md 에 항목을 prepend (F009 prefix 컨벤션).
+    """wiki/log.md 에 항목을 prepend 하고, 상한 초과 시 오래된 항목을 아카이브한다.
+
+    운영정책 A: 항목 수가 _LOG_CAP 을 넘으면 최근 _LOG_KEEP 만 log.md 에 남기고
+    나머지(오래된 것)는 wiki/log-archive.md 로 이동 → log.md 무한 증가 방지.
 
     Args:
         vault_dir: vault 루트 경로
@@ -300,25 +321,43 @@ def _append_log(vault_dir: Path, action: str, summary: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     new_entry = f"\n## [{ts}] {action} | {summary}\n"
 
+    header = _LOG_HEADER
+    body = ""
     if log_path.exists():
         existing = log_path.read_text(encoding="utf-8")
-        # 헤더 라인 유지 + 새 항목 삽입
         header_end = existing.find("\n---\n")
         if header_end != -1:
             header = existing[: header_end + 5]
             body = existing[header_end + 5:]
-            content = header + new_entry + body
         else:
-            content = existing + new_entry
-    else:
-        content = (
-            "# Wiki 변경 로그\n\n"
-            "> F009 prefix 컨벤션: `## [YYYY-MM-DD HH:MM] <action> | <요약>`\n\n"
-            "---\n"
-            + new_entry
-        )
+            body = "\n" + existing
+    body = new_entry + body  # 신규 항목을 맨 위(최신)에
 
-    log_path.write_text(content, encoding="utf-8")
+    # 로테이션: 항목 수 상한 초과 시 오래된 항목 아카이브
+    entries = _split_log_entries(body)
+    if len(entries) > _LOG_CAP:
+        keep, archived = entries[:_LOG_KEEP], entries[_LOG_KEEP:]
+        _archive_log(vault_dir, archived)
+        body = "".join(keep)
+
+    log_path.write_text(header + body, encoding="utf-8")
+
+
+def _archive_log(vault_dir: Path, archived_entries: list[str]) -> None:
+    """오래된 로그 항목을 wiki/log-archive.md 에 prepend 한다 (최신 아카이브가 위)."""
+    if not archived_entries:
+        return
+    arc_path = vault_dir / "log-archive.md"
+    arc_header = "# Wiki 변경 로그 — 아카이브\n\n> log.md 에서 로테이션된 오래된 항목.\n\n---\n"
+    block = "".join(archived_entries)
+    if arc_path.exists():
+        existing = arc_path.read_text(encoding="utf-8")
+        he = existing.find("\n---\n")
+        if he != -1:
+            arc_path.write_text(
+                existing[: he + 5] + block + existing[he + 5:], encoding="utf-8")
+            return
+    arc_path.write_text(arc_header + block, encoding="utf-8")
 
 
 # ─── ingest: feature_list.json → nodes/features/ ─────────────────────────────
@@ -1133,7 +1172,7 @@ def _collect_all_nodes(vault_dir: Path) -> dict[str, Path]:
         dict: {node_id: 파일 경로}
     """
     nodes: dict[str, Path] = {}
-    node_dirs = ["features", "adrs", "learnings", "pages", "sources"]
+    node_dirs = ["features", "adrs", "learnings", "pages", "sources", "concepts"]
     for nd in node_dirs:
         d = vault_dir / nd
         if not d.exists():
@@ -1434,25 +1473,27 @@ def cmd_graph(args: argparse.Namespace) -> int:
     if graph_format == "mermaid":
         lines = ["graph LR"]
 
+        # 노드 ID → 안정적 ASCII alias (n0, n1, ...). 비-ASCII(한글) ID 충돌·깨짐 방지.
+        # 실제 ID 는 대괄호 라벨로 표시 (mermaid 라벨은 비-ASCII 허용).
+        alias = {nid: f"n{i}" for i, nid in enumerate(sorted(all_used_ids))}
+
         # subgraph 로 타입 그룹핑
-        type_order = ["feature", "adr", "learning", "page", "source", "unknown"]
+        type_order = ["feature", "adr", "learning", "page", "source", "concept", "unknown"]
         for node_type in type_order:
             ids = type_nodes.get(node_type, [])
             if not ids:
                 continue
-            # mermaid subgraph: 특수문자 이스케이프
             safe_type = node_type.replace("-", "_")
             lines.append(f'  subgraph {safe_type}["{node_type}"]')
             for nid in sorted(ids):
-                safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", nid)
-                lines.append(f'    {safe_id}["{nid}"]')
+                label = nid.replace('"', "'")
+                lines.append(f'    {alias[nid]}["{label}"]')
             lines.append("  end")
 
-        # 엣지
+        # 엣지 (alias 사용)
         for from_id, to_id in edges:
-            safe_from = re.sub(r"[^A-Za-z0-9_-]", "_", from_id)
-            safe_to = re.sub(r"[^A-Za-z0-9_-]", "_", to_id)
-            lines.append(f"  {safe_from} --> {safe_to}")
+            if from_id in alias and to_id in alias:
+                lines.append(f"  {alias[from_id]} --> {alias[to_id]}")
 
         graph_text = "\n".join(lines)
 
@@ -1477,12 +1518,16 @@ def cmd_graph(args: argparse.Namespace) -> int:
             "learning": "#7BC67E",
             "page": "#B39DDB",
             "source": "#EF9A9A",
+            "concept": "#80CBC4",
             "unknown": "#CFD8DC",
         }
 
+        # 노드 ID → 안정적 ASCII alias (한글 ID 충돌 방지, 실제 ID 는 label 로)
+        alias = {nid: f"n{i}" for i, nid in enumerate(sorted(all_used_ids))}
+
         dot_lines = ['digraph wiki {', '  rankdir=LR;', '  node [shape=box, style=filled];']
 
-        for node_type in ["feature", "adr", "learning", "page", "source", "unknown"]:
+        for node_type in ["feature", "adr", "learning", "page", "source", "concept", "unknown"]:
             ids = type_nodes.get(node_type, [])
             if not ids:
                 continue
@@ -1490,15 +1535,14 @@ def cmd_graph(args: argparse.Namespace) -> int:
             dot_lines.append(f'  // {node_type}')
             dot_lines.append(f'  {{ node [fillcolor="{color}"]')
             for nid in sorted(ids):
-                safe_id = re.sub(r"[^A-Za-z0-9_]", "_", nid)
-                dot_lines.append(f'    {safe_id} [label="{nid}"];')
+                label = nid.replace('"', "'")
+                dot_lines.append(f'    {alias[nid]} [label="{label}"];')
             dot_lines.append("  }")
 
         dot_lines.append("")
         for from_id, to_id in edges:
-            safe_from = re.sub(r"[^A-Za-z0-9_]", "_", from_id)
-            safe_to = re.sub(r"[^A-Za-z0-9_]", "_", to_id)
-            dot_lines.append(f"  {safe_from} -> {safe_to};")
+            if from_id in alias and to_id in alias:
+                dot_lines.append(f"  {alias[from_id]} -> {alias[to_id]};")
 
         dot_lines.append("}")
         graph_text = "\n".join(dot_lines)
@@ -1533,6 +1577,51 @@ def cmd_graph(args: argparse.Namespace) -> int:
             print(graph_text)
 
         print(f"  노드 {len(nodes_list)}개 / 엣지 {len(edges_list)}개")
+
+    # ── JSON-LD 출력 (Schema.org — 카파시 LLM Wiki graph.jsonld 호환) ─────────────
+    elif graph_format == "jsonld":
+        # 노드 타입 → schema.org @type 매핑
+        schema_type = {
+            "feature": "CreativeWork", "adr": "TechArticle", "learning": "CreativeWork",
+            "source": "CreativeWork", "page": "WebPage", "concept": "DefinedTerm",
+            "unknown": "Thing",
+        }
+        out_edges: dict[str, list[str]] = {}
+        for f, t in edges:
+            out_edges.setdefault(f, []).append(t)
+
+        graph_items = []
+        for node_type, ids in type_nodes.items():
+            for nid in sorted(ids):
+                item = {
+                    "@id": f"wiki:{nid}",
+                    "@type": schema_type.get(node_type, "Thing"),
+                    "name": nid,
+                    "additionalType": f"harness:{node_type}",
+                }
+                rel = out_edges.get(nid, [])
+                if rel:
+                    item["isRelatedTo"] = [{"@id": f"wiki:{t}"} for t in rel]
+                graph_items.append(item)
+
+        doc = {
+            "@context": {
+                "@vocab": "https://schema.org/",
+                "wiki": "#",
+                "harness": "https://harness.local/ns#",
+                "isRelatedTo": {"@id": "https://schema.org/isRelatedTo", "@type": "@id"},
+            },
+            "@graph": graph_items,
+        }
+        graph_text = json.dumps(doc, ensure_ascii=False, indent=2)
+
+        if output_path_str:
+            out_path = Path(output_path_str)
+            _atomic_write(out_path, graph_text)
+            print(f"\n  저장: {out_path}")
+        else:
+            print(graph_text)
+        print(f"  노드 {len(graph_items)}개 / 엣지 {len(edges)}개 (Schema.org JSON-LD)")
 
     _append_log(
         vault_dir,
@@ -1712,9 +1801,9 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_p.add_argument(
         "--format",
         dest="graph_format",
-        choices=["mermaid", "dot", "json"],
+        choices=["mermaid", "dot", "json", "jsonld"],
         default="mermaid",
-        help="그래프 출력 형식",
+        help="그래프 출력 형식 (jsonld = Schema.org, 카파시 graph.jsonld 호환)",
     )
     graph_p.add_argument("--node-type", dest="node_type_filter", help="노드 타입 필터")
     graph_p.add_argument(
@@ -1724,10 +1813,213 @@ def _build_parser() -> argparse.ArgumentParser:
         help="출력 파일 경로 (지정 시 파일 저장, 기본: stdout)",
     )
 
+    # enrich (F017 — agent-driven 의미 추출 지식그래프)
+    enrich_p = sub.add_parser(
+        "enrich", help="LLM 의미 추출 — 문서 내용에서 개념/관계 그래프 (agent-driven)")
+    enrich_p.add_argument("enrich_action", choices=["prepare", "apply"],
+                          help="prepare: 추출 프롬프트 출력 / apply: 추출 JSON 적용")
+    enrich_p.add_argument("source", nargs="?", help="문서 경로 (prepare/apply 공통)")
+    enrich_p.add_argument("--json", dest="json", default=None,
+                          help="apply: 에이전트가 만든 추출 JSON 파일 경로")
+
+    # prune (운영정책 B — dangling 노드 정리)
+    prune_p = sub.add_parser(
+        "prune", help="source 원본이 사라진 dangling 노드 정리 (기본 미리보기)")
+    prune_p.add_argument(
+        "--apply", action="store_true", default=False,
+        help="실제 삭제 (미지정 시 미리보기만 — 삭제=명시 단계)")
+
     # self
     self_p = sub.add_parser("self", help="의존성·환경 점검 (graceful degrade 상태)")
 
     return parser
+
+
+_ENRICH_SCHEMA = """{
+  "source": "<문서 제목 또는 핵심 주제>",
+  "concepts": [
+    {"label": "개념명 (짧게)", "summary": "이 개념이 무엇인지 1~2문장"}
+  ],
+  "relations": [
+    {"from": "개념A", "to": "개념B", "label": "관계 설명 (예: 의존한다 / 구성요소 / 대안)"}
+  ]
+}"""
+
+
+def cmd_enrich(args) -> int:
+    """LLM 의미 추출(agent-driven) — 문서 내용에서 개념/관계 지식그래프를 만든다 (F017).
+
+    하네스 패턴(헬퍼=결정론 / 에이전트=LLM): 헬퍼는 LLM 을 직접 호출하지 않는다.
+      prepare: 문서 내용 + 추출 프롬프트(JSON 스키마) 를 출력 → 세션 에이전트가 JSON 생성
+      apply:   에이전트가 만든 JSON 을 검증 후 concept 노드 + 의미 엣지로 결정론적 변환
+
+    stdlib only. 식별자 패턴(FXXX)이 아닌 **의미 기반** 그래프 (개념 노드 + 라벨 엣지).
+
+    Returns:
+        int: exit code
+    """
+    action = getattr(args, "enrich_action", None)
+    if action == "prepare":
+        return _enrich_prepare(args)
+    if action == "apply":
+        return _enrich_apply(args)
+    print("[wiki enrich] 사용법: enrich prepare <문서.md>  |  enrich apply <문서.md> --json <추출.json>")
+    return 0
+
+
+def _enrich_prepare(args) -> int:
+    """문서 내용 + 추출 프롬프트를 출력한다 (에이전트가 이걸 보고 JSON 생성)."""
+    doc = Path(args.source)
+    if not doc.exists():
+        print(f"[wiki enrich prepare] 문서 없음: {doc}")
+        return 0
+    content = doc.read_text(encoding="utf-8")
+    if len(content) > 12000:
+        content = content[:12000] + "\n...(생략)..."
+    print(f"[wiki enrich prepare] 문서: {doc}\n")
+    print("=" * 70)
+    print("아래 문서를 읽고, 핵심 **개념(concepts)** 과 그들 사이의 **관계(relations)** 를")
+    print("추출해 다음 JSON 스키마로만 출력하라 (식별자가 아니라 의미 단위로):\n")
+    print(_ENRICH_SCHEMA)
+    print("\n규칙: concepts[].label 은 고유·간결. relations 의 from/to 는 concepts 의 label 과")
+    print("정확히 일치. 문서에 근거 없는 개념·관계는 만들지 말 것.")
+    print("생성한 JSON 을 파일로 저장 후: "
+          f"wiki.py enrich apply {doc} --json <그_파일>")
+    print("=" * 70)
+    print("\n--- 문서 내용 ---\n")
+    print(content)
+    return 0
+
+
+def _enrich_apply(args) -> int:
+    """에이전트가 만든 추출 JSON 을 검증 후 concept 노드 + 의미 엣지로 변환한다."""
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    json_path = Path(args.json)
+    if not json_path.exists():
+        print(f"[wiki enrich apply] JSON 없음: {json_path}")
+        return 1
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"[wiki enrich apply] JSON 파싱 실패: {e}")
+        return 1
+
+    # ── 스키마 검증 (결정론적 가드) ──────────────────────────────────────────
+    concepts = data.get("concepts", [])
+    relations = data.get("relations", [])
+    if not isinstance(concepts, list) or not concepts:
+        print("[wiki enrich apply] concepts 가 비어있음 — 추출 실패로 간주, 중단")
+        return 1
+    labels = {}
+    for c in concepts:
+        if not isinstance(c, dict) or not c.get("label", "").strip():
+            print(f"[wiki enrich apply] 잘못된 concept 항목: {c}")
+            return 1
+        labels[c["label"].strip()] = _slug_from_text(c["label"].strip(), 40)
+    bad = [r for r in relations
+           if not isinstance(r, dict) or r.get("from") not in labels or r.get("to") not in labels]
+    if bad:
+        print(f"[wiki enrich apply] from/to 가 concepts 에 없는 relation {len(bad)}건 — 무시하고 진행")
+    relations = [r for r in relations if r not in bad]
+
+    source_ref = str(args.source) if getattr(args, "source", None) else "(enrich)"
+    concepts_dir = vault_dir / "concepts"
+    concepts_dir.mkdir(parents=True, exist_ok=True)
+
+    # 개념별 아웃바운드 관계 모으기
+    out_rel: dict[str, list[tuple[str, str]]] = {lbl: [] for lbl in labels}
+    for r in relations:
+        out_rel[r["from"]].append((labels[r["to"]], r.get("label", "관련")))
+
+    created = 0
+    for c in concepts:
+        lbl = c["label"].strip()
+        slug = labels[lbl]
+        node_path = concepts_dir / f"{slug}.md"
+        now = _now_iso()
+        existing_created = _extract_created(node_path.read_text(encoding="utf-8")) \
+            if node_path.exists() else None
+        ts_created = existing_created or now
+        rel_slugs = [t for t, _ in out_rel[lbl]]
+        related_yaml = json.dumps(rel_slugs, ensure_ascii=False)
+        body_rel = "".join(f"- [[{t}]] — {lab}\n" for t, lab in out_rel[lbl]) or "- (없음)\n"
+        node = (
+            "---\n"
+            f"type: concept\n"
+            f"id: {slug}\n"
+            f"created: {ts_created}\n"
+            f"updated: {now}\n"
+            f"source_ref: {source_ref}\n"
+            f"tags: {json.dumps(['concept'])}\n"
+            f"related: {related_yaml}\n"
+            "status: active\n"
+            "---\n\n"
+            f"# {lbl}\n\n"
+            f"> 의미 추출(agent-driven enrich) 개념 노드. 원본: `{source_ref}`\n\n"
+            f"{c.get('summary', '').strip()}\n\n"
+            "## 관계\n"
+            f"{body_rel}"
+        )
+        node_path.write_text(node, encoding="utf-8")
+        created += 1
+
+    _append_log(vault_dir, "enrich",
+                f"{source_ref} — concept {created}개 / relation {len(relations)}개")
+    print(f"[wiki enrich apply] concept 노드 {created}개 + 의미 엣지 {len(relations)}개 생성")
+    print(f"  → wiki/concepts/ | 그래프: wiki.py graph --format mermaid")
+    return 0
+
+
+def cmd_prune(args) -> int:
+    """source_ref 원본이 사라진 dangling 노드를 정리한다 (운영정책 B).
+
+    기본은 **미리보기(dry-run)** — 후보만 출력하고 삭제하지 않는다.
+    `--apply` 지정 시에만 실제 삭제 (삭제=명시 단계, "삭제 승인" 정책과 일치).
+    판정: 노드 frontmatter 의 source_ref 베이스 경로가 프로젝트에 더 이상 존재하지 않으면 dangling.
+
+    Returns:
+        int: exit code (항상 0 — graceful)
+    """
+    vault_dir = Path(args.vault) if args.vault else _VAULT_DIR_DEFAULT
+    if not vault_dir.exists():
+        print(f"[wiki prune] vault 없음: {vault_dir}")
+        return 0
+    all_nodes = _collect_all_nodes(vault_dir)
+    dangling: list[tuple[str, Path, str]] = []
+    for node_id, node_path in all_nodes.items():
+        try:
+            fm = _parse_frontmatter(node_path.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        src = fm.get("source_ref", "")
+        if not src:
+            continue  # vault-내부 노드(index/log 등)는 source_ref 없음 → 대상 아님
+        base = src.split("#")[0]
+        if not (_PROJECT_ROOT / base).exists():
+            dangling.append((node_id, node_path, src))
+
+    if not dangling:
+        print("[wiki prune] dangling 노드 없음 — 모든 source_ref 원본이 존재합니다 ✅")
+        return 0
+
+    apply = getattr(args, "apply", False)
+    head = "삭제" if apply else "미리보기 (실제 삭제하려면 --apply)"
+    print(f"[wiki prune] source 원본이 사라진 노드 {len(dangling)}개 — {head}\n")
+    removed = 0
+    for node_id, node_path, src in dangling:
+        rel = node_path.relative_to(vault_dir)
+        if apply:
+            node_path.unlink()
+            removed += 1
+            print(f"  삭제: {rel}  (원본 없음: {src})")
+        else:
+            print(f"  후보: {rel}  (원본 없음: {src})")
+    if apply:
+        _append_log(vault_dir, "prune", f"{removed}개 dangling 노드 삭제")
+        print(f"\n[wiki prune] {removed}개 삭제 완료 — `wiki lint` 로 정합성 재확인 권장.")
+    else:
+        print("\n[wiki prune] 미리보기만 수행 (파일 변경 없음). 삭제: `wiki prune --apply`")
+    return 0
 
 
 def main() -> int:
@@ -1754,6 +2046,10 @@ def main() -> int:
             return cmd_graph(args)
         elif args.command == "self":
             return cmd_self(args)
+        elif args.command == "enrich":
+            return cmd_enrich(args)
+        elif args.command == "prune":
+            return cmd_prune(args)
         else:
             parser.print_help()
             return 0

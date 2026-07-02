@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (7변형 — F011 신설, F012 확장: MR-6/MR-7, F013 추가: MR-8)
+  LINT-MR     변형 오버레이 정합 (11변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -912,6 +912,106 @@ _VARIANTS_NO_ORCH = [
 # orch 오버레이를 보유해야 하는 변형 (MR-8: orch 변형만)
 _VARIANTS_WITH_ORCH = ["claude.gstack.auto.design.wiki.orch"]
 
+# d-2 오버레이 파일 (ⓑ⁵ localllm 변형에만 존재해야 함 — MR-9, F015 정식 등재)
+# 주의: opencode.py 는 d-2 오버레이가 아님 — gstack 등 6변형이 호스트 어댑터로 정당 보유.
+#       MR-9 는 OpenCode "런타임 산출물"(.opencode/) + 설치 스크립트 + PoC 문서만 격리 검사한다.
+_D2_OVERLAY_FILES = [
+    "harness/.opencode/AGENTS.md",
+    "harness/.claude/bin/opencode-setup.sh",
+]
+
+# d-2 상태/산출 디렉토리 (MR-9)
+_D2_OVERLAY_DIRS = [
+    "harness/.opencode/agent",
+    "harness/docs/poc",
+]
+
+# d-2 오버레이가 없어야 하는 변형 (MR-9: localllm 외 6 변형 — openai 는 별도 처리)
+_VARIANTS_NO_D2 = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "claude.hermes",
+    "claude.productmgr",
+    "claude.productnw",
+]
+
+# d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
+_VARIANTS_WITH_D2 = ["localllm"]
+
+# hermes 오버레이 파일 (ⓑ⁶ claude.hermes 변형에만 존재해야 함 — MR-10, F016 신설)
+# Hermes Agent 패턴 이식: FTS5 세션검색 + 스킬 자동생성/self-improve (ADR-010)
+_HERMES_OVERLAY_FILES = [
+    "harness/.claude/bin/session_search.py",
+    "harness/.claude/bin/skill_forge.py",
+    "harness/.claude/commands/session-search.md",
+    "harness/.claude/commands/skill-forge.md",
+]
+
+# hermes 오버레이가 없어야 하는 변형 (MR-10: claude.hermes 외 7 변형 — openai 별도)
+_VARIANTS_NO_HERMES = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+]
+
+# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 claude.productmgr/productnw)
+# productmgr 는 hermes 복사본, productnw 는 productmgr 복사본 — 둘 다 hermes 4파일 정당 보유 (Reviewer SHOULD).
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw"]
+
+# pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
+# Product Manager 주도 통합 SDLC (ADR-011)
+_PM_OVERLAY_FILES = [
+    "harness/.claude/agents/product-manager.md",
+    "harness/.claude/commands/product-cycle.md",
+]
+
+# pm 오버레이가 없어야 하는 변형 (MR-11: claude.productmgr 외 8 변형 — openai 별도)
+_VARIANTS_NO_PM = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+    "claude.hermes",
+]
+
+# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 claude.productnw)
+# productnw 는 productmgr 복사본이므로 pm 2파일을 정당 보유 — 존재 검증 대상에 포함 (Reviewer SHOULD).
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw"]
+
+# nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
+# 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub (ADR-012, d-3)
+_NW_OVERLAY_FILES = [
+    "harness/.claude/bin/consortium.py",
+    "harness/.claude/commands/consortium.md",
+]
+
+# nw 오버레이가 없어야 하는 변형 (MR-12: claude.productnw 외 9 변형 — openai 별도)
+_VARIANTS_NO_NW = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+    "claude.hermes",
+    "claude.productmgr",
+]
+
+# nw 오버레이를 보유해야 하는 변형 (MR-12: claude.productnw 만)
+_VARIANTS_WITH_NW = ["claude.productnw"]
+
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
     "harness/.claude/bin/wiki-setup.sh",
@@ -931,7 +1031,7 @@ _OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 7 변형 미러 정합 점검 (F011 신설, F012 확장, F013 MR-8 추가).
+    """LINT-MR: 11 변형 미러 정합 점검 (F011~F013, F015 MR-9, F016 MR-10, F018 MR-11, F019 MR-12).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
     F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
@@ -1286,6 +1386,200 @@ def check_mirror_regression() -> list:
                     f"{orch_variant_name} 변형 부재 (F013 미적용 가능)",
                 ))
 
+        # MR-9: localllm 외 6 변형에 d-2 오버레이(.opencode/ 런타임 + opencode-setup + docs/poc) 없어야 함
+        # (d-2 오버레이는 ⓑ⁵ localllm 에만 존재 — F015 정식 등재 / ADR-009 결정 6 개정)
+        all_d2_overlay = _D2_OVERLAY_FILES + _D2_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_D2:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_d2 = []
+            for rel in all_d2_overlay:
+                if (variant_dir / rel).exists():
+                    found_d2.append(rel)
+            if found_d2:
+                results.append(_issue(
+                    checker, BLOCK,
+                    variant,
+                    f"d-2 오버레이가 {variant} 에 잘못 미러됨 (localllm 전용): {found_d2}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    variant,
+                    f"{variant} 변형에 d-2 오버레이 부재 OK",
+                ))
+
+        # MR-9 (계속): localllm 변형에 d-2 오버레이 + opencode 어댑터 구조 불변식 존재해야 함
+        # (구조만 검사 — 스킬·문서 본문은 검사하지 않아 PoC churn 마찰 없음)
+        for d2_variant_name in _VARIANTS_WITH_D2:
+            d2_variant = _HT / d2_variant_name
+            if not d2_variant.exists():
+                results.append(_issue(
+                    checker, INFO,
+                    d2_variant_name,
+                    f"{d2_variant_name} 변형 부재 (F015 미적용 가능)",
+                ))
+                continue
+            missing_d2 = []
+            for rel in _D2_OVERLAY_FILES + _D2_OVERLAY_DIRS:
+                if not (d2_variant / rel).exists():
+                    missing_d2.append(rel)
+            # opencode 어댑터 구조 불변식: render_agents 보유 + host.json agent_type=opencode
+            adapter = d2_variant / "harness" / ".claude" / "bin" / "host_adapters" / "opencode.py"
+            if not (adapter.exists() and "def render_agents" in adapter.read_text(encoding="utf-8")):
+                missing_d2.append("opencode.py:render_agents")
+            host_json = d2_variant / "harness" / ".claude" / "host.json"
+            if not (host_json.exists() and '"agent_type": "opencode"' in host_json.read_text(encoding="utf-8")):
+                missing_d2.append("host.json:agent_type=opencode")
+            if missing_d2:
+                results.append(_issue(
+                    checker, CONCERN,
+                    d2_variant_name,
+                    f"{d2_variant_name} 변형에 일부 d-2 구조 부재: {missing_d2}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS,
+                    d2_variant_name,
+                    f"{d2_variant_name} d-2 오버레이 + opencode 어댑터 구조 모두 존재 OK",
+                ))
+
+        # MR-10: claude.hermes 외 7 변형에 hermes 오버레이 없어야 함
+        # (hermes 오버레이는 ⓑ⁶ claude.hermes 에만 존재 — F016 / ADR-010)
+        for variant in _VARIANTS_NO_HERMES:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_hermes = [rel for rel in _HERMES_OVERLAY_FILES
+                            if (variant_dir / rel).exists()]
+            if found_hermes:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"hermes 오버레이가 {variant} 에 잘못 미러됨 (claude.hermes 전용): {found_hermes}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 hermes 오버레이 부재 OK",
+                ))
+
+        # MR-10 (계속): claude.hermes 변형에 hermes 오버레이 모두 존재해야 함
+        for hermes_variant_name in _VARIANTS_WITH_HERMES:
+            hv = _HT / hermes_variant_name
+            if not hv.exists():
+                results.append(_issue(
+                    checker, INFO, hermes_variant_name,
+                    f"{hermes_variant_name} 변형 부재 (F016 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _HERMES_OVERLAY_FILES if not (hv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, hermes_variant_name,
+                    f"{hermes_variant_name} 변형에 일부 hermes 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, hermes_variant_name,
+                    f"{hermes_variant_name} hermes 오버레이 모두 존재 OK",
+                ))
+
+        # MR-11: claude.productmgr 외 8 변형에 pm 오버레이 없어야 함
+        # (pm 오버레이는 ⓑ⁷ claude.productmgr 에만 존재 — F018 / ADR-011)
+        for variant in _VARIANTS_NO_PM:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_pm = [rel for rel in _PM_OVERLAY_FILES if (variant_dir / rel).exists()]
+            if found_pm:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"pm 오버레이가 {variant} 에 잘못 미러됨 (claude.productmgr 전용): {found_pm}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 pm 오버레이 부재 OK",
+                ))
+
+        # MR-11 (계속): claude.productmgr 변형에 pm 오버레이 모두 존재해야 함
+        for pm_variant_name in _VARIANTS_WITH_PM:
+            pv = _HT / pm_variant_name
+            if not pv.exists():
+                results.append(_issue(
+                    checker, INFO, pm_variant_name,
+                    f"{pm_variant_name} 변형 부재 (F018 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _PM_OVERLAY_FILES if not (pv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, pm_variant_name,
+                    f"{pm_variant_name} 변형에 일부 pm 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, pm_variant_name,
+                    f"{pm_variant_name} pm 오버레이 모두 존재 OK",
+                ))
+
+        # MR-12: claude.productnw 외 9 변형에 nw(컨소시엄) 오버레이 없어야 함
+        # (nw 오버레이는 ⓑ⁸ claude.productnw 에만 존재 — F019 / ADR-012)
+        for variant in _VARIANTS_NO_NW:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_nw = [rel for rel in _NW_OVERLAY_FILES if (variant_dir / rel).exists()]
+            if found_nw:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"nw 오버레이가 {variant} 에 잘못 미러됨 (claude.productnw 전용): {found_nw}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 nw 오버레이 부재 OK",
+                ))
+
+        # MR-12 (계속): claude.productnw 변형에 nw 오버레이 모두 존재해야 함
+        for nw_variant_name in _VARIANTS_WITH_NW:
+            nv = _HT / nw_variant_name
+            if not nv.exists():
+                results.append(_issue(
+                    checker, INFO, nw_variant_name,
+                    f"{nw_variant_name} 변형 부재 (F019 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _NW_OVERLAY_FILES if not (nv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, nw_variant_name,
+                    f"{nw_variant_name} 변형에 일부 nw 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, nw_variant_name,
+                    f"{nw_variant_name} nw 오버레이 모두 존재 OK",
+                ))
+
     except Exception as exc:  # noqa: BLE001
         results.append(_issue(checker, INFO, "LINT-MR", f"검사 중 오류 — {exc}"))
 
@@ -1303,7 +1597,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (7변형 — F013 MR-8 추가)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (11변형 — F016 MR-10, F018 MR-11, F019 MR-12 추가)", check_mirror_regression),
 }
 
 

@@ -1,0 +1,49 @@
+[
+  {
+    "id": "F001",
+    "category": "infra",
+    "priority": "critical",
+    "title": "프로젝트 환경 설정",
+    "description": "개발자가 로컬 환경을 설정하면 앱을 실행할 수 있다",
+    "acceptance_criteria": [
+      "npm install 후 npm run dev가 에러 없이 실행됨",
+      "npm test가 통과함",
+      "환경변수 예시 파일(.env.example)이 존재함"
+    ],
+    "dependencies": [],
+    "estimated_sessions": 1,
+    "status": "todo",
+    "passes": false
+  },
+  {
+    "id": "F002",
+    "category": "functional",
+    "priority": "critical",
+    "title": "[주요 기능 1]",
+    "description": "[사용자]가 [행동]하면 [결과]가 된다",
+    "acceptance_criteria": [
+      "인수 기준 1",
+      "인수 기준 2",
+      "인수 기준 3"
+    ],
+    "dependencies": ["F001"],
+    "estimated_sessions": 2,
+    "status": "todo",
+    "passes": false
+  },
+  {
+    "id": "F003",
+    "category": "functional",
+    "priority": "high",
+    "title": "[주요 기능 2]",
+    "description": "[사용자]가 [행동]하면 [결과]가 된다",
+    "acceptance_criteria": [
+      "인수 기준 1",
+      "인수 기준 2"
+    ],
+    "dependencies": ["F001", "F002"],
+    "estimated_sessions": 1,
+    "status": "todo",
+    "passes": false
+  }
+]

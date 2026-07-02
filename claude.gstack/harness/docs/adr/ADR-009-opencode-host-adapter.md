@@ -103,9 +103,15 @@ opencode_permission = {tool: "deny" for tool in denied}
 
 | 우리 에이전트 | OpenCode mode | 근거 |
 |---|---|---|
-| developer, reviewer, qa, designer, researcher, planner, architect | `subagent` | 측정 03 결과: 우리 7 에이전트는 모두 다른 agent (orchestrate/사용자) 가 spawn 하는 성격. primary 가 아니다. |
-| gatekeeper | `subagent` | autonomous 모드에서 다른 agent 가 호출하는 패턴 |
+| developer, reviewer, qa, designer, researcher, planner, architect, gatekeeper | `all` | **측정 04 보정** (아래) — primary 직접 진입 + subagent spawn 겸용 |
 | (없음) | `primary` | 우리는 별도 primary agent 없음 — OpenCode 빌트인 `build` 가 primary 역할 수행 |
+
+> **측정 04 보정 (2026-06-08, F015 세션 3)**: 최초엔 8 에이전트를 `mode: subagent` 로 변환했으나,
+> OpenCode 에서 **subagent 는 `opencode run --agent <name>` 직접 진입점이 될 수 없다**
+> ("not a primary agent → fallback"). d-2 의 주 사용 사례인 **단일역할 직접 호출**이 막힌다.
+> → `mode: all` 로 변경. `all` 은 primary(직접 진입) + subagent(task spawn) 겸용 **상위집합**이라
+> 단일역할 직접 호출과 orchestrate task spawn 을 모두 만족한다. (opencode.py `_format_opencode_agent`)
+> 실측: mode:all 직접 호출 시 헤더 `> developer`, fallback 경고 소멸 — docs/poc/measurements/04-single-role-e2e.md
 
 **대안 검토**:
 
@@ -118,6 +124,11 @@ opencode_permission = {tool: "deny" for tool in denied}
 → **(A) 채택**. 우리 어댑터가 frontmatter 를 직접 생성한다. opencode CLI 의 `agent create` 는 신규 agent 를 LLM 으로 작성하는 도구이지, 우리처럼 기존 7 agent 를 결정론적으로 변환하는 용도가 아니다.
 
 **산출 위치**: `<project_root>/.opencode/agent/<name>.md` (7 파일)
+
+**멱등성** (Reviewer SHOULD): `render_agents` 는 호출 시 기존 파일을 덮어쓰고,
+**소스(`.claude/agents/`)에서 사라진 stale `.md` 파일은 출력 디렉토리에서 삭제**한다.
+소스에서 에이전트를 지웠는데 출력에 잔존하면 OpenCode 가 stale agent 를 인식하므로,
+완전 동기화를 위해 "이번에 생성되지 않은 .md" 를 정리한다. (멱등 2회 실행 → diff 0)
 
 ---
 
@@ -227,7 +238,7 @@ OpenCode 의 model 은 frontmatter 가 아니라 호출 시점 또는 `opencode.
 
 ---
 
-### 결정 6 — localllm 변형 PoC 졸업 여부: **PoC 변형 유지 (정식 졸업은 다음 phase 보류)**
+### 결정 6 — localllm 변형 PoC 졸업 여부: **PoC 변형 유지 (정식 졸업은 다음 phase 보류)** ⚠️ *2026-06-09 개정 (결정 6-bis): 14B 범위로 정식 등재 — 아래 개정 박스 참조*
 
 F015 어댑터 완성 후에도 localllm 변형은 **PoC 상태** 로 유지한다. 정식 변형 승격(LINT-MR 등록)은 후속 phase 의 측정 04·05 PASS 가 누적된 후로 미룬다.
 
@@ -246,6 +257,24 @@ F015 어댑터 완성 후에도 localllm 변형은 **PoC 상태** 로 유지한�
 - 측정 04 (단일 역할) + 측정 05 (멀티스텝, 32B 모델) 둘 다 PASS
 - 다운스트림 프로젝트가 1개 이상 localllm 변형을 채택
 - 위 충족 시 후속 ADR (예: ADR-010) 로 정식 변형 승격 + LINT-MR-9 (opencode 오버레이 격리) 추가
+
+> ### 개정 (2026-06-09, 결정 6-bis) — 14B 검증 범위로 정식 등재
+>
+> **변경**: localllm 을 **정식 변형으로 등재**하고 **LINT-MR-9 (d-2 오버레이 격리)** 를 추가했다.
+> 단, 측정 05(멀티스텝/32B)는 **환경 제약으로 무기한 차단** 상태로 둔다.
+>
+> **사유**:
+> - 32B 모델을 적재할 환경이 현재 없음 → 측정 05 는 우리가 안 한 게 아니라 **못 하는 상황**.
+>   "측정 05 PASS 후 등재"를 고수하면 환경이 생길 때까지 무기한 미등재 — 비현실적.
+> - 지금 가능한 검증(14B 단일역할 = 측정 04)은 PASS. 그 범위로 **정직하게 등재**한다:
+>   "단일역할 검증 완료 / 멀티스텝(G4·G5)은 32B 확보 시 측정 05 로 검증" 이라고 명시.
+> - LINT-MR-9 는 **구조 불변식만** 검사하는 가벼운 가드 (.opencode/ 런타임 격리 +
+>   opencode.py render_agents 보유 + host.json agent_type=opencode). 스킬·문서 본문은
+>   검사하지 않아 PoC churn(F016 커맨드·F017 hook) 마찰이 없다. 대신 **메인 opencode.py
+>   변경 시 localllm 동기화 붕괴**·**오버레이 누수** 같은 실 회귀를 잡는다 (등재 전엔 무방비였음).
+>
+> **갱신된 졸업 경로**: 32B 환경 확보 → 측정 05 PASS → "멀티스텝 검증됨" 으로 정식 변형
+> 설명 격상 (LINT-MR-9 는 이미 등재돼 추가 작업 불필요). 다운스트림 채택은 권장이나 등재 전제 아님.
 
 **대안 검토**:
 
