@@ -29,6 +29,7 @@ host.json 의 backup 객체를 읽어 원격 백업 리포로 산출물 동기�
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -281,19 +282,52 @@ def _is_security_whitelisted(path: str) -> bool:
     return any(path_lower.endswith(suffix) for suffix in _SECURITY_WHITELIST_SUFFIXES)
 
 
+def _is_rsync_excluded(rel: str, excludes: list[str]) -> bool:
+    """rel 경로가 rsync 제외 패턴에 해당하는지 판정한다 (rsync 의미론 근사).
+
+    보안 스캔은 '백업에 실제 포함될 파일' 만 검사해야 한다 — 제외 대상(src/,
+    .venv/ 등)은 rsync 가 복사하지 않으므로 BLOCK 대상이 아니다.
+    (미수정 시 다운스트림 src/ 하위 CA 번들 cacert.pem 등이 오탐 BLOCK)
+    """
+    parts = rel.split("/")
+    for pattern in excludes:
+        p = pattern.rstrip("/")
+        if pattern.endswith("/"):
+            # 디렉토리 패턴 — 경로 어느 깊이에서든 매칭 (rsync 동일)
+            if p in parts[:-1]:
+                return True
+        elif "/" in p:
+            # 경로 지정 패턴 (예: .claude/state/lint-last.json) — 루트 기준
+            if rel == p or rel.startswith(p + "/"):
+                return True
+        else:
+            # 파일명/glob 패턴 — basename 매칭 (rsync 동일)
+            if fnmatch.fnmatch(parts[-1], p):
+                return True
+    return False
+
+
 def scan_security_blocks(root: Path) -> list[str]:
     """보안 BLOCK 패턴에 해당하는 파일 경로 목록을 반환한다.
 
     rsync 실행 전 사전 검사. 발견 시 백업 중단 + exit 1.
-    단, .example / .template / .sample 접미사 파일은 화이트리스트 처리하여 제외한다.
-    (ADR-005 결정 6 보강)
+    단, .example / .template / .sample 접미사 파일은 화이트리스트 처리하고,
+    rsync 제외 대상(src/, .venv/ 등 — 백업에 애초에 포함되지 않는 경로)은
+    스캔에서 제외한다. (ADR-005 결정 6 보강)
 
     지원 패턴 유형:
       - 정확한 파일명: ".env", "credentials.json"
       - glob 패턴: ".env.*", "*.pem", "*.key"
       - 디렉토리 접두사: ".aws/credentials", ".aws/"
     """
+    excludes = get_effective_excludes()
     blocked: list[str] = []
+
+    def _add(rel: str) -> None:
+        """화이트리스트·rsync 제외 대상이 아닌 경우에만 BLOCK 목록에 추가한다."""
+        if not _is_security_whitelisted(rel) and not _is_rsync_excluded(rel, excludes):
+            blocked.append(rel)
+
     for pattern in _SECURITY_BLOCK_PATTERNS:
         try:
             pat = pattern.rstrip("/")
@@ -304,23 +338,18 @@ def scan_security_blocks(root: Path) -> list[str]:
                     if p.is_file():
                         rel = str(p.relative_to(root))
                         if ".git" not in rel.split("/") and not rel.startswith(".git"):
-                            if not _is_security_whitelisted(rel):
-                                blocked.append(rel)
+                            _add(rel)
             elif "/" in pat:
                 # 경로 포함 패턴 (예: .aws/credentials, .aws/)
                 # 루트 기준 상대 경로로 매핑
                 target = root / pat
                 if target.is_file():
-                    rel = str(target.relative_to(root))
-                    if not _is_security_whitelisted(rel):
-                        blocked.append(rel)
+                    _add(str(target.relative_to(root)))
                 elif target.is_dir():
                     # 디렉토리면 하위 모든 파일 BLOCK
                     for p in target.rglob("*"):
                         if p.is_file():
-                            rel = str(p.relative_to(root))
-                            if not _is_security_whitelisted(rel):
-                                blocked.append(rel)
+                            _add(str(p.relative_to(root)))
             else:
                 # 정확한 파일명 패턴 (예: .env, credentials.json)
                 # rglob 으로 모든 하위 디렉토리에서 해당 이름의 파일 탐색
@@ -329,8 +358,7 @@ def scan_security_blocks(root: Path) -> list[str]:
                         rel = str(p.relative_to(root))
                         # .git/ 하위 제외
                         if ".git" not in rel.split("/") and not rel.startswith(".git"):
-                            if not _is_security_whitelisted(rel):
-                                blocked.append(rel)
+                            _add(rel)
         except Exception as e:
             # 개별 패턴 실패는 stderr 경고 후 다음 패턴 진행 (보안 게이트 유지)
             print(
