@@ -57,9 +57,20 @@ loop 오버레이(`verify_loop.py`, `verify-loop.md`, `.claude/rubrics/`)는 **c
 
 → **(A) 채택**. codex/openclaw stub·localllm 위임과 같은 "규율은 이식, 무거운 런타임은 미채택" 패턴.
 
+## 결정 7 — Loop 4(Hill-Climbing) 도 같은 변형에 정형화 (F020 후속)
+Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→harness 개선)의 입력이므로, 두 루프를
+같은 변형(claude.loope = "loop engineering" 변형)에 둔다. `hill_climb.py` 가 3개 트레이스 소스
+(verify-loop + analytics.jsonl + learnings.jsonl)를 **결정론으로 집계**해 신호 + **개선 후보** 를 낸다.
+- 하네스 패턴 유지: **헬퍼=결정론 신호/후보, 에이전트=개선안 판단** — 헬퍼는 config 를 직접 안 고침.
+- retro(일반 회고)와 보완: hill-climb 은 개선 신호(특히 verify-loop 기반)에 특화. retro 가 참조.
+- LangChain 은 Loop 4 를 LangSmith(SaaS)로 구현 — 우리는 로컬 트레이스 파일로 **의존성 0** 대체.
+
 ## 결과
-- 신규: `verify_loop.py`, `.claude/rubrics/{code-review,qa-acceptance}.md`, `verify-loop.md`,
-  `.claude/state/verify-loop/`, 이 ADR, LINT-MR-13.
-- 변경: reviewer.md/qa.md(record 연동), product-cycle.md(검증 단계 훅).
-- 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn 로 대체).
-- 검증: mock E2E — 결정론→judge, revision→재시도→pass, revision 3회→escalation 모두 확인.
+- 신규(Loop 2): `verify_loop.py`, `.claude/rubrics/{code-review,qa-acceptance}.md`, `verify-loop.md`,
+  `.claude/state/verify-loop/`.
+- 신규(Loop 4): `hill_climb.py`, `hill-climb.md` (결정 7).
+- 변경: reviewer.md/qa.md(record 연동), product-cycle.md(검증 단계 훅). 이 ADR, LINT-MR-13(6파일).
+- 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn/analytics 로 대체).
+- 검증: mock E2E — (Loop 2) 결정론→judge, revision→재시도→pass, revision 3회→escalation.
+  (Loop 4) 합성 트레이스로 5개 개선 후보 heuristic(에스컬레이션·revision율·big handoff·반복·learnings0)
+  모두 발화 확인.

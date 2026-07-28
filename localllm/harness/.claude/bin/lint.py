@@ -1015,12 +1015,14 @@ _VARIANTS_NO_NW = [
 _VARIANTS_WITH_NW = ["claude.productnw"]
 
 # loop 오버레이 파일 (ⓑ⁹ claude.loope 변형에만 존재해야 함 — MR-13, F020 신설)
-# LangChain loop engineering Loop 2(검증 루프) 정형화: verify_loop + rubrics (ADR-014)
+# LangChain loop engineering: Loop 2(검증 루프) + Loop 4(hill-climbing) 정형화 (ADR-014)
 _LOOP_OVERLAY_FILES = [
     "harness/.claude/bin/verify_loop.py",
     "harness/.claude/commands/verify-loop.md",
     "harness/.claude/rubrics/code-review.md",
     "harness/.claude/rubrics/qa-acceptance.md",
+    "harness/.claude/bin/hill_climb.py",
+    "harness/.claude/commands/hill-climb.md",
 ]
 
 # loop 오버레이가 없어야 하는 변형 (MR-13: claude.loope 외 10 변형 — openai 별도)
