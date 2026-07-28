@@ -16,6 +16,7 @@
 | **`claude.hermes/`** | **허용** (wiki 상속) | Obsidian/qmd/Marp (hermes 기능은 stdlib) | LINT-MR-10 (hermes 오버레이 격리) |
 | **`claude.productmgr/`** | **허용** (hermes 상속) | Obsidian/qmd/Marp (pm 오버레이는 stdlib/문서) | LINT-MR-11 (pm 오버레이 격리) |
 | **`claude.productnw/`** (d-3) | **허용** (productmgr 상속) | Obsidian/qmd/Marp (nw 오버레이는 stdlib/문서) | LINT-MR-12 (nw 오버레이 격리) |
+| **`claude.loope/`** | **허용** (productmgr 상속) | Obsidian/qmd/Marp (loop 오버레이는 stdlib/문서) | LINT-MR-13 (loop 오버레이 격리) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
@@ -51,6 +52,13 @@
 - 팀 내부는 single-host(d-1, 같은 컨텍스트 풀), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계
 - **검증 범위**: 로컬 큐(같은 머신) E2E 검증 완료. 실제 원격 봇 연동은 다운스트림이 게이트웨이를 붙여 완성 (localllm 의 32B 위임과 동일 패턴)
 - LINT-MR-12 가 nw 오버레이의 claude.productnw 전용 격리를 강제
+
+**claude.loope 변형 예외 계약** (ADR-014):
+- productmgr 변형 복사 + loop 오버레이 — LangChain loop engineering 의 Loop 2(검증 루프) 정형화
+- 외부 의존성은 productmgr 상속분(Obsidian/qmd/Marp)만. **loop 오버레이(verify_loop.py/rubrics/커맨드)는 stdlib/문서뿐 — 신규 의존성 0**
+- **라이브러리 미채택**: LangChain/LangGraph 는 zero-dep·실행모델(host 가 루프 소유)·LangSmith(SaaS) 이유로 부적합 → "루프를 명시·유계로" 규율만 이식
+- grader 결정론(lint/design-review/qa-browser) vs judge(reviewer/qa) 구분. revision 3회 자동 에스컬레이션(산문 규칙의 코드화)
+- LINT-MR-13 이 loop 오버레이의 claude.loope 전용 격리를 강제
 
 ---
 

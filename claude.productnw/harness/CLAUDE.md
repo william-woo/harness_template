@@ -675,7 +675,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (11 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (12 변형 매트릭스)
 
 | 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
 |---|---|:-:|:-:|:-:|:-:|:-:|
@@ -689,7 +689,15 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
+| **ⓑ⁹ `claude.loope/`** (Loop 2 검증 루프 정형화) | productmgr 변형 1:1 + loop 오버레이 (verify_loop + rubrics) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+
+> **claude.loope 변형 (F020)**: productmgr 변형 복사 + loop 오버레이 (ADR-014). LangChain
+> "loop engineering"(Swyx, the art of stacking loops)의 **Loop 2(검증 루프)** 를 하네스에 이식.
+> Reviewer→NEEDS REVISION→재시도 + QA 게이트의 **암묵 rubric·비코드화 재시도 상태**를 `verify_loop.py`
+> + `.claude/rubrics/` 로 명시·유계화. 라이브러리(LangChain/LangGraph)는 미채택(zero-dep·실행모델·SaaS
+> 이유), **규율만 이식**. grader 결정론(lint/design-review/qa-browser) vs judge(reviewer/qa) 구분 +
+> revision 3회 자동 에스컬레이션 (산문 규칙의 코드화).
 
 > **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
 > 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
@@ -745,12 +753,12 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw 에 존재 — F016 신설):
+**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope 에 존재 — F016 신설):
 - `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-**pm 오버레이** (claude.productmgr + claude.productnw 에 존재 — F018 신설):
+**pm 오버레이** (claude.productmgr + claude.productnw + claude.loope 에 존재 — F018 신설):
 - `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
 - `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
@@ -760,7 +768,12 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~12 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12 추가).
+**loop(검증 루프) 오버레이** (claude.loope 에만 — F020 신설):
+- `.claude/bin/verify_loop.py` (rubric + 재시도/판정 상태 + 에스컬레이션 — stdlib)
+- `.claude/rubrics/{code-review,qa-acceptance}.md` (명시 rubric)
+- `.claude/commands/verify-loop.md`, `.claude/state/verify-loop/` (루프 상태)
+
+회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~13 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13 추가).
 
 ---
 

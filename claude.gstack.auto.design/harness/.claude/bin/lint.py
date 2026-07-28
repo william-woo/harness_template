@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (11변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12)
+  LINT-MR     변형 오버레이 정합 (12변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12, F020: MR-13)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -937,6 +937,7 @@ _VARIANTS_NO_D2 = [
     "claude.hermes",
     "claude.productmgr",
     "claude.productnw",
+    "claude.loope",
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
@@ -962,9 +963,9 @@ _VARIANTS_NO_HERMES = [
     "localllm",
 ]
 
-# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 claude.productmgr/productnw)
-# productmgr 는 hermes 복사본, productnw 는 productmgr 복사본 — 둘 다 hermes 4파일 정당 보유 (Reviewer SHOULD).
-_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw"]
+# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope)
+# productmgr=hermes 복사본, productnw=productmgr 복사본, loope=productmgr 복사본 — 모두 hermes 4파일 정당 보유.
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
@@ -985,9 +986,9 @@ _VARIANTS_NO_PM = [
     "claude.hermes",
 ]
 
-# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 claude.productnw)
-# productnw 는 productmgr 복사본이므로 pm 2파일을 정당 보유 — 존재 검증 대상에 포함 (Reviewer SHOULD).
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw"]
+# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope)
+# productnw·loope 는 productmgr 복사본이므로 pm 2파일을 정당 보유 — 존재 검증 대상에 포함 (Reviewer SHOULD).
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
 # 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub (ADR-012, d-3)
@@ -996,7 +997,7 @@ _NW_OVERLAY_FILES = [
     "harness/.claude/commands/consortium.md",
 ]
 
-# nw 오버레이가 없어야 하는 변형 (MR-12: claude.productnw 외 9 변형 — openai 별도)
+# nw 오버레이가 없어야 하는 변형 (MR-12: claude.productnw 외 10 변형 — openai 별도)
 _VARIANTS_NO_NW = [
     "claude",
     "claude.gstack",
@@ -1007,10 +1008,37 @@ _VARIANTS_NO_NW = [
     "localllm",
     "claude.hermes",
     "claude.productmgr",
+    "claude.loope",
 ]
 
 # nw 오버레이를 보유해야 하는 변형 (MR-12: claude.productnw 만)
 _VARIANTS_WITH_NW = ["claude.productnw"]
+
+# loop 오버레이 파일 (ⓑ⁹ claude.loope 변형에만 존재해야 함 — MR-13, F020 신설)
+# LangChain loop engineering Loop 2(검증 루프) 정형화: verify_loop + rubrics (ADR-014)
+_LOOP_OVERLAY_FILES = [
+    "harness/.claude/bin/verify_loop.py",
+    "harness/.claude/commands/verify-loop.md",
+    "harness/.claude/rubrics/code-review.md",
+    "harness/.claude/rubrics/qa-acceptance.md",
+]
+
+# loop 오버레이가 없어야 하는 변형 (MR-13: claude.loope 외 10 변형 — openai 별도)
+_VARIANTS_NO_LOOP = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "localllm",
+    "claude.hermes",
+    "claude.productmgr",
+    "claude.productnw",
+]
+
+# loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope 만)
+_VARIANTS_WITH_LOOP = ["claude.loope"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1031,7 +1059,7 @@ _OPENAI_VARIANT_HARNESS = "openai/harness"
 
 
 def check_mirror_regression() -> list:
-    """LINT-MR: 11 변형 미러 정합 점검 (F011~F013, F015 MR-9, F016 MR-10, F018 MR-11, F019 MR-12).
+    """LINT-MR: 12 변형 미러 정합 점검 (F011~F013, F015 MR-9, F016 MR-10, F018 MR-11, F019 MR-12, F020 MR-13).
 
     F010 미러 회귀 2 회 학습 반영 — 자동 가드.
     F012: MR-6 (wiki 오버레이 격리) + MR-7 (외부 의존성 격리) 추가.
@@ -1580,6 +1608,49 @@ def check_mirror_regression() -> list:
                     f"{nw_variant_name} nw 오버레이 모두 존재 OK",
                 ))
 
+        # MR-13: claude.loope 외 10 변형에 loop(검증 루프) 오버레이 없어야 함
+        # (loop 오버레이는 ⓑ⁹ claude.loope 에만 존재 — F020 / ADR-014)
+        for variant in _VARIANTS_NO_LOOP:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(
+                    checker, INFO, variant,
+                    f"{variant} 변형 디렉토리 부재 — 건너뜀",
+                ))
+                continue
+            found_loop = [rel for rel in _LOOP_OVERLAY_FILES if (variant_dir / rel).exists()]
+            if found_loop:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"loop 오버레이가 {variant} 에 잘못 미러됨 (claude.loope 전용): {found_loop}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, variant,
+                    f"{variant} 변형에 loop 오버레이 부재 OK",
+                ))
+
+        # MR-13 (계속): claude.loope 변형에 loop 오버레이 모두 존재해야 함
+        for loop_variant_name in _VARIANTS_WITH_LOOP:
+            lv = _HT / loop_variant_name
+            if not lv.exists():
+                results.append(_issue(
+                    checker, INFO, loop_variant_name,
+                    f"{loop_variant_name} 변형 부재 (F020 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in _LOOP_OVERLAY_FILES if not (lv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, loop_variant_name,
+                    f"{loop_variant_name} 변형에 일부 loop 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, loop_variant_name,
+                    f"{loop_variant_name} loop 오버레이 모두 존재 OK",
+                ))
+
     except Exception as exc:  # noqa: BLE001
         results.append(_issue(checker, INFO, "LINT-MR", f"검사 중 오류 — {exc}"))
 
@@ -1597,7 +1668,7 @@ _CHECKERS = {
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
-    "LINT-MR": ("변형 오버레이 정합 (11변형 — F016 MR-10, F018 MR-11, F019 MR-12 추가)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 (12변형 — F018 MR-11, F019 MR-12, F020 MR-13 추가)", check_mirror_regression),
 }
 
 
