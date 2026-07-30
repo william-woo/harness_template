@@ -63,7 +63,11 @@ Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→ha
 (verify-loop + analytics.jsonl + learnings.jsonl)를 **결정론으로 집계**해 신호 + **개선 후보** 를 낸다.
 - 하네스 패턴 유지: **헬퍼=결정론 신호/후보, 에이전트=개선안 판단** — 헬퍼는 config 를 직접 안 고침.
 - retro(일반 회고)와 보완: hill-climb 은 개선 신호(특히 verify-loop 기반)에 특화. retro 가 참조.
-- LangChain 은 Loop 4 를 LangSmith(SaaS)로 구현 — 우리는 로컬 트레이스 파일로 **의존성 0** 대체.
+- **루프 닫힘(retro Step 5)**: retro 가 `hill_climb --json` 을 읽어 개선안을 초안 → 이것이 Loop 4 의
+  "analysis agent that improves harness config" 노드다. **auto-apply 금지 — 사람 승인 후에만 반영**
+  (에이전트가 CLAUDE.md/rubric 자동 편집 X). 트레이스 얇으면 생략(성급한 변경 방지). 반영분은
+  다음 사이클 트레이스로 재검증 = hill climb 반복. LangChain 은 LangSmith(SaaS)로 구현 — 우리는
+  로컬 트레이스 파일로 **의존성 0** 대체 (보조 루프이지 완전 자동은 아님 — 사람 게이트 유지).
 
 ## 결과
 - 신규(Loop 2): `verify_loop.py`, `.claude/rubrics/{code-review,qa-acceptance}.md`, `verify-loop.md`,

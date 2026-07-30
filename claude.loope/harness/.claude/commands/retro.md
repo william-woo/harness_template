@@ -164,6 +164,39 @@ fi
 
 답변 받으면 `/project:learn add` 형식으로 학습 기록 제안.
 
+### Step 5: Loop 4 개선안 초안 (claude.loope — hill-climb 연동)
+
+> LangChain loop engineering 의 **Loop 4(Hill-Climbing)** 를 닫는 hop. retro 는 회고에 더해
+> `hill_climb.py` 의 신호로 **harness 개선안을 초안**한다. **단, auto-apply 금지 — 사람 승인 후에만 반영.**
+
+```bash
+python3 .claude/bin/hill_climb.py analyze --json    # 결정론 신호 + 개선 후보 (Loop 2 트레이스 포함)
+```
+
+에이전트는 이 JSON 을 받아 **각 후보를 구체 harness-config 변경안으로 번역**한다 (helper=신호 / agent=판단):
+
+```
+════════════════════════════════════════
+🧗 LOOP 4 개선안 초안 (사람 승인 필요)
+════════════════════════════════════════
+후보: grader 'reviewer' revision율 80%
+  → 제안: rubrics/code-review.md 의 MUST '테스트 포함' 을 Developer 사전 체크리스트로 승격
+  → 대상 파일: .claude/rubrics/code-review.md, .claude/agents/developer.md
+  → 근거: verify-loop 트레이스 N건 중 M건이 테스트 누락으로 revision
+
+후보: 에스컬레이션 feature [F0XX]
+  → 제안: 해당 유형에 Architect 선행 검토 트리거 추가 (CLAUDE.md Architect 호출 기준)
+════════════════════════════════════════
+```
+
+**게이트 규칙 (반드시)**:
+- 에이전트는 **초안만** 낸다. CLAUDE.md/rubric/에이전트 정의를 **자동 수정하지 않는다**.
+- 트레이스가 얇으면(예: verify-loop 0건, handoff < 3) 초안을 **생략**한다 (성급한 변경·노이즈 방지).
+- 오탐 인지: 후보는 heuristic — 예) 변형 통째 복사의 대량 변경파일은 정당하므로 사람이 기각.
+- 사람이 채택한 변경만 반영 → 다음 사이클 트레이스로 재검증 (hill climb 반복).
+
+> 다른 변형에는 `hill_climb.py` 가 없으므로 Step 5 는 스킵된다 (claude.loope 전용).
+
 ## handoff.md 통합 (analytics append)
 
 `/project:handoff` 마지막 단계에서 자동 append (`/project:handoff` 문서의 Step 5 참고):
@@ -204,3 +237,4 @@ PY
 - [ ] 통계 출력 (완료 수, 평균 세션, 리뷰 반복, 에이전트 분포)
 - [ ] 최근 학습 요약 출력
 - [ ] 회고 질문 3개 생성 (답변 → /project:learn add 유도)
+- [ ] (claude.loope) Step 5 — hill_climb `--json` 개선안 초안 (트레이스 충분 시), **auto-apply 금지·사람 승인**
