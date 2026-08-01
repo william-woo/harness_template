@@ -529,15 +529,15 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 |---|---|:-:|:-:|:-:|:-:|:-:|
 | ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 | ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | ❌ | 0 |
-| ⓑ′ `claude.gstack.auto/` (자율) | 메인과 1:1 | ✅ | ❌ | ❌ | ❌ | 0 |
-| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
-| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
+| ⓑ′ `claude.gstack.auto/` (자율) | main − design~loop 오버레이 (F021 후) | ✅ | ❌ | ❌ | ❌ | 0 |
+| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
+| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
 | **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
-| **ⓑ⁹ `claude.loope/`** (Loop 2 검증 루프 정형화) | productmgr 변형 1:1 + loop 오버레이 (verify_loop + rubrics) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
+| **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 > **claude.loope 변형 (F020)**: productmgr 복사 + loop 오버레이 (ADR-014). LangChain "loop

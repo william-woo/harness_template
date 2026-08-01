@@ -4,8 +4,9 @@
 > **팀원 모두 이 파일을 읽고 프로젝트 시작 전 반드시 설정을 완료하세요.**
 >
 > 🤖 **이 작업 환경은 Autonomous Mode 입니다** (2026-06-02 적용).
-> 메인 `.claude/` 는 `claude.gstack.auto` 변형의 정책을 사용합니다 — 작업 디렉토리 내부
-> 액션은 prompt 없이 자율 진행, 인증·계정·외부 디렉토리는 사용자 명시 승인 필수.
+> 메인 `.claude/` 는 **`claude.loope` 변형과 정합** 상태입니다 (F021 승격, ADR-015 — 2026-08-02).
+> auto+design+wiki+orch+hermes+pm+loop 전 스택을 우리 자체 개발에 dogfood 합니다.
+> 작업 디렉토리 내부 액션은 prompt 없이 자율 진행, 인증·계정·외부 디렉토리는 사용자 명시 승인 필수.
 > 자세한 정책은 아래 **🤖 Autonomous Mode** 섹션 참조.
 
 ---
@@ -46,18 +47,22 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (Autonomous Mode 적용 후)
+## 🪞 메인 ↔ 변형 미러 정책 (F021 loope 승격 후 — ADR-015)
 
-메인 `.claude/` 는 이제 `claude.gstack.auto` 와 정합 상태입니다. 변형별 미러 정책:
+메인 `.claude/` 는 **`claude.loope` 와 정합** 상태입니다 (구 SSOT main≡gstack.auto 는 폐기).
+신규 개발은 **main 에서 → loope 로 1:1 미러 → 하위 변형은 오버레이 규칙대로 제외 미러**:
 
 | 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| `claude.gstack/` (표준) | **autonomous 오버레이 4 파일 제외** 후 미러:<br>• `.claude/agents/gatekeeper.md` 제외<br>• `.claude/hooks/pre-bash-auto-boundary-check.sh` 제외<br>• `.claude/settings.json` (standard 버전 별도 유지)<br>• `CLAUDE.md` 의 "Autonomous Mode" 섹션 제외 |
-| `claude.gstack.auto/` (자율) | **전체 미러** — 메인과 1:1 |
-| `claude/` (baseline) | Phase 0 동결, Karpathy 예외만 |
-| `openai/.codex/` (codex) | 정적 산출물, Karpathy 예외만 |
+| **`claude.loope/`** ★ | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외: `settings.json`/`settings.local.json`/`host.json`/`.claude/state/` |
+| `claude.productmgr/` | main − loop 오버레이 |
+| `claude.hermes/` | main − loop − pm 오버레이 |
+| orch/wiki/design/auto 계열 | 해당 변형 아래 오버레이 순차 제외 — **LINT-MR-1~13 의 _*_OVERLAY_FILES 목록이 SSOT** |
+| `claude.gstack/` (표준) | gstack.auto 기준 + autonomous 오버레이 4 파일 제외 |
+| `claude.productnw/` | nw(consortium) 오버레이는 main 에 없음 — productnw 전용 유지 |
+| `claude/` (baseline) · `openai/.codex/` | 동결, Karpathy 예외만 |
 
-**중요**: F010 세션 2 에서 발생한 회귀 — 미러링 시 claude.gstack.auto/settings.json 이 표준 버전으로 덮어쓰기됐었음. 2026-06-02 복구 완료. 미러 작업 시 항상 이 정책 확인.
+**중요**: F010 회귀 교훈 — 미러링 시 변형별 settings.json 을 덮어쓰지 말 것. 미러 작업 전 이 표 + LINT-MR 확인.
 
 ---
 
@@ -151,16 +156,22 @@ project-root/
 **동기화 제외:**
 - `.claude/state/` (checkpoints, learnings.jsonl, analytics.jsonl, freeze-dir.txt)
   — 프로젝트 로컬 상태이므로 템플릿에 들어가면 안 됨
+- `settings.json` / `settings.local.json` / `host.json` — 머신·프로젝트 로컬 (ADR-015 결정 2)
 - `feature_list.json` — 프로젝트별로 다르므로 템플릿엔 데모 샘플 유지
 - `claude-progress.txt` — 세션 인계용
 - `__pycache__/`, `*.pyc` — Python 캐시 — 환경별로 다르므로 미러에 들어가면 안 됨
 
-**권장 미러링 명령**:
+**권장 미러링 명령** (F021 — 1차 미러는 loope 로 1:1, ADR-015):
 
 ```bash
+# main → claude.loope (1:1, 로컬 파일 제외)
 rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
-  .claude/ src/harness_template/claude.gstack/harness/.claude/
+  --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
+  .claude/ src/harness_template/claude.loope/harness/.claude/
+# 하위 변형(productmgr/hermes/orch/...)은 LINT-MR 오버레이 목록 기준으로 제외 미러
 ```
+
+> **F020 meta-dev 오버레이는 폐기** — F021 전면 승격(main≡loope, ADR-015)에 흡수됨.
 
 **`claude/` (baseline)은 의도적으로 동결**: Phase 0 (F001 시작 전) 스냅샷.
 변경 금지. 신규 phase는 `claude.gstack/`에만 반영.
@@ -681,15 +692,15 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 |---|---|:-:|:-:|:-:|:-:|:-:|
 | ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 | ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | ❌ | 0 |
-| ⓑ′ `claude.gstack.auto/` (자율) | 메인과 1:1 | ✅ | ❌ | ❌ | ❌ | 0 |
-| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | 메인과 1:1 + 디자인 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
-| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | 메인과 1:1 + 디자인 + wiki 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
+| ⓑ′ `claude.gstack.auto/` (자율) | main − design~loop 오버레이 (F021 후) | ✅ | ❌ | ❌ | ❌ | 0 |
+| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
+| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
 | **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
-| **ⓑ⁹ `claude.loope/`** (Loop 2 검증 루프 정형화) | productmgr 변형 1:1 + loop 오버레이 (verify_loop + rubrics) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
+| **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 > **claude.loope 변형 (F020)**: productmgr 변형 복사 + loop 오버레이 (ADR-014). LangChain
