@@ -18,7 +18,7 @@ _TOOL_MAP: dict[str, str] = {
     "read": "Read",
     "write": "Write",
     "edit": "Edit",
-    "multiedit": "MultiEdit",
+    "multiedit": "Edit",   # MultiEdit 는 현행 Claude Code 에서 Edit 로 통합·제거 (ADR-016)
     "glob": "Glob",
     "grep": "Grep",
 }

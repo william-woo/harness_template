@@ -27,5 +27,5 @@ python3 .claude/bin/session_search.py self                 # FTS5 지원·색인
 - 엔진: SQLite FTS5 (stdlib). 미지원 빌드면 `grep` 대체 안내 (graceful degrade).
 - DB: `.claude/state/sessions.db` (gitignore — 로컬 캐시, 언제든 재색인 가능)
 
-> **claude.hermes 변형 전용** — 다른 변형엔 session_search.py 가 없다 (LINT-MR-10 격리).
+> **claude.hermes 계보 전용** (hermes/productmgr/productnw/loope/localllm) — 그 외 변형엔 session_search.py 가 없다 (LINT-MR-10 격리).
 > wiki 의 `/project:wiki query`(지식 노드 검색)와 책임 분리: session-search 는 **세션 이력** 검색.

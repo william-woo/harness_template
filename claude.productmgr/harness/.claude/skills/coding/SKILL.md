@@ -21,7 +21,7 @@ description: |
 | 파일 읽기 | `Read` |
 | 파일 쓰기 | `Write` |
 | 파일 수정 | `Edit` |
-| 다중 파일 수정 | `MultiEdit` |
+| 다중 파일 수정 | `Edit` (통합) |
 | 파일 검색 | `Glob` |
 | 텍스트 검색 | `Grep` |
 

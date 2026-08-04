@@ -923,6 +923,7 @@ _D2_OVERLAY_FILES = [
 # d-2 상태/산출 디렉토리 (MR-9)
 _D2_OVERLAY_DIRS = [
     "harness/.opencode/agent",
+    "harness/.opencode/commands",   # render-commands 산출물 (F023 — ADR-017)
     "harness/docs/poc",
 ]
 
@@ -952,7 +953,7 @@ _HERMES_OVERLAY_FILES = [
     "harness/.claude/commands/skill-forge.md",
 ]
 
-# hermes 오버레이가 없어야 하는 변형 (MR-10: claude.hermes 외 7 변형 — openai 별도)
+# hermes 오버레이가 없어야 하는 변형 (MR-10: claude.hermes 외 6 변형 — openai 별도)
 _VARIANTS_NO_HERMES = [
     "claude",
     "claude.gstack",
@@ -960,12 +961,11 @@ _VARIANTS_NO_HERMES = [
     "claude.gstack.auto.design",
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
-    "localllm",
 ]
 
-# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope)
-# productmgr=hermes 복사본, productnw=productmgr 복사본, loope=productmgr 복사본 — 모두 hermes 4파일 정당 보유.
-_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope"]
+# hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope
+# + localllm — F023 loope 계보 승격, ADR-017)
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope", "localllm"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
@@ -982,13 +982,12 @@ _VARIANTS_NO_PM = [
     "claude.gstack.auto.design",
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
-    "localllm",
     "claude.hermes",
 ]
 
-# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope)
-# productnw·loope 는 productmgr 복사본이므로 pm 2파일을 정당 보유 — 존재 검증 대상에 포함 (Reviewer SHOULD).
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope"]
+# pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope
+# + localllm — F023 loope 계보 승격, ADR-017)
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
 # 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub (ADR-012, d-3)
@@ -1033,14 +1032,13 @@ _VARIANTS_NO_LOOP = [
     "claude.gstack.auto.design",
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
-    "localllm",
     "claude.hermes",
     "claude.productmgr",
     "claude.productnw",
 ]
 
-# loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope 만)
-_VARIANTS_WITH_LOOP = ["claude.loope"]
+# loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope + localllm — F023 loope 계보 승격, ADR-017)
+_VARIANTS_WITH_LOOP = ["claude.loope", "localllm"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1480,7 +1478,7 @@ def check_mirror_regression() -> list:
                     f"{d2_variant_name} d-2 오버레이 + opencode 어댑터 구조 모두 존재 OK",
                 ))
 
-        # MR-10: claude.hermes 외 7 변형에 hermes 오버레이 없어야 함
+        # MR-10: claude.hermes 외 6 변형에 hermes 오버레이 없어야 함
         # (hermes 오버레이는 ⓑ⁶ claude.hermes 에만 존재 — F016 / ADR-010)
         for variant in _VARIANTS_NO_HERMES:
             variant_dir = _HT / variant

@@ -684,7 +684,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 | ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
-| **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
@@ -715,8 +715,8 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 > ③ agentskills.io 표준 적합성. hermes 3종 기능은 **stdlib only** (Hermes 의 메시징 게이트웨이 등
 > 무거운 부분은 미이식 — 개인비서 영역이라 SDLC 하네스 목적과 불일치). 기존 스킬은 이미 표준 호환(6/6 PASS).
 
-> **localllm 변형 (F015 / d-2)**: Claude Code 가 아니라 **OpenCode(오픈소스 agent framework) +
-> 로컬 LLM(Ollama)** 으로 하네스를 구동하는 PoC 샌드박스 (orch 변형 복사본 + d-2 오버레이).
+> **localllm 변형 (F015 / d-2, F023 loope 계보 승격)**: Claude Code 가 아니라 **OpenCode(오픈소스
+> agent framework) + 로컬 LLM(Ollama)** 으로 하네스를 구동하는 변형 (loope 계보 + d-2 오버레이 — ADR-017).
 > 호스트 어댑터 `opencode.py` 가 `.claude/agents/*.md` 를 OpenCode 포맷 `.opencode/agent/*.md`
 > (`mode: all` + permission deny-list) 로 변환한다. 단일역할(developer/reviewer/qa)은 로컬 14B 로
 > 즉시 가능, 멀티스텝 오케스트레이션은 32B+ 필요 (측정 04 / docs/poc/MODEL-GRADES.md).
@@ -748,16 +748,17 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 **d-2 오버레이** (localllm 에만 — F015 신설):
 - `.opencode/AGENTS.md` (OpenCode 프로젝트 컨텍스트 — CLAUDE.md 상당, 4대 차이 명시)
 - `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
+- `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope 에 존재 — F016 신설):
+**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope + localllm 에 존재 — F016 신설·F023 확장):
 - `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-**pm 오버레이** (claude.productmgr + claude.productnw + claude.loope 에 존재 — F018 신설):
+**pm 오버레이** (claude.productmgr + claude.productnw + claude.loope + localllm 에 존재 — F018 신설·F023 확장):
 - `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
 - `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
@@ -767,7 +768,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 
-**loop(검증 루프) 오버레이** (claude.loope 에만 — F020 신설):
+**loop(검증 루프) 오버레이** (claude.loope + localllm 에 존재 — F020 신설·F023 확장):
 - `.claude/bin/verify_loop.py` (rubric + 재시도/판정 상태 + 에스컬레이션 — stdlib)
 - `.claude/rubrics/{code-review,qa-acceptance}.md` (명시 rubric)
 - `.claude/commands/verify-loop.md`, `.claude/state/verify-loop/` (루프 상태)
@@ -785,6 +786,9 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 # .claude/agents/*.md → .opencode/agent/*.md 변환 (OpenCode 포맷)
 HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents
 HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents --agents-out <경로>
+
+# .claude/commands/*.md → .opencode/commands/*.md 변환 (F023 — ADR-017)
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-commands
 
 # OpenCode + Ollama 환경 설정 (전역 설치 — autonomous #3-B 승인 필요)
 bash .claude/bin/opencode-setup.sh

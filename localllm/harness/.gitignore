@@ -74,3 +74,13 @@ wiki/log-archive.md
 .claude/state/orch/*/
 !.claude/state/orch/.gitkeep
 !.claude/state/orch/README.md
+
+# 세션 검색 FTS5 색인 (hermes 오버레이 — 로컬 캐시, 언제든 재색인. ADR-010)
+.claude/state/sessions.db
+
+# 스킬 draft (hermes 오버레이 — 승인 전 임시. approve 로 .claude/skills/ 이동. ADR-010 결정 7)
+.claude/state/skill-drafts/
+
+# product-cycle 핸드오프 런타임 (cycle-id 디렉토리 — gitignore, ADR-011)
+.claude/state/product-cycle/*/
+!.claude/state/product-cycle/.gitkeep

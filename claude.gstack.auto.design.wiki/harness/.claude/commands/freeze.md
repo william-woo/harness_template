@@ -36,7 +36,7 @@ echo "✅ freeze 경계 설정: $FREEZE_DIR"
 
 ## 동작 원리
 
-- `.claude/hooks/pre-edit-freeze-check.sh` 훅이 모든 Edit/Write/MultiEdit 호출 전 경로를 검사
+- `.claude/hooks/pre-edit-freeze-check.sh` 훅이 모든 Edit/Write 호출 전 경로를 검사
 - `file_path`가 `FREEZE_DIR` 밖이면 `exit 2`로 차단 + stderr 메시지
 - Read, Bash, Glob, Grep은 영향 받지 않음 (읽기·탐색은 자유)
 
