@@ -10,7 +10,7 @@ description: |
     - "Use the product-manager agent to scope a notification feature for our mobile users"
     - "Use the product-manager agent to turn this vague idea into a prioritized product brief"
   주의: claude.productmgr 변형 전용. /project:product-cycle 의 1단계로 자주 호출된다.
-model: claude-sonnet-4-6
+model: opus
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 

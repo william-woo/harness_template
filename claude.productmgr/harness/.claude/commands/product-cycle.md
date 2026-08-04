@@ -129,5 +129,5 @@ PM 은 진입을 막지 않되 **명시적으로 경고**하고 더 앞 단계�
 - 설계 체인만 → `/project:plan-full`
 
 ## single-host / d-1 경계
-모든 에이전트는 Claude Code Task 도구로 spawn (같은 컨텍스트 풀). 이종 호스트 분산(d-3) 아님.
+모든 에이전트는 Claude Code Agent 도구(구 Task)로 spawn (같은 컨텍스트 풀). 이종 호스트 분산(d-3) 아님.
 (ADR-008 결정 5 상속 — claude.productmgr 는 orch/hermes 계보)
