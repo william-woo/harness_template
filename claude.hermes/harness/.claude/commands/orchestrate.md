@@ -136,7 +136,7 @@ design-review → qa-browser : qa-browser 는 정적 감사 통과 후 동적 �
 
 ```
 architect ↔ designer     : 아키텍처 설계와 디자인 결정은 서로 독립 축
-                           → Task 도구로 동시 spawn 가능
+                           → Agent 도구(구 Task)로 동시 spawn 가능
 ```
 
 **기본은 순차** — single-host 컨텍스트 일관성 우선.
@@ -174,7 +174,7 @@ orchestrate 가 설계 필요 판단 시 내부적으로 architect 호출 포함
 
 ## single-host 원칙 (ADR-008 결정 5 — d-1)
 
-모든 sub-agent 는 **같은 Claude Code 컨텍스트 풀**에서 spawn (Task 도구).
+모든 sub-agent 는 **같은 Claude Code 컨텍스트 풀**에서 spawn (Agent 도구 — 구 Task).
 핸드오프는 컨텍스트 **전달**이지 **분리**가 아님 — 핸드오프 디렉토리는 감사 추적 + 인라인 주입은 실제 전달.
 
 ```
@@ -195,7 +195,7 @@ orchestrate 가 설계 필요 판단 시 내부적으로 architect 호출 포함
 
 | 단계 | 의미 | 전제 | 본 커맨드 범위 |
 |---|---|---|:---:|
-| **d-1 (본 커맨드)** | single-host supervisor + sub-agent 오케스트레이션 (Claude Code Task 도구) | GPU 무관, 즉시 가능 | **✅** |
+| **d-1 (본 커맨드)** | single-host supervisor + sub-agent 오케스트레이션 (Claude Code Agent 도구(구 Task)) | GPU 무관, 즉시 가능 | **✅** |
 | d-2 | 로컬 LLM 통합 (researcher 일부를 로컬 small model 에 위임) | GPU 필요, 별도 ADR-009 | ❌ |
 | d-3 | 이종 호스트 분산 (Claude Code + Codex + OpenClaw 간 작업 라우팅) | 컨텍스트 전달 손실 감수, 별도 ADR-010 | ❌ |
 

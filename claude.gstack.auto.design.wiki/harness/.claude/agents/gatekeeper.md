@@ -11,7 +11,7 @@ description: |
     - "git push 직전 gatekeeper 호출"
 
   주의: claude.gstack.auto 변형에서만 사용. 다른 변형에선 모든 결정이 사용자 → 자동 호출 X.
-model: claude-sonnet-4-6
+model: opus
 tools: Read, Glob, Grep, Bash
 ---
 

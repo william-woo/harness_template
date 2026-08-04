@@ -52,6 +52,7 @@ _CC_NORMALIZE: dict[str, str] = {
     "grep": "grep",
     "webfetch": "webfetch",
     "task": "task",
+    "agent": "task",     # Claude Code 신명칭(구 Task) — 동일 매핑
     "todowrite": "todowrite",
     "websearch": "websearch",
     "lsp": "lsp",

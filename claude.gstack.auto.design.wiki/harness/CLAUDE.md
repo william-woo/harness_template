@@ -16,8 +16,7 @@
 
 ### 규칙 #1 — 작업 디렉토리 내부는 자율 진행 (단, 파일 삭제는 승인)
 `$CLAUDE_PROJECT_DIR` 하위의 모든 액션은 **사용자 승인 요청 없이 진행**됩니다.
-`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(**)`, `Write(**)`,
-`MultiEdit(**)` 광범위 패턴(중첩 경로 포함)이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
+`.claude/settings.json` 의 `permissions.allow` 가 `Bash(*)`, `Edit(**)`, `Write(**)` 광범위 패턴(중첩 경로 포함)이어서 prompt 발생 X. 안전망은 후술 훅과 Gatekeeper.
 
 > **예외 — 파일 삭제는 승인 필요**: `permissions.ask` 에 `rm`/`rmdir`/`unlink`/`shred`/
 > `git clean`/`trash`/`find … -delete` 를 등재해, 자동 허용을 오버라이드하고 **삭제 명령은
@@ -361,7 +360,7 @@ bash .claude/bin/wiki-setup.sh
 ### 이종 에이전트 오케스트레이션 (Phase 9 — F013, orch 변형 전용)
 
 > **사용 가능 변형**: `claude.gstack.auto.design.wiki.orch/` 만 (ADR-008 결정 1 + 결정 5).
-> **single-host**: 모든 sub-agent 는 Claude Code Task 도구로 spawn — 같은 컨텍스트 풀 공유.
+> **single-host**: 모든 sub-agent 는 Claude Code Agent 도구(구 Task)로 spawn — 같은 컨텍스트 풀 공유.
 > **리서치=researcher / 디자인=designer / 코딩=developer** 삼각형 + reviewer/qa supervisor 패턴.
 > **단일 역할이면 해당 에이전트 직접 호출** — orchestrate 는 복합 요청용.
 > d-2(로컬LLM)/d-3(분산)은 후속 ADR-009/ADR-010 가칭.

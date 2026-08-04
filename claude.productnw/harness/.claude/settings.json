@@ -8,10 +8,8 @@
       "Read(*)",
       "Glob(*)",
       "Grep(*)",
-      "MultiEdit(*)",
       "Edit(**)",
-      "Write(**)",
-      "MultiEdit(**)"
+      "Write(**)"
     ],
     "deny": [
       "Bash(rm -rf /)",
@@ -50,7 +48,7 @@
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
@@ -67,7 +65,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
