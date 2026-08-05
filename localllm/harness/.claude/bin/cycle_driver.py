@@ -53,13 +53,29 @@ def _log(msg: str) -> None:
     print(f"[cycle-driver] {msg}", flush=True)
 
 
+def _is_transient(rc: int, out: str) -> bool:
+    """
+    OpenCode 호스트의 일시적 실패인지 판별한다 (측정 08).
+
+    두 실패 양상이 실측됐다: ① 부트스트랩 행(timeout) ② 서버 즉시 실패
+    (`UnknownError` / "Unexpected server error", 수십 ms). 후자는 exit code 만 보면
+    정상 종료와 구분되지 않아 판정 미기록으로 오인됐다 — 출력 시그니처로 함께 판별한다.
+    """
+    if rc != 0:
+        return True
+    sig = ("UnknownError", "Unexpected server error", "Check server logs")
+    return any(s in out for s in sig)
+
+
 def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> tuple[int, str]:
     """
-    opencode run 을 실행한다. 부트스트랩 간헐 행(측정 06) 대응으로 timeout + 1회 재시도.
+    opencode run 을 실행한다. 호스트 일시 실패(행/즉시 에러)에 지수 백오프로 재시도한다.
 
     Returns:
-        (returncode, 표준출력+표준에러 결합 텍스트). 두 번 모두 timeout 이면 (124, "").
+        (returncode, 표준출력+표준에러 결합 텍스트). 모든 시도가 일시 실패면 (124, 마지막 출력).
     """
+    import time
+
     cmd = ["opencode", "run"]
     # --pure: 외부 플러그인 해석(네트워크) 생략 — 부트스트랩 간헐 행의 원인 구간 제거 (측정 07).
     # 하네스는 OpenCode 플러그인을 사용하지 않으므로 밀폐 실행이 안전 기본값.
@@ -70,18 +86,28 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
     if model:
         cmd += ["-m", model]
     cmd.append(prompt)
-    for attempt in (1, 2):
+
+    attempts = int(os.environ.get("CYCLE_OC_ATTEMPTS", "3"))
+    last_out = ""
+    for attempt in range(1, attempts + 1):
         try:
             r = subprocess.run(
                 cmd, cwd=_ROOT, capture_output=True, text=True, timeout=_OC_TIMEOUT
             )
-            return r.returncode, (r.stdout or "") + (r.stderr or "")
+            rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
-            _log(f"  ⚠️ opencode timeout ({_OC_TIMEOUT}s) — {'10초 후 재시도' if attempt == 1 else '포기'}")
-            if attempt == 1:
-                import time
-                time.sleep(10)
-    return 124, ""
+            rc, out = 124, f"timeout {_OC_TIMEOUT}s"
+        last_out = out
+        if not _is_transient(rc, out):
+            return rc, out
+        reason = "timeout" if rc == 124 else "서버 즉시 실패"
+        if attempt < attempts:
+            backoff = 5 * attempt
+            _log(f"  ⚠️ opencode {reason} — {backoff}초 후 재시도 ({attempt}/{attempts})")
+            time.sleep(backoff)
+        else:
+            _log(f"  ⚠️ opencode {reason} — {attempts}회 모두 실패")
+    return 124, last_out
 
 
 def _vl(args: list[str]) -> str:
@@ -221,14 +247,18 @@ def cmd_run(args) -> int:
             f"Reply PASS or NEEDS REVISION with one sentence."
         )
         _log(f"③ {role}(judge, 32B) 판정 호출")
+        verdict = None
         for attempt in (1, 2):
-            _opencode_run(role, judge_prompt)
+            rc, _out = _opencode_run(role, judge_prompt)
             verdict = _judge_recorded(feature, role, before_n)
             if verdict:
                 break
-            _log(f"  ⚠️ {role} 판정 미기록 — {'재시도' if attempt == 1 else '중단'}")
+            if rc == 124:
+                _log(f"  ⚠️ {role} 호출이 호스트 실패로 무산 — {'재시도' if attempt == 1 else '중단'}")
+            else:
+                _log(f"  ⚠️ {role} 응답했으나 판정 미기록 — {'재시도' if attempt == 1 else '중단'}")
         if not verdict:
-            _log(f"❌ {role} 가 판정을 기록하지 않음 — 상위 호스트 인계 (exit 2)")
+            _log(f"❌ {role} 판정 확보 실패 — 상위 호스트 인계 (exit 2)")
             return 2
         _log(f"  {role} verdict: {verdict}")
         if verdict != "pass":
