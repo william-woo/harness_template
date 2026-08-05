@@ -96,6 +96,24 @@ npm test
 # - Developer 에이전트 재작업 필요
 ```
 
+## Loop 2 — verify-loop 기록 (claude.loope 정형화)
+
+QA 판정을 verify-loop 에 기록한다 (rubric: `.claude/rubrics/qa-acceptance.md`).
+결정론 grader(qa-browser 등)를 먼저 기록해 값싼 게이트를 통과시킨 뒤 QA judge 판정을 남긴다:
+
+```bash
+# (선택) 결정론 grader 먼저
+python3 .claude/bin/verify_loop.py record <F> --grader qa-browser --verdict pass
+# PASS → passes:true + status:done (권한 QA 단독)
+python3 .claude/bin/verify_loop.py record <F> --grader qa --verdict pass
+# 일부 미충족 → Developer 재작업
+python3 .claude/bin/verify_loop.py record <F> --grader qa --verdict revision --notes "<미충족 기준>"
+# 인수기준/방향 오류 → 재설계
+python3 .claude/bin/verify_loop.py record <F> --grader qa --verdict fail --notes "<사유>"
+```
+
+> `verify_loop.py status <F>` 로 Reviewer→QA 전 구간의 grader 이력·재시도·에스컬레이션을 한눈에 본다.
+
 ## 회귀 테스트 관리
 
 QA가 완료된 기능들의 E2E 테스트를 `tests/e2e/` 에 저장:

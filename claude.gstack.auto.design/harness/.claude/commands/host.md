@@ -81,7 +81,7 @@ python3 .claude/bin/host.py render-skills
 | `{{HOST.TOOL.read}}` | 파일 읽기 | `Read` |
 | `{{HOST.TOOL.write}}` | 파일 쓰기 | `Write` |
 | `{{HOST.TOOL.edit}}` | 파일 편집 | `Edit` |
-| `{{HOST.TOOL.multiedit}}` | 다중 편집 | `MultiEdit` |
+| `{{HOST.TOOL.multiedit}}` | 다중 편집 | `Edit` (MultiEdit 통합 — ADR-016) |
 | `{{HOST.TOOL.glob}}` | 파일 검색 | `Glob` |
 | `{{HOST.TOOL.grep}}` | 텍스트 검색 | `Grep` |
 | `{{HOST.CMD.<name>}}` | 커맨드 호출 | `/project:<name>` |
@@ -103,7 +103,7 @@ host.json  : .claude/host.json (존재)
   read         → Read
   write        → Write
   edit         → Edit
-  multiedit    → MultiEdit
+  multiedit    → Edit (MultiEdit 통합)
   glob         → Glob
   grep         → Grep
 

@@ -4,7 +4,7 @@ description: |
   QA 브라우저 자동화 스킬. acceptance_criteria 자연어를 Playwright 스크립트 템플릿으로
   자동 번역하고, Playwright 가 설치된 경우 실제 브라우저 E2E 검증을 실행한다.
   옵셔널 의존성 (Playwright) — 미설치 시 차단 X, 템플릿 생성 + 안내 후 exit 0.
-  호스트: claude-code
+  호스트: opencode
 ---
 
 # QA Browser Skill

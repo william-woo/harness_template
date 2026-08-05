@@ -1,5 +1,10 @@
 # 🧰 프로젝트 하네스 엔지니어링 템플릿
 
+> **localllm 변형 (d-2 · loope 계보)** — 이 변형은 Claude Code 가 아니라 **OpenCode +
+> 로컬 LLM(Ollama)** 으로 구동한다 (F015/F023, ADR-009/017). 진입 컨텍스트는
+> `.opencode/AGENTS.md`, 역할별 모델은 `opencode.json` (생성형 14B / 판정 32B).
+> 실측 근거: `docs/poc/MODEL-GRADES.md` + 측정 01~05.
+
 > Claude Code 멀티 에이전트 프로젝트를 위한 재사용 가능한 하네스 구조.
 > **한 번 셋업, 어떤 프로젝트에나 적용 가능.**
 

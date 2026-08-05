@@ -116,8 +116,23 @@ npm test -- --coverage
 - **NEEDS REVISION**: Developer 에이전트에 수정 사항 전달 / `status: "in-progress"` 유지
 - **REJECTED**: Planner/Architect 에이전트와 재설계 협의 / `status: "in-progress"` 유지
 
-> **에스컬레이션**: 동일 Feature에서 NEEDS REVISION이 3회 이상 반복되면
-> `claude-progress.txt`에 `[ESCALATION]` 태그를 달고 Planner 에이전트에 Feature 분해 재검토 요청.
+## Loop 2 — verify-loop 기록 (claude.loope 정형화)
+
+판정을 내릴 때마다 **verify-loop 에 기록**한다 (rubric: `.claude/rubrics/code-review.md`).
+이로써 재시도 횟수·판정 이력이 상태로 남고 에스컬레이션이 **자동 판정**된다:
+
+```bash
+# APPROVED
+python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict pass
+# NEEDS REVISION (MUST/SHOULD 건수 함께)
+python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict revision --must <n> --should <n> --notes "<핵심>"
+# REJECTED
+python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict fail --notes "<설계 사유>"
+```
+
+> **에스컬레이션 (자동)**: NEEDS REVISION 3회 누적 시 verify-loop 가 `escalated` 로 전환하고
+> Planner+Architect 재검토를 안내한다. 별도 카운팅 불필요 — 산문 규칙이 상태로 코드화됨.
+> 결정론 grader(lint/design-review)를 먼저 `record` 하면 judge 판정 전에 값싼 게이트가 걸린다.
 
 ## 금지 사항
 

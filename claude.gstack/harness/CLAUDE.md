@@ -533,7 +533,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
-| **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
@@ -592,6 +592,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 **d-2 오버레이** (localllm 에만 — F015 신설):
 - `.opencode/AGENTS.md` (OpenCode 프로젝트 컨텍스트 — CLAUDE.md 상당)
 - `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
+- `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
@@ -601,7 +602,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-**loop(검증 루프) 오버레이** (claude.loope 에만 — F020 신설):
+**loop(검증 루프) 오버레이** (claude.loope + localllm 에 존재 — F020 신설·F023 확장):
 - `.claude/bin/verify_loop.py` (rubric + 재시도/판정 상태 + 에스컬레이션 — stdlib)
 - `.claude/rubrics/{code-review,qa-acceptance}.md` (명시 rubric)
 - `.claude/commands/verify-loop.md`, `.claude/state/verify-loop/` (루프 상태)

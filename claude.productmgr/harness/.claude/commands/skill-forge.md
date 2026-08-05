@@ -57,5 +57,5 @@ python3 .claude/bin/skill_forge.py list                   # 활성 + draft 목�
 - `/project:learn` 으로 쌓인 학습이 절차적 지식일 때 (`from-learning`)
 - 새 스킬 추가/수정 후 handoff 전 (`validate`)
 
-> **claude.hermes 변형 전용** — 다른 변형엔 skill_forge.py 가 없다 (LINT-MR-10 격리).
+> **claude.hermes 계보 전용** (hermes/productmgr/productnw/loope/localllm) — 그 외 변형엔 skill_forge.py 가 없다 (LINT-MR-10 격리).
 > 기존 하네스 스킬(coding/testing/planning/...)은 이미 agentskills.io 호환 (validate PASS 확인됨).

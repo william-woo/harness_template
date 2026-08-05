@@ -10,6 +10,7 @@ Python stdlib만 사용. 외부 의존성 없음.
   set <type>      host.json 업데이트 → render-skills 자동 호출
   render-skills   .template 파일을 읽어 SKILL.md 토큰 치환
   render-agents   .claude/agents/*.md → .opencode/agent/*.md 변환 (opencode 전용, ADR-009 결정 1)
+  render-commands .claude/commands/*.md → .opencode/commands/*.md 변환 (opencode 전용, ADR-017)
   check           무결성 점검 (무회귀 검증)
 
 호스트 감지 우선순위 (높음 → 낮음):
@@ -424,6 +425,87 @@ def cmd_render_agents(args) -> None:
         print(f"[ERROR] render-agents 명령 실패: {e}", file=sys.stderr)
 
 
+def cmd_render_commands(args) -> None:
+    """
+    .claude/commands/*.md 를 OpenCode 커맨드(.opencode/commands/*.md)로 변환한다.
+
+    ADR-017 (F023): 정적 렌더링. opencode 어댑터 전용 — render-agents 와 동일 규약.
+    다른 어댑터(claude-code/openclaw/codex)는 안내만 출력하고 파일을 수정하지 않는다.
+
+    --commands-src: 소스 디렉토리 (기본: .claude/commands/)
+    --commands-out: 출력 디렉토리 (기본: .opencode/commands/ — _PROJECT_ROOT 기준)
+
+    Args:
+        args: argparse.Namespace
+            args.commands_src: 소스 디렉토리 (str | None)
+            args.commands_out: 출력 디렉토리 (str | None)
+    """
+    try:
+        agent_type, source = _detect_agent_type()
+        print(f"render-commands: agent_type={agent_type} (source: {source})")
+        print()
+
+        adapter = _load_adapter(agent_type)
+
+        if adapter is None:
+            print("[WARN] 어댑터 로드 실패 — render-commands 건너뜀")
+            return
+
+        if not hasattr(adapter, "render_commands"):
+            print(
+                f"[INFO] {agent_type} 어댑터는 render-commands 를 지원하지 않습니다.\n"
+                "  render-commands 는 opencode 어댑터 전용입니다.\n"
+                "  HARNESS_AGENT_TYPE=opencode python3 host.py render-commands"
+            )
+            return
+
+        if adapter.is_stub:
+            print(f"[INFO] {agent_type} 는 stub 어댑터 — render-commands 건너뜀")
+            return
+
+        commands_src_arg = getattr(args, "commands_src", None)
+        commands_out_arg = getattr(args, "commands_out", None)
+
+        if commands_src_arg:
+            commands_src = (
+                Path(commands_src_arg) if Path(commands_src_arg).is_absolute()
+                else _PROJECT_ROOT / commands_src_arg
+            )
+        else:
+            commands_src = _PROJECT_ROOT / ".claude" / "commands"
+
+        if commands_out_arg:
+            commands_out = (
+                Path(commands_out_arg) if Path(commands_out_arg).is_absolute()
+                else _PROJECT_ROOT / commands_out_arg
+            )
+        else:
+            commands_out = _PROJECT_ROOT / ".opencode" / "commands"
+
+        print(f"  소스: {commands_src}")
+        print(f"  출력: {commands_out}")
+        print()
+
+        if not commands_src.exists():
+            print(f"[WARN] 소스 디렉토리 없음: {commands_src} — render-commands 건너뜀")
+            return
+
+        generated = adapter.render_commands(commands_src, commands_out)
+
+        for fname in generated:
+            try:
+                rel = (commands_out / fname).relative_to(_PROJECT_ROOT)
+            except ValueError:
+                rel = commands_out / fname
+            print(f"  변환 완료: {rel}")
+
+        print()
+        print(f"render-commands 완료: {len(generated)}개 파일 생성됨")
+
+    except Exception as e:
+        print(f"[ERROR] render-commands 명령 실패: {e}", file=sys.stderr)
+
+
 def cmd_check(args) -> None:
     """
     무결성 점검을 수행한다.
@@ -545,6 +627,31 @@ def main() -> None:
             ),
         )
 
+        p_rcommands = sub.add_parser(
+            "render-commands",
+            help=".claude/commands/*.md → .opencode/commands/*.md 변환 (opencode 전용, ADR-017)",
+        )
+        p_rcommands.add_argument(
+            "--commands-src",
+            dest="commands_src",
+            default=None,
+            metavar="PATH",
+            help=(
+                "소스 디렉토리 (기본: .claude/commands/). "
+                "절대경로 또는 project root 기준 상대경로."
+            ),
+        )
+        p_rcommands.add_argument(
+            "--commands-out",
+            dest="commands_out",
+            default=None,
+            metavar="PATH",
+            help=(
+                "출력 디렉토리 (기본: .opencode/commands/). "
+                "절대경로 또는 project root 기준 상대경로."
+            ),
+        )
+
         sub.add_parser("check", help="무결성 점검 (무회귀 검증)")
 
         args = parser.parse_args()
@@ -555,6 +662,7 @@ def main() -> None:
             "set": cmd_set,
             "render-skills": cmd_render_skills,
             "render-agents": cmd_render_agents,
+            "render-commands": cmd_render_commands,
             "check": cmd_check,
         }
 

@@ -3,10 +3,42 @@
 > 이 파일은 Claude Code가 이 프로젝트를 이해하고 올바르게 작동하기 위한 핵심 가이드입니다.
 > **팀원 모두 이 파일을 읽고 프로젝트 시작 전 반드시 설정을 완료하세요.**
 >
-> 🤖 **이 작업 환경은 Autonomous Mode 입니다** (2026-06-02 적용).
-> 메인 `.claude/` 는 `claude.gstack.auto` 변형의 정책을 사용합니다 — 작업 디렉토리 내부
-> 액션은 prompt 없이 자율 진행, 인증·계정·외부 디렉토리는 사용자 명시 승인 필수.
-> 자세한 정책은 아래 **🤖 Autonomous Mode** 섹션 참조.
+> 🤖 **이 작업 환경은 Autonomous Mode + OpenCode(로컬 LLM) 입니다** (d-2 — F015/F023).
+> 이 변형은 Claude Code 가 아니라 **OpenCode + 로컬 LLM(Ollama)** 으로 하네스를 구동한다.
+> 구성은 **claude.loope 계보** (auto+design+wiki+orch+hermes+pm+loop, F023 승격 — ADR-017)
+> + d-2 오버레이 (.opencode/ 런타임 + opencode.py 어댑터 + docs/poc 측정).
+> 작업 디렉토리 내부 액션은 자율 진행, 인증·계정·외부 디렉토리는 사용자 명시 승인 필수.
+> **로컬 모델 등급**: 생성형 역할 14B / 판정·오케스트레이션 32B+ — docs/poc/MODEL-GRADES.md 참조.
+> OpenCode 진입 컨텍스트는 `.opencode/AGENTS.md` (이 파일의 요약 + 4대 차이).
+
+---
+
+## 🖥️ localllm 변형 특이사항 (d-2)
+
+| 항목 | Claude Code 하네스 | 이 변형 (OpenCode + 로컬 LLM) |
+|---|---|---|
+| 호스트 | claude-code | **opencode** (`.claude/host.json`) |
+| 에이전트 정의 | `.claude/agents/*.md` | 좌동 = 소스. `.opencode/agent/*.md` 는 **render-agents 산출물** (수동 편집 금지) |
+| 커맨드 | `.claude/commands/*.md` | 좌동 = 소스. `.opencode/commands/*.md` 는 **render-commands 산출물** |
+| 모델 | fable/opus 별칭 (frontmatter) | `opencode run --model ollama/<model>` 또는 opencode.jsonc — **frontmatter model 은 드롭됨** |
+| 판정(judge) 역할 | reviewer/qa = fable | **32B+ 필수** (14B 는 검증형 다홉 추론 불안정 — 측정 04) |
+| 진입 컨텍스트 | CLAUDE.md | `.opencode/AGENTS.md` |
+
+```bash
+# 환경 설정 (전역 설치 — autonomous #3-B 승인 필요)
+bash .claude/bin/opencode-setup.sh
+# 에이전트/커맨드 변환 (에이전트·커맨드 정의 수정 후 재실행)
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-commands
+# 단일 역할 직접 호출 (생성형 — 14B)
+opencode run --agent developer --model ollama/qwen2.5:14b-instruct-q8_0 "<요청>"
+# 판정·오케스트레이션 (32B+)
+opencode run --agent reviewer --model ollama/qwen2.5:32b-instruct-q4_K_M "<요청>"
+```
+
+> **Loop 2 × 로컬 LLM 시너지 (F023)**: verify-loop 의 **결정론 grader 우선** 원칙이 로컬 LLM 의
+> 검증 약점을 구조적으로 보완한다 — lint/design-review/qa-browser/test 는 stdlib 스크립트라
+> 모델 무관 100% 신뢰. judge(reviewer/qa) 판정만 32B 로 올리면 된다.
 
 ---
 
@@ -45,18 +77,22 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (Autonomous Mode 적용 후)
+## 🪞 메인 ↔ 변형 미러 정책 (F021 loope 승격 후 — ADR-015)
 
-메인 `.claude/` 는 이제 `claude.gstack.auto` 와 정합 상태입니다. 변형별 미러 정책:
+메인 `.claude/` 는 **`claude.loope` 와 정합** 상태입니다 (구 SSOT main≡gstack.auto 는 폐기).
+신규 개발은 **main 에서 → loope 로 1:1 미러 → 하위 변형은 오버레이 규칙대로 제외 미러**:
 
 | 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| `claude.gstack/` (표준) | **autonomous 오버레이 4 파일 제외** 후 미러:<br>• `.claude/agents/gatekeeper.md` 제외<br>• `.claude/hooks/pre-bash-auto-boundary-check.sh` 제외<br>• `.claude/settings.json` (standard 버전 별도 유지)<br>• `CLAUDE.md` 의 "Autonomous Mode" 섹션 제외 |
-| `claude.gstack.auto/` (자율) | **전체 미러** — 메인과 1:1 |
-| `claude/` (baseline) | Phase 0 동결, Karpathy 예외만 |
-| `openai/.codex/` (codex) | 정적 산출물, Karpathy 예외만 |
+| **`claude.loope/`** ★ | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외: `settings.json`/`settings.local.json`/`host.json`/`.claude/state/` |
+| `claude.productmgr/` | main − loop 오버레이 |
+| `claude.hermes/` | main − loop − pm 오버레이 |
+| orch/wiki/design/auto 계열 | 해당 변형 아래 오버레이 순차 제외 — **LINT-MR-1~13 의 _*_OVERLAY_FILES 목록이 SSOT** |
+| `claude.gstack/` (표준) | gstack.auto 기준 + autonomous 오버레이 4 파일 제외 |
+| `claude.productnw/` | nw(consortium) 오버레이는 main 에 없음 — productnw 전용 유지 |
+| `claude/` (baseline) · `openai/.codex/` | 동결, Karpathy 예외만 |
 
-**중요**: F010 세션 2 에서 발생한 회귀 — 미러링 시 claude.gstack.auto/settings.json 이 표준 버전으로 덮어쓰기됐었음. 2026-06-02 복구 완료. 미러 작업 시 항상 이 정책 확인.
+**중요**: F010 회귀 교훈 — 미러링 시 변형별 settings.json 을 덮어쓰지 말 것. 미러 작업 전 이 표 + LINT-MR 확인.
 
 ---
 
@@ -150,16 +186,22 @@ project-root/
 **동기화 제외:**
 - `.claude/state/` (checkpoints, learnings.jsonl, analytics.jsonl, freeze-dir.txt)
   — 프로젝트 로컬 상태이므로 템플릿에 들어가면 안 됨
+- `settings.json` / `settings.local.json` / `host.json` — 머신·프로젝트 로컬 (ADR-015 결정 2)
 - `feature_list.json` — 프로젝트별로 다르므로 템플릿엔 데모 샘플 유지
 - `claude-progress.txt` — 세션 인계용
 - `__pycache__/`, `*.pyc` — Python 캐시 — 환경별로 다르므로 미러에 들어가면 안 됨
 
-**권장 미러링 명령**:
+**권장 미러링 명령** (F021 — 1차 미러는 loope 로 1:1, ADR-015):
 
 ```bash
+# main → claude.loope (1:1, 로컬 파일 제외)
 rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
-  .claude/ src/harness_template/claude.gstack/harness/.claude/
+  --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
+  .claude/ src/harness_template/claude.loope/harness/.claude/
+# 하위 변형(productmgr/hermes/orch/...)은 LINT-MR 오버레이 목록 기준으로 제외 미러
 ```
+
+> **F020 meta-dev 오버레이는 폐기** — F021 전면 승격(main≡loope, ADR-015)에 흡수됨.
 
 **`claude/` (baseline)은 의도적으로 동결**: Phase 0 (F001 시작 전) 스냅샷.
 변경 금지. 신규 phase는 `claude.gstack/`에만 반영.
@@ -684,7 +726,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 | ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
 | ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
 | **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
-| **ⓑ⁵ `localllm/`** (d-2 PoC 샌드박스) | orch 변형 1:1 + d-2 오버레이. **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
 | **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
@@ -715,8 +757,8 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 > ③ agentskills.io 표준 적합성. hermes 3종 기능은 **stdlib only** (Hermes 의 메시징 게이트웨이 등
 > 무거운 부분은 미이식 — 개인비서 영역이라 SDLC 하네스 목적과 불일치). 기존 스킬은 이미 표준 호환(6/6 PASS).
 
-> **localllm 변형 (F015 / d-2)**: Claude Code 가 아니라 **OpenCode(오픈소스 agent framework) +
-> 로컬 LLM(Ollama)** 으로 하네스를 구동하는 PoC 샌드박스 (orch 변형 복사본 + d-2 오버레이).
+> **localllm 변형 (F015 / d-2, F023 loope 계보 승격)**: Claude Code 가 아니라 **OpenCode(오픈소스
+> agent framework) + 로컬 LLM(Ollama)** 으로 하네스를 구동하는 변형 (loope 계보 + d-2 오버레이 — ADR-017).
 > 호스트 어댑터 `opencode.py` 가 `.claude/agents/*.md` 를 OpenCode 포맷 `.opencode/agent/*.md`
 > (`mode: all` + permission deny-list) 로 변환한다. 단일역할(developer/reviewer/qa)은 로컬 14B 로
 > 즉시 가능, 멀티스텝 오케스트레이션은 32B+ 필요 (측정 04 / docs/poc/MODEL-GRADES.md).
@@ -748,16 +790,17 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 **d-2 오버레이** (localllm 에만 — F015 신설):
 - `.opencode/AGENTS.md` (OpenCode 프로젝트 컨텍스트 — CLAUDE.md 상당, 4대 차이 명시)
 - `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
+- `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
-**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope 에 존재 — F016 신설):
+**hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope + localllm 에 존재 — F016 신설·F023 확장):
 - `.claude/bin/session_search.py` (FTS5 세션 검색 — cross-session recall)
 - `.claude/bin/skill_forge.py` (스킬 자동생성/self-improve + agentskills.io 검증)
 - `.claude/commands/session-search.md`, `.claude/commands/skill-forge.md`
 
-**pm 오버레이** (claude.productmgr + claude.productnw + claude.loope 에 존재 — F018 신설):
+**pm 오버레이** (claude.productmgr + claude.productnw + claude.loope + localllm 에 존재 — F018 신설·F023 확장):
 - `.claude/agents/product-manager.md` (제품 발견·요구·성공지표·로드맵 + 라이프사이클 supervisor)
 - `.claude/commands/product-cycle.md` (기획→설계→개발→검증→배포 PM 주도 통합 흐름)
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
@@ -767,7 +810,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 
-**loop(검증 루프) 오버레이** (claude.loope 에만 — F020 신설):
+**loop(검증 루프) 오버레이** (claude.loope + localllm 에 존재 — F020 신설·F023 확장):
 - `.claude/bin/verify_loop.py` (rubric + 재시도/판정 상태 + 에스컬레이션 — stdlib)
 - `.claude/rubrics/{code-review,qa-acceptance}.md` (명시 rubric)
 - `.claude/commands/verify-loop.md`, `.claude/state/verify-loop/` (루프 상태)
@@ -785,6 +828,9 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 # .claude/agents/*.md → .opencode/agent/*.md 변환 (OpenCode 포맷)
 HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents
 HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-agents --agents-out <경로>
+
+# .claude/commands/*.md → .opencode/commands/*.md 변환 (F023 — ADR-017)
+HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-commands
 
 # OpenCode + Ollama 환경 설정 (전역 설치 — autonomous #3-B 승인 필요)
 bash .claude/bin/opencode-setup.sh

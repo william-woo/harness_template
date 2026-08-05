@@ -3,7 +3,7 @@
 Product Manager 가 supervisor 가 되어 **기획 → 설계 → 개발 → 검증 → 배포** 전 과정을 한 흐름으로
 조율하는 통합 커맨드. orchestrate(이종 에이전트 오케스트레이션)를 **제품 관점으로 감싼** 상위 흐름.
 
-**claude.productmgr 변형 전용.** single-host (모든 에이전트가 같은 컨텍스트 풀 — ADR-008 상속).
+**claude.productmgr 계보 전용** (productmgr/productnw/loope/localllm). single-host (모든 에이전트가 같은 컨텍스트 풀 — ADR-008 상속).
 
 > 관계: `product-cycle`(제품 사이클 전체) ⊃ `orchestrate`(실행 라우팅) + `plan-full`(설계 체인).
 > PM 이 성공지표 기준으로 각 단계 게이트를 점검하는 것이 orchestrate 와의 차이.

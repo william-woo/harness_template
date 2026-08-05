@@ -373,3 +373,114 @@ class OpenCodeAdapter(HostAdapter):
                 existing.unlink()
 
         return generated
+
+    # ---------------------------------------------------------------------------
+    # command 포맷 변환 (ADR-017 — F023 신설)
+    #
+    # OpenCode 커스텀 커맨드: .opencode/commands/<name>.md (opencode.ai/docs/commands)
+    #   frontmatter: description / agent / model / subtask (모두 선택)
+    #   본문 = 프롬프트 템플릿. $ARGUMENTS 로 인자 치환. /<name> 또는
+    #   opencode run --command <name> 으로 호출.
+    # ADR-009 결정 3 이 "커맨드 파일 미러링은 후속 phase" 로 보류했던 항목의 구현.
+    # ---------------------------------------------------------------------------
+
+    def render_command_md(self, claude_command_path: str | Path) -> str | None:
+        """
+        Claude Code 커맨드 파일(.claude/commands/<name>.md)을 OpenCode 커맨드로 변환한다.
+
+        변환 규칙 (ADR-017):
+          - description: 첫 헤딩(`# /project:<name> — <설명>`)에서 설명부 추출
+          - 본문: 원문 유지 + {{HOST.*}} 토큰 치환 + `/project:foo` → `/foo` 표기 정규화
+          - $ARGUMENTS 미포함 시 말미에 인자 블록 추가 (OpenCode 인자 전달 보장)
+          - agent/model frontmatter 는 미지정 (호출 시점/opencode.jsonc 결정 — ADR-009 와 일관)
+
+        Args:
+            claude_command_path: .claude/commands/<name>.md 경로
+
+        Returns:
+            str | None: 변환된 OpenCode command 내용. 실패 시 None.
+        """
+        try:
+            path = Path(claude_command_path)
+            if path.suffix != ".md" or not path.is_file():
+                return None
+            content = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+            # description: 첫 헤딩에서 추출 — "# /project:lint — 산출물 정합성 헬스체크"
+            description = ""
+            m = re.match(r'^#\s+(.+?)\s*\n', content)
+            if m:
+                heading = m.group(1)
+                # "—" 뒤 설명부 우선, 없으면 헤딩 전체
+                parts = re.split(r'\s+[—-]\s+', heading, maxsplit=1)
+                description = parts[1] if len(parts) == 2 else heading
+                description = description.strip()
+
+            body = self._replace_tokens(content)
+            # Claude Code 커맨드 표기 → OpenCode 표기 정규화
+            body = re.sub(r'/project:([a-z0-9-]+)', r'/\1', body)
+
+            if "$ARGUMENTS" not in body:
+                body = body.rstrip() + (
+                    "\n\n---\n\n사용자 인자 (없으면 무시): $ARGUMENTS\n"
+                )
+
+            # 로컬 LLM 실행 힌트 (측정 05-4: 14B 가 문서 속 bash 명령 대신 추측·질문으로
+            # 이탈하는 실패 모드 완화 — 결정론 도구 우선 규율의 커맨드 레벨 적용)
+            body = body.rstrip() + (
+                "\n\n---\n\n> **로컬 LLM 실행 힌트**: 이 커맨드의 동작은 위 문서의 bash 명령을"
+                " **그대로 실행**하는 것이다. 문서에 `python3 .claude/bin/...` 또는 bash 블록이"
+                " 있으면 추측·재해석하지 말고 그 명령을 bash 도구로 즉시 실행하고, 그 출력을"
+                " 요약해 보고하라. bash 도구 호출 시 `command` 와 `description` **두 인자를 모두**"
+                " 채워라 (description 누락 = 스키마 에러). 파일이 없거나 실패하면 문서의 안내"
+                " 문구를 따르고 사용자에게 질문하지 마라.\n"
+            )
+
+            lines = ["---"]
+            if description:
+                # 큰따옴표 이스케이프 후 단일 라인 description
+                safe = description.replace('"', '\\"')
+                lines.append(f'description: "{safe}"')
+            lines.append("---")
+            lines.append("")
+            lines.append(body.rstrip())
+            lines.append("")
+            return "\n".join(lines)
+        except Exception:
+            return None
+
+    def render_commands(
+        self,
+        commands_src_dir: str | Path,
+        commands_out_dir: str | Path,
+    ) -> list[str]:
+        """
+        .claude/commands/*.md 를 OpenCode 커맨드(.opencode/commands/*.md)로 일괄 변환한다.
+
+        render_agents 와 동일한 멱등 규약: 전량 덮어쓰기 + stale 파일 삭제.
+
+        Args:
+            commands_src_dir: 소스 디렉토리 (.claude/commands/)
+            commands_out_dir: 출력 디렉토리 (.opencode/commands/)
+
+        Returns:
+            list[str]: 생성된 파일명 목록
+        """
+        src = Path(commands_src_dir)
+        out = Path(commands_out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        generated: list[str] = []
+        for cmd_file in sorted(src.glob("*.md")):
+            result = self.render_command_md(cmd_file)
+            if result is None:
+                continue
+            (out / cmd_file.name).write_text(result, encoding="utf-8")
+            generated.append(cmd_file.name)
+
+        generated_set = set(generated)
+        for existing in out.glob("*.md"):
+            if existing.name not in generated_set:
+                existing.unlink()
+
+        return generated

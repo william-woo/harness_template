@@ -9,7 +9,8 @@
 #
 # 설정값 (환경변수로 override 가능):
 #   OLLAMA_HOST   기본 http://172.16.10.217:11434  (RTX 4500 Ollama 서버)
-#   OLLAMA_MODEL  기본 qwen2.5:14b-instruct-q8_0
+#   OLLAMA_MODEL  기본 qwen2.5:14b-instruct-q8_0 (생성형 역할)
+#   OLLAMA_JUDGE_MODEL  기본 qwen2.5:32b-instruct-q4_K_M (판정 역할 — 측정 05)
 #
 # 참조: docs/poc/README.md, 학습 localllm-d2-poc-*, ADR-008 d-2 단계
 
@@ -17,6 +18,7 @@ set -u
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://172.16.10.217:11434}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5:14b-instruct-q8_0}"
+OLLAMA_JUDGE_MODEL="${OLLAMA_JUDGE_MODEL:-qwen2.5:32b-instruct-q4_K_M}"
 OC_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 OC_CONFIG="$OC_CONFIG_DIR/opencode.jsonc"
 
@@ -79,7 +81,8 @@ else
       "name": "Ollama (local LLM)",
       "options": { "baseURL": "$OLLAMA_HOST/v1" },
       "models": {
-        "$OLLAMA_MODEL": { "name": "$OLLAMA_MODEL" }
+        "$OLLAMA_MODEL": { "name": "$OLLAMA_MODEL (생성형 역할)" },
+        "$OLLAMA_JUDGE_MODEL": { "name": "$OLLAMA_JUDGE_MODEL (판정·judge 역할)" }
       }
     }
   }
@@ -102,6 +105,9 @@ fi
 
 echo ""
 echo "=== 설정 완료 ==="
-echo "사용: opencode run --model ollama/$OLLAMA_MODEL \"<요청>\""
+echo "사용: opencode run --agent developer \"<요청>\"   # 생성형 — $OLLAMA_MODEL 자동"
+echo "      opencode run --agent reviewer  \"<요청>\"   # 판정  — $OLLAMA_JUDGE_MODEL 자동"
+echo "역할별 모델 매핑: 프로젝트 opencode.json (ADR-017 결정 4 — 측정 05 근거)"
+echo "판정(judge) 역할은 32B 권장 — ollama pull $OLLAMA_JUDGE_MODEL (서버 측 1회)"
 echo "이 디렉토리(localllm/harness)를 OpenCode 프로젝트로 열어 하네스 활용."
 exit 0
