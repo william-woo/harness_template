@@ -3,7 +3,7 @@ name: design-review
 description: |
   디자인 감사 스킬. 다운스트림 프로젝트의 UI/문서 또는 하네스 자체의 정합성을
   읽기 전용으로 검사한다. 정보 구조(IA), 접근성(A11Y), 일관성(CON) 3 카테고리.
-  호스트: claude-code
+  호스트: opencode
 ---
 
 # Design Review Skill
