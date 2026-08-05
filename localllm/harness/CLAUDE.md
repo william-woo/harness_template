@@ -34,6 +34,8 @@ HARNESS_AGENT_TYPE=opencode python3 .claude/bin/host.py render-commands
 opencode run --agent developer --model ollama/qwen2.5:14b-instruct-q8_0 "<요청>"
 # 판정·오케스트레이션 (32B+)
 opencode run --agent reviewer --model ollama/qwen2.5:32b-instruct-q4_K_M "<요청>"
+# 무인 사이클 (결정론 supervisor — F025/ADR-018)
+python3 .claude/bin/cycle_driver.py run F0XX --test-cmd "<테스트 명령>" --expect PASS --files <파일들>
 ```
 
 > **Loop 2 × 로컬 LLM 시너지 (F023)**: verify-loop 의 **결정론 grader 우선** 원칙이 로컬 LLM 의
@@ -792,6 +794,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
 - `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
+- `.claude/bin/cycle_driver.py` (결정론 supervisor — SDLC 사이클 무인 드라이버, F025/ADR-018)
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
