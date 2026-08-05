@@ -478,6 +478,30 @@ def _normalize_tabs(files: list[str]) -> list[str]:
         fixed.append(rel)
     return fixed
 
+def _require_problems(spec: str) -> list[str]:
+    """
+    `--require` 규격을 검사한다: "파일:토큰" 은 존재 필수, "파일:!토큰" 은 부재 필수.
+
+    측정 08 / S09: judge 가 "rename 완료" 라고 거짓 보고하며 pass 를 기록했다. 심볼 존재/부재
+    같은 기계 검증 가능 AC 는 결정론 게이트로 만들어야 거짓 통과를 막는다.
+    """
+    problems: list[str] = []
+    for item in (spec or "").split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        rel, token = item.split(":", 1)
+        negate = token.startswith("!")
+        token = token[1:] if negate else token
+        fp = _ROOT / rel.strip()
+        body = fp.read_text(encoding="utf-8", errors="replace") if fp.is_file() else ""
+        present = token in body
+        if negate and present:
+            problems.append(f"{rel}: {token!r} 이 아직 남아 있습니다 (제거 필요).")
+        elif not negate and not present:
+            problems.append(f"{rel}: {token!r} 를 찾을 수 없습니다 (요구된 식별자/내용 누락).")
+    return problems
+
 def _artifact_problems(files: list[str]) -> list[str]:
     """
     산출 파일의 **형식 결함**을 결정론적으로 진단한다 (측정 08 라운드 10).
@@ -637,7 +661,7 @@ def cmd_run(args) -> int:
                 _log(f"  ✎ 탭/스페이스 정규화 적용 (의미 보존): {tabfixed}")
         ok, out = _grade(args.test_cmd, args.expect)
         # 공허 통과 차단: 테스트가 통과해도 산출물 자체가 무효(assert 없음/한 줄 파일)면 실패로 본다.
-        blocking = _artifact_problems(files) if ok else []
+        blocking = (_artifact_problems(files) + _require_problems(getattr(args, "require", ""))) if ok else []
         if ok and blocking:
             _log("② grader 통과했으나 산출물 무효 — 실패 처리: " + blocking[0][:80])
             ok = False
@@ -691,10 +715,12 @@ def cmd_run(args) -> int:
         ("qa", "verify every acceptance criterion is met"),
     ):
         before_n = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
-        mech = _mechanical_findings(files)
+        mech = _mechanical_findings(files) + _require_problems(getattr(args, "require", ""))
         judge_prompt = (
-            f"You must {ask} for feature {feature} using ONLY the bash tool "
-            f"(never the read tool).\n"
+            f"You must {ask} for feature {feature}.\n"
+            "Inspect the code with the bash tool using cat — that is the approved and sufficient "
+            "way to read files here (the read tool is intentionally unavailable, this is not a "
+            "limitation on your review).\n"
             f"Step 1: run bash: cat {' '.join(files)}\n"
             f"Step 2: run bash: {args.test_cmd}\n"
             f"Acceptance criteria:\n{criteria}\n"
@@ -708,6 +734,9 @@ def cmd_run(args) -> int:
               f"--verdict pass --notes '<your concrete finding>'\n"
               f"(replace pass with revision per the VERDICT RULE)\n"
               f"The bash tool needs both arguments: command and description.\n"
+              "Your notes must name the specific unmet acceptance criterion and the evidence "
+              "you saw in the code. A revision verdict without a concrete criterion is invalid; "
+              "if every criterion is satisfied, record pass.\n"
               f"Reply PASS or NEEDS REVISION with one sentence."
         )
         _log(f"③ {role}(judge, 32B) 판정 호출")
@@ -793,7 +822,7 @@ def cmd_run(args) -> int:
                      "--notes", f"수정 금지 파일 변경: {violated2}"])
                 return 2
             ok2, out2 = _grade(args.test_cmd, args.expect)
-            blk2 = _artifact_problems(files)
+            blk2 = _artifact_problems(files) + _require_problems(getattr(args, "require", ""))
             if not ok2 or blk2:
                 _vl(["record", feature, "--grader", "test", "--verdict", "revision",
                      "--notes", f"judge 재작업 후 grader 실패: {(out2 or ' '.join(blk2))[:120]}"])
@@ -851,6 +880,8 @@ def main() -> None:
     p_run.add_argument("--expect", default=None, help="grader 기대 출력 문자열 (공허 통과 차단)")
     p_run.add_argument("--files", default="", help="대상 파일 목록 (쉼표 구분 — 재작업 주입·judge cat 용)")
     p_run.add_argument("--max-revisions", type=int, default=3, help="에스컬레이션 임계 (기본 3)")
+    p_run.add_argument("--require", default="", metavar="FILE:TOKEN[,...]",
+                       help="기계 검증 AC: 'file:token' 존재 필수, 'file:!token' 부재 필수")
     p_run.add_argument("--no-autofix", action="store_true",
                        help="탭/스페이스 결정론 정규화를 끈다 (순수 측정용)")
     p_run.add_argument("--protect", default="", metavar="FILES",
