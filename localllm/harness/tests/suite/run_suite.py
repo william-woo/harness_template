@@ -107,8 +107,11 @@ SCENARIOS: list[dict] = [
         },
         "test_cmd": "python3 test_ghost.py", "expect": "PASS",
         "files": "ghost_module.py,test_ghost.py",
-        # 드라이버는 구현을 시도하고, 실패하면 에스컬레이션 — 절대 pass 를 기록하면 안 됨
-        "expect_exit": None, "checks": ["no_false_pass"],
+        "require": "ghost_module.py:ghost_fn",
+        # 기능 검증: ghost_fn() 이 실제로 'ghost' 를 반환해야 한다 (라운드 11 의 14B 는 'PASS' 를
+        # 반환하고도 judge pass 를 받았다 — 거짓 통과). judge pass 여부만으로 판정하지 않는다.
+        "verify_cmd": "python3 -c \"from ghost_module import ghost_fn; assert ghost_fn() == 'ghost'\"",
+        "expect_exit": None, "checks": [],
     },
     {
         "id": "S05", "name": "엣지 케이스 (0 나눗셈 예외)",
@@ -351,6 +354,22 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
                              "msg": f"공허 테스트 — {rel} 에 assert 없음"
                                     + (" (judge 는 pass 기록 — 거짓 통과)" if judge_pass
                                        else " (하네스가 차단)")})
+
+    # O11 기능 검증: AC 동작을 독립 실행으로 확인 (측정 08 / S04)
+    if scn.get("verify_cmd"):
+        try:
+            vr = subprocess.run(scn["verify_cmd"], shell=True, cwd=sb,
+                                capture_output=True, text=True, timeout=120)
+            v_ok = vr.returncode == 0
+            v_out = ((vr.stdout or "") + (vr.stderr or "")).strip()[-200:]
+        except subprocess.TimeoutExpired:
+            v_ok, v_out = False, "verify timeout"
+        if not v_ok:
+            sev = "BUG" if judge_pass else "MODEL"
+            findings.append({"o": "O11", "sev": sev,
+                             "msg": f"기능 검증 실패: {v_out}"
+                                    + (" — judge 는 pass 기록 (거짓 통과)" if judge_pass
+                                       else " (하네스가 막았다)")})
 
     # O5 북키핑 정합
     fl = json.loads((sb / "feature_list.json").read_text(encoding="utf-8"))

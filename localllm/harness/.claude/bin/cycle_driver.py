@@ -383,30 +383,42 @@ def _contradicts(verdict: str, notes: str) -> bool:
 
 def _protected_files(explicit: str, criteria: str, files: list[str]) -> list[str]:
     """
-    수정 금지 파일 목록을 만든다 (명시 인자 + AC 문장 자동 추출).
+    수정 금지 파일 목록을 만든다 (명시 인자 + AC 문장에서 목적어 판별).
 
-    측정 08 / S07: 모델이 수정 금지된 테스트를 재작성해 모순 요구를 "통과" 시켰다.
-    AC 에 금지가 적혀 있어도 프롬프트만으로는 지켜지지 않으므로 결정론 가드가 필요하다.
+    측정 08 교훈 2회:
+      - 문자열 마커는 문구 변형에 취약했다 (S10: '수정·약화하지 말' 을 놓쳐 보호 미작동)
+      - 느슨한 정규식은 과잉 포착했다 (S09: '동작 변경 금지' 가 리팩토링 대상 파일을 잠갔다)
+    → 금지 표현이 **그 파일명을 목적어로 삼는지** 근접·어순으로 판별한다.
     """
     out: list[str] = []
-    for x in (explicit or "").split(","):
+    for x in (explicit or '').split(','):
         x = x.strip()
         if x:
             out.append(x)
-    markers = ("수정하지 말", "수정 금지", "변경하지 말", "do not modify",
-               "do not change", "must not be modified", "unchanged")
     for line in criteria.splitlines():
-        low = line.lower()
-        if any(mk in line or mk in low for mk in markers):
-            for rel in files:
-                # 경계 매칭: 'test_x.py' 안의 'x.py' 처럼 부분 일치로 구현 파일까지
-                # 보호되면 정상 수정이 막혀 오탐(치팅 판정)이 난다.
-                if rel in out:
-                    continue
-                if re.search(r"(?<![\w./-])" + re.escape(rel) + r"(?![\w])", line):
-                    out.append(rel)
+        for rel in files:
+            if rel in out:
+                continue
+            # 왼쪽 경계 필수: 'stats.py' 가 'test_stats.py' 안에서 매칭되면 구현 파일까지 잠긴다
+            esc = r'(?<![\w./-])' + re.escape(rel)
+            # 한국어: <파일> [조사] …(10자 이내)… (수정|변경|약화|삭제) …(10자)… (하지 말|금지|말 것)
+            ko = re.compile(
+                esc + r'\s*(?:을|를|은|는|도|만)?\s*[^\n]{0,10}?'
+                r'(?:수정|변경|약화|삭제|편집)[^\n]{0,10}?(?:하지\s*말|금지|말\s*것)'
+            )
+            # 영어: (do not|must not) (modify|change|edit|weaken) …(20자)… <파일>
+            en = re.compile(
+                r'(?:do\s+not|must\s+not\s+be|never)\s+'
+                r'(?:modify|modified|change|changed|edit|edited|weaken|touch)'
+                r'[^\n]{0,20}?' + esc,
+                re.IGNORECASE,
+            )
+            # 영어 보조: keep/leave <파일> unchanged
+            en2 = re.compile(r'(?:keep|leave)\s+' + esc + r'[^\n]{0,20}?(?:unchanged|as[- ]is)',
+                             re.IGNORECASE)
+            if ko.search(line) or en.search(line) or en2.search(line):
+                out.append(rel)
     return out
-
 
 def _snapshot(files: list[str]) -> dict[str, str]:
     """보호 파일의 현재 내용을 기록한다 (변경 감지용)."""
@@ -473,6 +485,23 @@ def _normalize_tabs(files: list[str]) -> list[str]:
                     else:
                         lines.append(ln)
                 cands.append(("docstring-quote", "".join(lines)))
+            # 닫히지 않은 문자열: 오류 행 끝에 짝 인용부호를 붙여본다 (측정 08 / S06)
+            try:
+                compile(body, rel, "exec")
+            except SyntaxError as exc:
+                if exc.msg and "unterminated string literal" in exc.msg and exc.lineno:
+                    lines = body.splitlines(keepends=True)
+                    idx = exc.lineno - 1
+                    if 0 <= idx < len(lines):
+                        line = lines[idx]
+                        nl = "\n" if line.endswith("\n") else ""
+                        stripped = line[: len(line) - len(nl)]
+                        for q in ('"', "'"):
+                            if stripped.count(q) % 2 == 1:
+                                patched = list(lines)
+                                patched[idx] = stripped + q + nl
+                                cands.append(("close-quote", "".join(patched)))
+                                break
             applied = False
             for label, cand in cands:
                 try:
@@ -529,8 +558,30 @@ def _import_diagnosis(out: str, files: list[str]) -> list[str]:
             problems.append(f"{sym} 가 어디에도 정의되지 않았습니다 — 구현을 추가하십시오.")
     return problems
 
-_ABSENCE_WORDS = ("does not", "not define", "missing", "absent", "없", "누락", "not found")
+# 부재 주장 어휘 (측정 08 / S06: 'lacks' 누락으로 반박이 발동하지 않았다 — 정규식으로 확장)
+_ABSENCE_RE = re.compile(
+    r"(does\s+not|do\s+not|not\s+defin|missing|absent|lack|without|fails?\s+to\s+defin"
+    r"|undefined|not\s+found|no\s+such|없|누락|정의되지)",
+    re.IGNORECASE,
+)
 
+
+# judge 가 지시문을 그대로 되풀이한 노트 (근거 없는 판정 — 측정 08 / S06)
+_ECHO_PATTERNS = (
+    "specific unmet acceptance criterion",
+    "your concrete finding",
+    "the evidence you saw",
+    "evidence seen in the code",
+    "concrete finding",
+)
+
+
+def _is_echo_note(notes: str) -> bool:
+    """판정 노트가 지시문 되풀이/placeholder 인지 판별한다 (근거 부재)."""
+    low = (notes or "").strip().lower()
+    if not low:
+        return True
+    return any(p in low for p in _ECHO_PATTERNS)
 
 def _false_absence_claims(notes: str, require_spec: str) -> list[str]:
     """
@@ -539,8 +590,7 @@ def _false_absence_claims(notes: str, require_spec: str) -> list[str]:
     `--require` 로 검증된(통과한) 토큰을 부재라고 주장하면 거짓 revision 이다. 증거 라인을
     함께 돌려주어 재판정 요청에 사용한다.
     """
-    low = (notes or "").lower()
-    if not any(w in low or w in (notes or "") for w in _ABSENCE_WORDS):
+    if not _ABSENCE_RE.search(notes or ""):
         return []
     evidence: list[str] = []
     for item in (require_spec or "").split(","):
@@ -692,6 +742,40 @@ def _dev_call(prompt: str, feature: str, prot_snap: dict[str, str]) -> tuple[int
         _vl(["record", feature, "--grader", "test", "--verdict", "fail",
              "--notes", f"수정 금지 파일 변경(테스트 약화 시도): {violated}"])
     return rc, violated
+
+def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -> str | None:
+    """
+    judge 를 호출하고 판정이 기록될 때까지 재요청한다 (측정 08 / S05 — 재판정 비대칭 해소).
+
+    응답은 했으나 record 명령을 실행하지 않는 사례가 잦으므로, 빠뜨린 동작만 콕 집어 다시
+    요청한다. 판정 내용은 여전히 judge 의 몫 — 드라이버가 대신 기록하지 않는다.
+
+    Returns:
+        str | None: 기록된 verdict, 확보 실패 시 None
+    """
+    before = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
+    for attempt in range(1, attempts + 1):
+        ask = prompt if attempt == 1 else (
+            f"Your previous reply did not record a verdict for {feature}. "
+            "The judgement is only valid once recorded.\n"
+            "Run this bash command now (use revision instead of pass if a criterion is unmet):\n"
+            f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
+            f"--verdict pass --notes '<your concrete finding>'\n"
+            "The bash tool needs both arguments: command and description."
+        )
+        rc, _out = _agent_call(role, ask)
+        verdict = _judge_recorded(feature, role, before)
+        if verdict:
+            rec = next((a for a in reversed(_vl_state(feature).get("attempts", []))
+                        if a.get("grader") == role), {})
+            if _is_echo_note(rec.get("notes") or ""):
+                _log(f"  ⚠️ {role} 노트가 지시문 되풀이 — 근거 없는 판정으로 보고 재요청")
+                continue
+            return verdict
+        tail = "재시도" if attempt < attempts else "중단"
+        reason = "호스트 실패로 무산" if rc == 124 else "응답했으나 판정 미기록"
+        _log(f"  ⚠️ {role} {reason} — {tail}")
+    return None
 
 def cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
@@ -977,11 +1061,9 @@ def cmd_run(args) -> int:
                 continue
             _vl(["record", feature, "--grader", "test", "--verdict", "pass",
                  "--notes", "judge 재작업 후 grader 통과"])
-            before3 = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
-            _agent_call(role, judge_prompt)
-            again = _judge_recorded(feature, role, before3)
+            again = _judge_with_retry(role, feature, judge_prompt)
             if not again:
-                _log(f"  ⚠️ {role} 재판정 미기록 — 인계 (exit 2)")
+                _log(f"  ⚠️ {role} 재판정 확보 실패 (재요청 포함) — 인계 (exit 2)")
                 return 2
             verdict = again
             _log(f"  {role} 재판정: {verdict}")
