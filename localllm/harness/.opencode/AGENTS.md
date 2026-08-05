@@ -44,6 +44,14 @@ OpenCode 에이전트 정의는 `.opencode/agent/*.md`, 커맨드는 `.opencode/
    날조(`/workspace/...` 등)해 권한 거부됩니다. reviewer/qa 지시문에 "ONLY the bash
    tool" + `cat <파일>` 을 명시하면 안정적으로 동작합니다.
 
+8. **산출 보고를 신뢰하지 말고 검증** (측정 08) — 로컬 모델은 파일을 만들지 않고도
+   "Wrote file successfully" 를 보고한다. 드라이버/스크립트가 **파일 존재와 테스트 결과**로
+   확인해야 한다. 또한 에이전트 미지정 호출에서는 `write` 도구에 절대경로가 필요하다고 오판해
+   `/current_directory/...` 같은 경로를 날조하므로, 파일 작업은 **`--agent` 모드**로 하라.
+
+9. **bash 도구는 `command` + `description` 두 인자 필수** (측정 05·08) — description 을 빼면
+   스키마 에러로 호출이 무산된다. bash 사용을 지시할 때 이 점을 함께 알려라.
+
 ## 역할 → 모델 등급 (opencode.json 에 코드화됨)
 
 프로젝트 루트 `opencode.json` 이 역할별 기본 모델을 지정합니다 (전역 설정과 병합):

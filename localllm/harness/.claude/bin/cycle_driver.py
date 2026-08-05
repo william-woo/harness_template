@@ -46,6 +46,8 @@ _ROOT = _project_root()
 _VL = _ROOT / ".claude" / "bin" / "verify_loop.py"
 _STATE_DIR = _ROOT / ".claude" / "state" / "verify-loop"
 _OC_TIMEOUT = int(os.environ.get("CYCLE_OC_TIMEOUT", "420"))
+# --agent 경로 건강 상태 (측정 08: 시간대 단위로 불안정 — 실패하면 주입 모드로 고정)
+_AGENT_PATH_HEALTHY = True
 
 
 def _log(msg: str) -> None:
@@ -108,7 +110,8 @@ class _HostLock:
         return False
 
 
-def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> tuple[int, str]:
+def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
+                  attempts: int | None = None) -> tuple[int, str]:
     """
     opencode run 을 실행한다. 호스트 일시 실패(행/즉시 에러)에 지수 백오프로 재시도하고,
     머신 단위 락으로 인스턴스를 직렬화한다 (동시 실행 충돌 방지 — 측정 08).
@@ -132,7 +135,8 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
         cmd += ["-m", model]
     cmd.append(prompt)
 
-    attempts = int(os.environ.get("CYCLE_OC_ATTEMPTS", "5"))
+    if attempts is None:
+        attempts = int(os.environ.get("CYCLE_OC_ATTEMPTS", "5"))
     backoffs = [5, 15, 30, 60]
     iso_dir: str | None = None
     last_out = ""
@@ -165,6 +169,81 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
         _log(f"  ⚠️ opencode {reason} — {backoff}초 후 재시도 ({attempt}/{attempts})")
         time.sleep(backoff)
     return 124, last_out
+
+
+def _role_prompt(role: str) -> str | None:
+    """
+    주입 모드용 **컴팩트 역할 브리프**를 반환한다.
+
+    측정 08 라운드 6: `.opencode/agent/<role>.md` 본문 전체(2.4KB)를 주입하면 14B 가 도구를
+    호출하지 않고 설명만 반환해 파일이 생성되지 않았다. frontmatter `description`(1~3줄)만
+    쓰면 역할 정체성은 유지하면서 지시가 짧아져 도구 호출이 정상 동작한다.
+    (본문이 이미 짧으면(<800자) 본문을 쓴다 — 정보 손실 최소화.)
+    """
+    md = _ROOT / ".opencode" / "agent" / f"{role}.md"
+    if not md.is_file():
+        return None
+    raw = md.read_text(encoding="utf-8")
+    body, desc = raw.strip(), ""
+    if raw.startswith("---"):
+        parts = raw.split("---", 2)
+        if len(parts) >= 3:
+            fm, body = parts[1], parts[2].strip()
+            lines, collecting = [], False
+            for ln in fm.splitlines():
+                if ln.startswith("description:"):
+                    collecting = True
+                    inline = ln.split(":", 1)[1].strip()
+                    if inline and inline not in (">-", "|", ">", "|-"):
+                        lines.append(inline)
+                    continue
+                if collecting:
+                    if ln[:1] not in (" ", "\t") and ln.strip():
+                        break
+                    if ln.strip():
+                        lines.append(ln.strip())
+            desc = " ".join(lines).strip()
+    if len(body) < 800:
+        return body
+    return desc or body[:800]
+
+
+def _agent_call(role: str, task: str) -> tuple[int, str]:
+    """
+    역할 에이전트를 호출한다. `--agent` 경로가 실패하면 역할 프롬프트 주입으로 폴백한다.
+
+    측정 08: 이 환경의 OpenCode 는 커스텀(마크다운) 에이전트 실행이 시간대 단위로 불안정하다
+    (내용·경로·DB 무관, 실패는 0.6초 내 즉시). 같은 구간에서도 `-m <model>` + 역할 프롬프트
+    주입은 100% 동작하므로, 호스트가 건강할 때는 `--agent`(권한 deny-list 강제 유지)를 쓰고
+    실패하면 주입 모드로 사이클을 이어간다.
+
+    폴백 모드의 한계: 도구 권한이 호스트에서 강제되지 않는다 (역할 규율은 프롬프트로만).
+    """
+    global _AGENT_PATH_HEALTHY
+    if _AGENT_PATH_HEALTHY:
+        # 저비용 프로브: 이 경로의 실패는 0.6초 내 즉시 드러나므로 1회만 시도한다.
+        rc, out = _opencode_run(role, task, attempts=1)
+        if rc != 124:
+            return rc, out
+        _AGENT_PATH_HEALTHY = False   # sticky — 이번 실행 동안 --agent 재시도 안 함
+        _log("  ⓘ --agent 경로 비정상 판정 — 이번 실행은 주입 모드로 고정")
+
+    preamble = _role_prompt(role)
+    model = _role_models().get(role)
+    if not preamble or not model:
+        _log(f"  ⚠️ {role} 주입 불가 (역할 정의/모델 매핑 부재) — --agent 로 재시도")
+        return _opencode_run(role, task)
+
+    _log(f"  ↺ {role} 주입 모드: 역할 프롬프트 + {model.split('/')[-1]} "
+         f"(호스트 권한 강제 없음 — 프롬프트 규율만)")
+    combined = (
+        f"ROLE ({role}): {preamble[:900]}\n\n"
+        "TOOL RULES: do the work with tools now. Use the edit tool for each file "
+        "(relative path like 'foo.py', never a leading slash), and the bash tool to run "
+        "commands. Explaining or printing code is not enough — the files must exist on disk.\n\n"
+        f"TASK: {task}"
+    )
+    return _opencode_run(None, combined, model=model)
 
 
 def _vl(args: list[str]) -> str:
@@ -214,6 +293,85 @@ def _files_context(files: list[str]) -> str:
     return "\n".join(chunks)
 
 
+def _resolvable_models() -> set[str]:
+    """`opencode models` 가 해석 가능한 모델 집합을 반환한다 (실패 시 빈 집합)."""
+    try:
+        r = subprocess.run(["opencode", "models"], cwd=_ROOT, capture_output=True,
+                           text=True, timeout=90)
+        return {ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()}
+    except Exception:
+        return set()
+
+
+def _role_models() -> dict[str, str]:
+    """프로젝트 opencode.json 의 역할별 모델 매핑을 반환한다."""
+    p = _ROOT / "opencode.json"
+    if not p.is_file():
+        return {}
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+    out = {}
+    for role, spec in (cfg.get("agent") or {}).items():
+        m = (spec or {}).get("model")
+        if m:
+            out[role] = m
+    return out
+
+
+def _preflight() -> list[str]:
+    """
+    역할별 모델이 실제로 해석 가능한지 점검한다 (측정 08 근본 원인 가드).
+
+    OpenCode 는 프로젝트 opencode.json 의 provider.models 를 모델 해석에 반영하지 않으므로,
+    역할 모델이 전역 설정에 없으면 --agent 실행 전체가 UnknownError 로 실패한다.
+    미해석 모델을 조기에 찾아 실행 전에 알린다 (차단하지 않음 — 안내 후 진행).
+    """
+    resolvable = _resolvable_models()
+    if not resolvable:
+        return []
+    missing = [f"{role}={m}" for role, m in _role_models().items() if m not in resolvable]
+    if missing:
+        _log("⚠️ 프리플라이트: 해석 불가 역할 모델 — 전역 설정(~/.config/opencode)에 등재 필요")
+        _log(f"   {missing}")
+        _log("   해결: bash .claude/bin/opencode-setup.sh (누락 모델 병합)")
+    return missing
+
+
+def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
+    """
+    대상 파일이 실제로 생성될 때까지 **파일 1건씩** 생성 지시하고 존재를 검증한다.
+
+    측정 08: 로컬 모델은 (a) 쓰기 성공을 환각으로 보고하고 (b) 상대명을 `/path/to/...` 로
+    훼손하며 (c) 절대경로는 호스트 권한이 거부한다. 따라서 파일 단위로 쪼개 지시하고
+    드라이버가 파일시스템으로 결과를 확인하는 것이 유일하게 신뢰 가능한 방식이다.
+
+    Returns:
+        list[str]: 끝까지 생성되지 않은 파일 목록 (비었으면 전부 존재)
+    """
+    for rel in files:
+        for attempt in (1, 2):
+            if (_ROOT / rel).is_file():
+                break
+            hint = "\n".join(ln for ln in criteria.splitlines() if rel.split("/")[-1] in ln) or criteria
+            task = (
+                f"Create ONE file named {rel} — nothing else.\n"
+                f"Call the edit tool with filePath exactly \"{rel}\" "
+                "(a bare relative name: no leading slash, no directory, no placeholder path) "
+                "and the complete file content.\n"
+                f"Content requirements:\n{hint}\n"
+                "Do not describe the file; create it. Reply DONE."
+            )
+            _log(f"  ✎ 파일 생성 지시: {rel} (시도 {attempt}/2)")
+            _agent_call("developer", task)
+            if (_ROOT / rel).is_file():
+                _log(f"  ✓ 확인: {rel} 생성됨")
+                break
+            _log(f"  ✗ 미확인: {rel} 아직 없음 (모델 보고와 무관하게 파일시스템 기준)")
+    return [rel for rel in files if not (_ROOT / rel).is_file()]
+
+
 def cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     feature = args.feature
@@ -233,6 +391,7 @@ def cmd_run(args) -> int:
     if not _vl_state(feature):
         _vl(["start", feature, "--rubric", "code-review"])
     _log(f"▶ {feature} {feat.get('title', '')} — 사이클 시작 (grader: `{args.test_cmd}`)")
+    _preflight()
 
     # ── GRADE-FIRST (멱등 재개) ────────────────────────────────
     # 결정론 게이트가 이미 통과하면 생성 모델을 호출하지 않는다 (측정 07 교훈:
@@ -249,10 +408,17 @@ def cmd_run(args) -> int:
             "(no leading slash, no directories). Reply DONE when all files exist."
         )
         _log("① developer(생성형) 구현 호출")
-        rc, _ = _opencode_run("developer", dev_prompt)
+        rc, _ = _agent_call("developer", dev_prompt)
         if rc == 124:
-            _log("❌ developer 호출 실패 (연속 timeout) — 중단")
+            _log("❌ developer 호출 실패 (호스트 연속 실패) — 중단")
             return 1
+        # 환각 보고 방지: 파일 존재를 드라이버가 직접 확인하고, 없으면 파일별로 재지시
+        missing = _ensure_files(files, criteria, feature)
+        if missing:
+            _log(f"❌ 대상 파일 생성 실패: {missing} — 상위 호스트 인계 (exit 2)")
+            _vl(["record", feature, "--grader", "test", "--verdict", "fail",
+                 "--notes", f"파일 생성 실패(환각 보고 가능): {missing}"])
+            return 2
 
     # ── GRADE + REVISE 루프 (verify-loop 가 유계·에스컬레이션 관리) ──
     while True:
@@ -280,7 +446,7 @@ def cmd_run(args) -> int:
             "content (do not use partial edits). Use the exact relative filename. Reply DONE."
         )
         _log("  ↻ developer 재작업 (전체 파일 재작성 지시)")
-        rc, _ = _opencode_run("developer", revise_prompt)
+        rc, _ = _agent_call("developer", revise_prompt)
         if rc == 124:
             _log("❌ developer 재작업 호출 실패 — 중단")
             return 1
@@ -306,7 +472,7 @@ def cmd_run(args) -> int:
         _log(f"③ {role}(judge, 32B) 판정 호출")
         verdict = None
         for attempt in (1, 2):
-            rc, _out = _opencode_run(role, judge_prompt)
+            rc, _out = _agent_call(role, judge_prompt)
             verdict = _judge_recorded(feature, role, before_n)
             if verdict:
                 break
@@ -348,6 +514,8 @@ def cmd_self(args) -> int:
     print(f"  feature_list.json: {'PASS' if (_ROOT / 'feature_list.json').is_file() else 'FAIL'}")
     ocj = _ROOT / "opencode.json"
     print(f"  opencode.json (역할별 모델): {'PASS' if ocj.is_file() else 'CONCERN (전역 설정만 사용)'}")
+    missing = _preflight()
+    print(f"  역할 모델 해석: {'PASS (전부 해석 가능)' if not missing else f'FAIL {missing}'}")
     return 0
 
 

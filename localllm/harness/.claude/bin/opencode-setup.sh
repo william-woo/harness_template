@@ -70,7 +70,32 @@ echo ""
 echo "[3/4] OpenCode ↔ Ollama provider 설정"
 mkdir -p "$OC_CONFIG_DIR"
 if [ -f "$OC_CONFIG" ] && grep -q '"ollama"' "$OC_CONFIG" 2>/dev/null; then
-  echo "  이미 ollama provider 설정됨: $OC_CONFIG — 스킵 (수동 편집 가능)"
+  echo "  이미 ollama provider 설정됨: $OC_CONFIG — 필요한 모델 등재 여부 점검"
+  # 중요 (측정 08): OpenCode 는 프로젝트 opencode.json 의 provider.models 를 모델 해석에
+  # 반영하지 않는다. 역할별 모델(judge=32B)이 전역 설정에 없으면 --agent 실행 전체가
+  # UnknownError 로 실패한다 → 누락 모델을 여기서 병합한다.
+  OC_CONFIG="$OC_CONFIG" OLLAMA_MODEL="$OLLAMA_MODEL" OLLAMA_JUDGE_MODEL="$OLLAMA_JUDGE_MODEL" \
+  python3 - <<'PYMERGE'
+import json, os, re, shutil
+from pathlib import Path
+p = Path(os.environ["OC_CONFIG"])
+raw = p.read_text(encoding="utf-8")
+cfg = json.loads(re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE))
+models = cfg.setdefault("provider", {}).setdefault("ollama", {}).setdefault("models", {})
+added = []
+for key in (os.environ["OLLAMA_MODEL"], os.environ["OLLAMA_JUDGE_MODEL"]):
+    if key and key not in models:
+        models[key] = {"name": key}
+        added.append(key)
+if added:
+    bak = p.with_suffix(p.suffix + ".bak-harness")
+    if not bak.exists():
+        shutil.copy2(p, bak)
+    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"  ✅ 전역 설정에 모델 등재: {added} (백업: {bak.name})")
+else:
+    print("  ✅ 필요한 모델 모두 등재됨")
+PYMERGE
 else
   cat > "$OC_CONFIG" << EOFJSON
 {
