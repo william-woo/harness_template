@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -142,6 +143,9 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
     last_out = ""
     for attempt in range(1, attempts + 1):
         env = dict(os.environ)
+        # 중요 (측정 08): OpenCode 는 상대경로를 PWD 기준으로 해석한다. subprocess 의 cwd=
+        # 만으로는 PWD 가 부모 값으로 남아 산출 파일이 상위 디렉토리에 떨어진다.
+        env["PWD"] = str(_ROOT)
         if iso_dir:
             env["XDG_DATA_HOME"] = iso_dir
         try:
@@ -339,6 +343,153 @@ def _preflight() -> list[str]:
     return missing
 
 
+_DEFECT_HINTS = ("missing", "incorrect", "wrong", "not implemented", "does not",
+                 "should be", "bug", "누락", "없음", "잘못")
+
+
+def _mechanical_findings(files: list[str]) -> list[str]:
+    """
+    기계적으로 확인 가능한 결함을 수집한다 (judge 프롬프트에 사전 제시용).
+
+    측정 08: judge 가 docstring 부재를 인지하면서도 pass 를 기록했다. 결정론적으로 검출
+    가능한 항목은 미리 제시해 판정 근거를 좁힌다 (coding-standards 가 docstring 을 요구).
+    """
+    out: list[str] = []
+    for rel in files:
+        fp = _ROOT / rel
+        if not fp.is_file() or not rel.endswith(".py"):
+            continue
+        base = rel.split("/")[-1]
+        # 테스트 파일은 docstring 요구 대상이 아니다 (코딩 표준·AC 모두 요구하지 않음).
+        # 이를 제시하면 judge 가 과도하게 revision 을 낸다 (라운드 11 S08/S09 오탐).
+        if base.startswith("test_") or base.endswith("_test.py"):
+            continue
+        body = fp.read_text(encoding="utf-8", errors="replace")
+        pat = r"^def\s+(\w+)\s*\([^)]*\)\s*:\s*\n(\s+)(\S.*)$"
+        for m in re.finditer(pat, body, re.MULTILINE):
+            name, first = m.group(1), m.group(3).lstrip()
+            starts_doc = first.startswith('"""') or first.startswith("'''")
+            if not starts_doc and not name.startswith("_") and not name.startswith("test_"):
+                out.append(f"{rel}: 함수 {name}() 에 docstring 이 없습니다.")
+    return out
+
+
+def _contradicts(verdict: str, notes: str) -> bool:
+    """pass 판정인데 notes 가 결함을 서술하는 모순인지 판별한다."""
+    if verdict != "pass" or not notes:
+        return False
+    low = notes.lower()
+    return any(w in low for w in _DEFECT_HINTS)
+
+def _protected_files(explicit: str, criteria: str, files: list[str]) -> list[str]:
+    """
+    수정 금지 파일 목록을 만든다 (명시 인자 + AC 문장 자동 추출).
+
+    측정 08 / S07: 모델이 수정 금지된 테스트를 재작성해 모순 요구를 "통과" 시켰다.
+    AC 에 금지가 적혀 있어도 프롬프트만으로는 지켜지지 않으므로 결정론 가드가 필요하다.
+    """
+    out: list[str] = []
+    for x in (explicit or "").split(","):
+        x = x.strip()
+        if x:
+            out.append(x)
+    markers = ("수정하지 말", "수정 금지", "변경하지 말", "do not modify",
+               "do not change", "must not be modified", "unchanged")
+    for line in criteria.splitlines():
+        low = line.lower()
+        if any(mk in line or mk in low for mk in markers):
+            for rel in files:
+                # 경계 매칭: 'test_x.py' 안의 'x.py' 처럼 부분 일치로 구현 파일까지
+                # 보호되면 정상 수정이 막혀 오탐(치팅 판정)이 난다.
+                if rel in out:
+                    continue
+                if re.search(r"(?<![\w./-])" + re.escape(rel) + r"(?![\w])", line):
+                    out.append(rel)
+    return out
+
+
+def _snapshot(files: list[str]) -> dict[str, str]:
+    """보호 파일의 현재 내용을 기록한다 (변경 감지용)."""
+    snap: dict[str, str] = {}
+    for rel in files:
+        fp = _ROOT / rel
+        if fp.is_file():
+            snap[rel] = fp.read_text(encoding="utf-8", errors="replace")
+    return snap
+
+
+def _restore_violations(snap: dict[str, str]) -> list[str]:
+    """
+    보호 파일이 변경됐는지 확인하고, 변경된 파일은 원본으로 복원한다.
+
+    복원은 ground truth 를 지키기 위한 것이며, 위반 사실은 숨기지 않고 반환해 상위에서
+    fail 기록·에스컬레이션에 사용한다.
+    """
+    violated: list[str] = []
+    for rel, original in snap.items():
+        fp = _ROOT / rel
+        current = fp.read_text(encoding="utf-8", errors="replace") if fp.is_file() else ""
+        if current != original:
+            violated.append(rel)
+            fp.write_text(original, encoding="utf-8")
+    return violated
+
+def _artifact_problems(files: list[str]) -> list[str]:
+    """
+    산출 파일의 **형식 결함**을 결정론적으로 진단한다 (측정 08 라운드 10).
+
+    로컬 모델이 write 도구로 파일을 만들 때 실제 개행 대신 리터럴 `\\n` 을 넣는 사례가
+    실측됐다 (파일 전체가 한 줄 → 파이썬이 주석으로 처리 → 조용한 exit 0).
+    모델에게 무엇이 잘못됐는지 알려주기 위해 사람이 읽을 수 있는 진단 문장을 반환한다.
+
+    Returns:
+        list[str]: 진단 문장 목록 (비었으면 형식 문제 없음)
+    """
+    problems: list[str] = []
+    for rel in files:
+        fp = _ROOT / rel
+        if not fp.is_file():
+            problems.append(f"{rel}: 파일이 없습니다.")
+            continue
+        body = fp.read_text(encoding="utf-8", errors="replace")
+        real_lines = body.count("\n")
+        literal = body.count("\\n")
+        if literal and real_lines <= 1:
+            problems.append(
+                f"{rel}: 파일에 실제 줄바꿈이 없고 리터럴 두 글자 '\\n' 이 {literal}개 들어 있습니다. "
+                "파일 내용은 실제 줄바꿈으로 여러 줄이어야 합니다."
+            )
+        elif real_lines == 0 and len(body) > 80:
+            problems.append(f"{rel}: 전체가 한 줄입니다 (줄바꿈 없음).")
+        # 공허 테스트 탐지 (측정 08 / S04): 테스트 파일에 assert 가 없으면 아무것도 검증하지
+        # 않으면서 통과한다 — 결정론 grader 를 무력화하는 가장 위험한 패턴.
+        # 파이썬 문법 검사 (측정 08 / S05·S06): 이스케이프 유출·구문 오배치를 정확히 지적한다.
+        if rel.endswith(".py"):
+            try:
+                compile(body, rel, "exec")
+            except SyntaxError as exc:
+                problems.append(
+                    f"{rel}: 문법 오류 {exc.lineno}행 — {exc.msg}. 해당 행: "
+                    f"{(exc.text or '').strip()[:80]!r}"
+                )
+            except ValueError as exc:
+                problems.append(f"{rel}: 컴파일 불가 — {exc}")
+        # 이스케이프 유출 탐지: 파일 내용에 \" 가 들어가면 JSON 이스케이프가 새어 나온 것이다.
+        if '\\"' in body:
+            problems.append(
+                f"{rel}: 이스케이프된 큰따옴표 문자열 backslash-quote 가 파일에 들어 있습니다 — "
+                "파일에는 이스케이프하지 않은 실제 따옴표를 쓰십시오."
+            )
+        base = rel.split("/")[-1]
+        is_test = base.startswith("test_") or base.endswith("_test.py")
+        if is_test and "assert" not in body and "assertEqual" not in body:
+            problems.append(
+                f"{rel}: 테스트에 assert 문이 하나도 없습니다 — 요구된 동작을 실제로 검증하도록 "
+                "assert 를 넣으십시오 (호출 후 print 만 하는 테스트는 무효)."
+            )
+    return problems
+
+
 def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
     """
     대상 파일이 실제로 생성될 때까지 **파일 1건씩** 생성 지시하고 존재를 검증한다.
@@ -361,7 +512,8 @@ def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
                 "(a bare relative name: no leading slash, no directory, no placeholder path) "
                 "and the complete file content.\n"
                 f"Content requirements:\n{hint}\n"
-                "Do not describe the file; create it. Reply DONE."
+                "Write the content with REAL line breaks (never the two characters "
+                "backslash+n). Do not describe the file; create it. Reply DONE."
             )
             _log(f"  ✎ 파일 생성 지시: {rel} (시도 {attempt}/2)")
             _agent_call("developer", task)
@@ -392,13 +544,19 @@ def cmd_run(args) -> int:
         _vl(["start", feature, "--rubric", "code-review"])
     _log(f"▶ {feature} {feat.get('title', '')} — 사이클 시작 (grader: `{args.test_cmd}`)")
     _preflight()
+    protected = _protected_files(getattr(args, "protect", "") or "", criteria, files)
+    prot_snap = _snapshot(protected)
+    if prot_snap:
+        _log(f"  🔒 수정 금지 파일 보호: {list(prot_snap)}")
 
     # ── GRADE-FIRST (멱등 재개) ────────────────────────────────
     # 결정론 게이트가 이미 통과하면 생성 모델을 호출하지 않는다 (측정 07 교훈:
     # 재개 시 무조건 구현부터 부르면 14B 가 멀쩡한 산출물을 다시 망가뜨린다).
-    ok, _out = _grade(args.test_cmd, args.expect)
+    prior_pass = any(a.get("grader") == "test" and a.get("verdict") == "pass"
+                     for a in _vl_state(feature).get("attempts", []))
+    ok, _out = _grade(args.test_cmd, args.expect) if prior_pass else (False, "")
     if ok:
-        _log("① grader 선통과 — 구현 단계 생략 (재개/멱등)")
+        _log("① grader 선통과 + 이전 통과 기록 있음 — 구현 단계 생략 (재개/멱등)")
     else:
         # ── DEVELOP ────────────────────────────────────────────
         dev_prompt = (
@@ -422,10 +580,22 @@ def cmd_run(args) -> int:
 
     # ── GRADE + REVISE 루프 (verify-loop 가 유계·에스컬레이션 관리) ──
     while True:
+        violated = _restore_violations(prot_snap)
+        if violated:
+            _log(f"🚫 수정 금지 파일이 변경됨 (복원 완료): {violated} — 치팅으로 판정, 인계")
+            _vl(["record", feature, "--grader", "test", "--verdict", "fail",
+                 "--notes", f"수정 금지 파일 변경(테스트 약화 시도): {violated}"])
+            return 2
         ok, out = _grade(args.test_cmd, args.expect)
+        # 공허 통과 차단: 테스트가 통과해도 산출물 자체가 무효(assert 없음/한 줄 파일)면 실패로 본다.
+        blocking = _artifact_problems(files) if ok else []
+        if ok and blocking:
+            _log("② grader 통과했으나 산출물 무효 — 실패 처리: " + blocking[0][:80])
+            ok = False
+            out = (out + "\n[driver] " + " / ".join(blocking))[-800:]
         if ok:
             _vl(["record", feature, "--grader", "test", "--verdict", "pass",
-                 "--notes", "결정론 grader 통과 (exit 0 + 기대 출력)"])
+                 "--notes", "결정론 grader 통과 (exit 0 + 기대 출력 + 산출물 유효)"])
             _log("② grader PASS")
             break
         _vl(["record", feature, "--grader", "test", "--verdict", "revision",
@@ -438,10 +608,24 @@ def cmd_run(args) -> int:
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
         # 재작업 = 전체 파일 재작성 (규칙 6) — 실패 출력 + 현재 내용을 드라이버가 주입
+        fmt = _artifact_problems(files)
+        # 기대 출력(--expect)이 없으면 그 사실을 명시적으로 지적한다: 모델이 관용적 테스트
+        # 프레임워크로 바꿔 기대 토큰을 출력하지 않는 사례가 반복됐다 (측정 08 라운드 11).
+        if args.expect and args.expect not in out:
+            fmt.append(
+                f"테스트 명령이 기대 토큰 '{args.expect}' 를 출력하지 않았습니다 "
+                f"(현재 출력 일부: {out[-160:]!r}). unittest 등 프레임워크로 바꾸지 말고, "
+                f"요구된 대로 plain assert 후 정확히 '{args.expect}' 를 print 하십시오."
+            )
+        if fmt:
+            _log("  ⓘ 산출물 결함 감지: " + " / ".join(x[:60] for x in fmt))
         revise_prompt = (
             f"The implementation of {feature} fails its test.\n"
             f"Test command: {args.test_cmd}\nTest output:\n{out}\n\n"
-            f"{_files_context(files)}\n\n"
+            + ("PROBLEMS DETECTED (fix these exactly):\n" + "\n".join(f"- {x}" for x in fmt) +
+               "\nWrite the file with REAL line breaks — never the two characters backslash+n.\n\n"
+               if fmt else "")
+            + f"{_files_context(files)}\n\n"
             "Identify the buggy file and REWRITE that file COMPLETELY with corrected "
             "content (do not use partial edits). Use the exact relative filename. Reply DONE."
         )
@@ -457,36 +641,124 @@ def cmd_run(args) -> int:
         ("qa", "verify every acceptance criterion is met"),
     ):
         before_n = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
+        mech = _mechanical_findings(files)
         judge_prompt = (
             f"You must {ask} for feature {feature} using ONLY the bash tool "
             f"(never the read tool).\n"
             f"Step 1: run bash: cat {' '.join(files)}\n"
             f"Step 2: run bash: {args.test_cmd}\n"
             f"Acceptance criteria:\n{criteria}\n"
-            f"Step 3: record your verdict via bash (fill notes with a concrete finding):\n"
-            f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
-            f"--verdict pass --notes '<your concrete finding>'\n"
-            f"(use --verdict revision instead if you found a must-fix issue)\n"
-            f"Reply PASS or NEEDS REVISION with one sentence."
+            + ("Already detected by deterministic checks (weigh these):\n"
+               + "\n".join(f"- {x}" for x in mech) + "\n" if mech else "")
+            + "VERDICT RULE: passing tests are not sufficient. If ANY acceptance criterion is "
+              "unmet — including a missing docstring — record --verdict revision. Use pass only "
+              "when every criterion is satisfied.\n"
+            + f"Step 3: record your verdict via bash (notes must state a concrete finding):\n"
+              f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
+              f"--verdict pass --notes '<your concrete finding>'\n"
+              f"(replace pass with revision per the VERDICT RULE)\n"
+              f"The bash tool needs both arguments: command and description.\n"
+              f"Reply PASS or NEEDS REVISION with one sentence."
         )
         _log(f"③ {role}(judge, 32B) 판정 호출")
         verdict = None
-        for attempt in (1, 2):
-            rc, _out = _agent_call(role, judge_prompt)
+        for attempt in (1, 2, 3):
+            prompt = judge_prompt
+            if attempt > 1:
+                # 응답은 했지만 기록 명령을 실행하지 않은 경우: 빠뜨린 동작만 콕 집어 재요청한다
+                # (판정 내용은 여전히 judge 의 몫 — 드라이버가 대신 기록하지 않는다).
+                prompt = (
+                    f"Your previous reply did not record a verdict for {feature}. "
+                    "The judgement is only valid once it is recorded.\n"
+                    "Run this bash command now (fill notes with your concrete finding, and use "
+                    "--verdict revision instead of pass if you found a must-fix issue):\n"
+                    f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
+                    f"--verdict pass --notes '<your concrete finding>'\n"
+                    "Remember the bash tool needs both arguments: command and description.\n"
+                    "Then reply with PASS or NEEDS REVISION."
+                )
+            rc, _out = _agent_call(role, prompt)
             verdict = _judge_recorded(feature, role, before_n)
             if verdict:
                 break
+            tail = "재시도" if attempt < 3 else "중단"
             if rc == 124:
-                _log(f"  ⚠️ {role} 호출이 호스트 실패로 무산 — {'재시도' if attempt == 1 else '중단'}")
+                _log(f"  ⚠️ {role} 호출이 호스트 실패로 무산 — {tail}")
             else:
-                _log(f"  ⚠️ {role} 응답했으나 판정 미기록 — {'재시도' if attempt == 1 else '중단'}")
+                _log(f"  ⚠️ {role} 응답했으나 판정 미기록 — {tail}")
         if not verdict:
             _log(f"❌ {role} 판정 확보 실패 — 상위 호스트 인계 (exit 2)")
             return 2
         _log(f"  {role} verdict: {verdict}")
-        if verdict != "pass":
-            _log(f"🔄 {role} NEEDS REVISION — 재작업 루프는 상위 호스트/재실행으로 (exit 3)")
-            return 3
+        # 모순 판정 교정: pass 인데 notes 가 결함을 서술하면 1회 재요청 (측정 08 / S02·S03).
+        rec = next((a for a in reversed(_vl_state(feature).get("attempts", []))
+                    if a.get("grader") == role), {})
+        if _contradicts(verdict, rec.get("notes") or ""):
+            _log(f"  ⚠️ {role} 모순 판정 (pass + 결함 서술) — 재판정 요청")
+            before2 = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
+            _agent_call(role, (
+                f"Your recorded verdict for {feature} is inconsistent: you recorded pass but your "
+                f"notes describe an unmet criterion ({(rec.get('notes') or '')[:160]}).\n"
+                "Per the VERDICT RULE an unmet acceptance criterion requires revision.\n"
+                "Record the corrected verdict now via bash:\n"
+                f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
+                f"--verdict revision --notes '<the unmet criterion>'\n"
+                "The bash tool needs both arguments: command and description."
+            ))
+            corrected = _judge_recorded(feature, role, before2)
+            if corrected:
+                _log(f"  ↺ {role} 재판정 기록: {corrected}")
+                verdict = corrected
+        # judge revision → developer 재작업 → 재채점 → 재판정 (유계 루프, 측정 08 라운드 12)
+        jround = 0
+        while verdict != "pass":
+            state = _vl_state(feature)
+            revisions = sum(1 for a in state.get("attempts", []) if a.get("verdict") == "revision")
+            if state.get("escalated") or revisions >= args.max_revisions or jround >= 2:
+                _log(f"🚨 {role} 판정 미해결 (revision {revisions}) — 상위 호스트 인계 (exit 2)")
+                return 2
+            jround += 1
+            rec_notes = ""
+            for a in reversed(state.get("attempts", [])):
+                if a.get("grader") == role and a.get("verdict") == "revision":
+                    rec_notes = a.get("notes") or ""
+                    break
+            mech2 = _mechanical_findings(files)
+            _log(f"  ↻ {role} 지적사항으로 developer 재작업 (judge 라운드 {jround}/2)")
+            fix_prompt = (
+                f"The {role} rejected {feature} and requires changes.\n"
+                f"{role} finding: {rec_notes}\n"
+                + ("Deterministic checks also report:\n"
+                   + "\n".join(f"- {x}" for x in mech2) + "\n" if mech2 else "")
+                + f"{_files_context(files)}\n\n"
+                "Fix exactly these points by REWRITING the affected file COMPLETELY with the "
+                "corrected content (relative filename, real line breaks). Keep the tests passing. "
+                "Reply DONE."
+            )
+            _agent_call("developer", fix_prompt)
+            violated2 = _restore_violations(prot_snap)
+            if violated2:
+                _log(f"🚫 수정 금지 파일 변경 (복원): {violated2} — 인계")
+                _vl(["record", feature, "--grader", "test", "--verdict", "fail",
+                     "--notes", f"수정 금지 파일 변경: {violated2}"])
+                return 2
+            ok2, out2 = _grade(args.test_cmd, args.expect)
+            blk2 = _artifact_problems(files)
+            if not ok2 or blk2:
+                _vl(["record", feature, "--grader", "test", "--verdict", "revision",
+                     "--notes", f"judge 재작업 후 grader 실패: {(out2 or ' '.join(blk2))[:120]}"])
+                _log("  ② 재작업 후 grader 실패 — 다음 라운드에서 재시도")
+                continue
+            _vl(["record", feature, "--grader", "test", "--verdict", "pass",
+                 "--notes", "judge 재작업 후 grader 통과"])
+            before3 = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
+            _agent_call(role, judge_prompt)
+            again = _judge_recorded(feature, role, before3)
+            if not again:
+                _log(f"  ⚠️ {role} 재판정 미기록 — 인계 (exit 2)")
+                return 2
+            verdict = again
+            _log(f"  {role} 재판정: {verdict}")
 
     # ── BOOKKEEP (supervisor 북키핑 — QA pass 근거로 상태 반영) ──
     feat["passes"] = True
@@ -529,6 +801,8 @@ def main() -> None:
     p_run.add_argument("--expect", default=None, help="grader 기대 출력 문자열 (공허 통과 차단)")
     p_run.add_argument("--files", default="", help="대상 파일 목록 (쉼표 구분 — 재작업 주입·judge cat 용)")
     p_run.add_argument("--max-revisions", type=int, default=3, help="에스컬레이션 임계 (기본 3)")
+    p_run.add_argument("--protect", default="", metavar="FILES",
+                       help="수정 금지 파일 (쉼표 구분). AC 문장에서도 자동 추출한다.")
     sub.add_parser("self", help="의존성 점검")
     args = parser.parse_args()
     if args.command == "run":
