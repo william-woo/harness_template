@@ -594,6 +594,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.opencode/agent/*.md` (render-agents 산출물 — `.claude/agents/` 변환본)
 - `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
+- `.claude/bin/cycle_driver.py` (결정론 supervisor — SDLC 사이클 무인 드라이버, F025/ADR-018)
 - `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 

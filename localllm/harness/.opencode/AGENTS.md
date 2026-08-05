@@ -83,6 +83,21 @@ python3 .claude/bin/host.py render-commands  # .claude/commands/ → .opencode/c
 opencode agent list                          # 인식 확인
 ```
 
+## 무인 사이클 — cycle_driver (F025, supervisor 로컬화)
+
+supervisor(단계 순서·grader·재시도·북키핑)는 LLM 이 아니라 **결정론 드라이버**가 담당한다
+(측정 05: LLM 흐름 조율은 32B 도 실패 → ADR-018). 사이클 전체가 로컬에서 무인 실행:
+
+```bash
+python3 .claude/bin/cycle_driver.py run F001 \
+    --test-cmd "python3 test_x.py" --expect PASS --files x.py,test_x.py
+# exit 0=완주(passes:true)  exit 2=에스컬레이션(상위 호스트 인계)  exit 3=judge NEEDS REVISION
+python3 .claude/bin/cycle_driver.py self    # 의존성 점검
+```
+
+드라이버가 develop(14B)→grade(결정론)→재작업(전체 재작성, 유계)→review/qa(32B, 기록 검증)
+→bookkeep(passes·커밋) 을 순서대로 실행한다. 에스컬레이션 시 정직하게 멈춘다.
+
 ## 대표 사용 패턴
 
 ```bash

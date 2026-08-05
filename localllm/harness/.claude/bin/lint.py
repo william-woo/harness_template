@@ -918,6 +918,7 @@ _VARIANTS_WITH_ORCH = ["claude.gstack.auto.design.wiki.orch"]
 _D2_OVERLAY_FILES = [
     "harness/.opencode/AGENTS.md",
     "harness/.claude/bin/opencode-setup.sh",
+    "harness/.claude/bin/cycle_driver.py",   # 결정론 supervisor 드라이버 (F025 — ADR-018)
 ]
 
 # d-2 상태/산출 디렉토리 (MR-9)
