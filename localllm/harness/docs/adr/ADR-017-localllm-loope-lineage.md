@@ -74,6 +74,15 @@ MultiEdit 잔재(스킬 도구표·freeze/host 커맨드)도 이번에 일소 (A
 
 - localllm = loope 계보(auto+design+wiki+orch+hermes+pm+loop) + d-2 오버레이. 이식 도구
   전수 실동작 확인 (verify_loop 풀사이클 / hill_climb / session_search / skill_forge).
-- render-agents 9 에이전트 + render-commands 30 커맨드 산출.
-- 측정 05 기록: docs/poc/measurements/05-32b-multistep.md + MODEL-GRADES 갱신.
+- render-agents 9 에이전트 + render-commands 30 커맨드 산출 (+ 로컬 LLM 실행 힌트 자동 부착
+  — 측정 05-7 행동 교정 실증).
+- 측정 05 (05-0 ~ 05-10): G4@32B 실패(정직 기록) / **Loop 2 풀사이클 + 자동 에스컬레이션
+  실동작(05-8)** / 스킬 네이티브 발견(05-9) / **세션 회상 d-2 확장(05-10 — OpenCode 세션 DB
+  21건 색인·회상)** → docs/poc/measurements/05-32b-multistep.md + MODEL-GRADES 갱신.
 - lint LINT-MR 0 BLOCK (MR-10/11/13 보유 목록에 localllm 등재).
+
+## 보류 (후속 phase 후보)
+
+- OpenCode plugin 훅 이식 (settings.json hooks 상당) — plugin API 의존이라 보류
+- 측정 06: 신형 로컬 모델(코딩 특화·더 큰 양자화)로 G4 재도전 + judge 품질 벤치
+- render-skills 의 .opencode/skills/ 출력 — OpenCode 가 .claude/skills 를 네이티브 발견하므로 현재 불필요
