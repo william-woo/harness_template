@@ -869,7 +869,9 @@ def cmd_run(args) -> int:
         _vl(["record", feature, "--grader", "test", "--verdict", "revision",
              "--notes", f"grader 실패: {out[:120]}"])
         state = _vl_state(feature)
-        revisions = sum(1 for a in state.get("attempts", []) if a.get("verdict") == "revision")
+        # 예산 분리 (측정 08 / S01): grader 재작업은 grader='test' 판정만 센다.
+        revisions = sum(1 for a in state.get("attempts", [])
+                        if a.get("verdict") == "revision" and a.get("grader") == "test")
         _log(f"② grader FAIL (revision {revisions}) — 출력: {out[:100]}")
         if state.get("escalated") or revisions >= args.max_revisions:
             _log(f"🚨 에스컬레이션 — 상위 호스트(사람/Claude Code) 인계 필요. "
@@ -987,6 +989,7 @@ def cmd_run(args) -> int:
                 verdict = corrected
         # judge revision → developer 재작업 → 재채점 → 재판정 (유계 루프, 측정 08 라운드 12)
         jround = 0
+        grader_ctx = ""
         while verdict != "pass":
             # 거짓 revision 반박: 결정론 검사가 통과한 항목을 "없다" 고 주장하면 증거를 제시하고
             # 1회 재판정을 요청한다 (측정 08 / S06 — judge 는 양방향으로 틀린다).
@@ -1014,9 +1017,12 @@ def cmd_run(args) -> int:
                     if verdict == "pass":
                         break
             state = _vl_state(feature)
-            revisions = sum(1 for a in state.get("attempts", []) if a.get("verdict") == "revision")
-            if state.get("escalated") or revisions >= args.max_revisions or jround >= 2:
-                _log(f"🚨 {role} 판정 미해결 (revision {revisions}) — 상위 호스트 인계 (exit 2)")
+            # 예산 분리: 이 judge 역할의 revision 만 센다 (ADR-014 의 리뷰 판정 기준)
+            jrev = sum(1 for a in state.get("attempts", [])
+                       if a.get("verdict") == "revision" and a.get("grader") == role)
+            jmax = getattr(args, "max_judge_revisions", 3)
+            if jrev >= jmax or jround >= jmax:
+                _log(f"🚨 {role} 판정 미해결 ({role} revision {jrev}/{jmax}) — 상위 호스트 인계 (exit 2)")
                 return 2
             jround += 1
             rec_notes = ""
@@ -1037,13 +1043,14 @@ def cmd_run(args) -> int:
                     "    ...\n"
                     "Use three double-quote characters, on the line right after the def line.\n"
                 )
-            _log(f"  ↻ {role} 지적사항으로 developer 재작업 (judge 라운드 {jround}/2)")
+            _log(f"  ↻ {role} 지적사항으로 developer 재작업 (judge 라운드 {jround}/{jmax})")
             fix_prompt = (
                 f"The {role} rejected {feature} and requires changes.\n"
                 f"{role} finding: {rec_notes}\n"
                 + ("Deterministic checks also report:\n"
                    + "\n".join(f"- {x}" for x in mech2) + "\n" if mech2 else "")
                 + doc_tmpl
+                + grader_ctx
                 + f"{_files_context(files)}\n\n"
                 "Fix exactly these points by REWRITING the affected file COMPLETELY with the "
                 "corrected content (relative filename, real line breaks). Keep the tests passing. "
@@ -1057,7 +1064,15 @@ def cmd_run(args) -> int:
             if not ok2 or blk2:
                 _vl(["record", feature, "--grader", "test", "--verdict", "revision",
                      "--notes", f"judge 재작업 후 grader 실패: {(out2 or ' '.join(blk2))[:120]}"])
-                _log("  ② 재작업 후 grader 실패 — 다음 라운드에서 재시도")
+                # 다음 judge 라운드 지시에 이 grader 실패를 포함시킨다 (측정 08 라운드 17 / S05:
+                # judge 지적을 고치다 테스트를 깨뜨렸는데 그 사실이 다음 지시에 전달되지 않았다)
+                diag = blk2 + _import_diagnosis(out2, files)
+                grader_ctx = ("\nNOTE: your last change broke the test.\n"
+                              f"Test command: {args.test_cmd}\nTest output:\n{out2[-400:]}\n"
+                              + ("Detected problems:\n" + "\n".join(f"- {x}" for x in diag) + "\n"
+                                 if diag else "")
+                              + "Fix the judge finding WITHOUT breaking the test.\n")
+                _log("  ② 재작업 후 grader 실패 — 실패 정보를 다음 라운드 지시에 포함")
                 continue
             _vl(["record", feature, "--grader", "test", "--verdict", "pass",
                  "--notes", "judge 재작업 후 grader 통과"])
@@ -1109,6 +1124,8 @@ def main() -> None:
     p_run.add_argument("--expect", default=None, help="grader 기대 출력 문자열 (공허 통과 차단)")
     p_run.add_argument("--files", default="", help="대상 파일 목록 (쉼표 구분 — 재작업 주입·judge cat 용)")
     p_run.add_argument("--max-revisions", type=int, default=3, help="에스컬레이션 임계 (기본 3)")
+    p_run.add_argument("--max-judge-revisions", type=int, default=3,
+                       help="judge 판정 revision 임계 (ADR-014 리뷰 기준, 기본 3)")
     p_run.add_argument("--require", default="", metavar="FILE:TOKEN[,...]",
                        help="기계 검증 AC: 'file:token' 존재 필수, 'file:!token' 부재 필수")
     p_run.add_argument("--no-autofix", action="store_true",

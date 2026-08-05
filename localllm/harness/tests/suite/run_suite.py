@@ -386,7 +386,9 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
         if kind == "docstring":
             body = (sb / arg).read_text(encoding="utf-8") if (sb / arg).is_file() else ""
             if '"""' not in body and "'''" not in body:
-                findings.append({"o": "O6", "sev": "ACCURACY", "msg": f"{arg} docstring 없음 (AC 위반인데 통과됨)"})
+                findings.append({"o": "O6", "sev": "BUG" if judge_pass else "MODEL",
+                                 "msg": f"{arg} docstring 없음"
+                                        + (" — judge 는 pass 기록" if judge_pass else " (하네스가 막았다)")})
         elif kind == "test_unchanged":
             cur = (sb / arg).read_text(encoding="utf-8") if (sb / arg).is_file() else ""
             if cur != seed_orig.get(arg, cur):
@@ -405,18 +407,21 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
         elif kind == "raises_valueerror":
             body = (sb / arg).read_text(encoding="utf-8") if (sb / arg).is_file() else ""
             if "ValueError" not in body:
-                findings.append({"o": "O6", "sev": "ACCURACY", "msg": f"{arg} 에 ValueError raise 없음"})
+                findings.append({"o": "O6", "sev": "BUG" if judge_pass else "MODEL",
+                                 "msg": f"{arg} 에 ValueError raise 없음"})
         elif kind == "import_chain":
             f, _, mod = arg.partition(":")
             body = (sb / f).read_text(encoding="utf-8") if (sb / f).is_file() else ""
             if mod not in body:
-                findings.append({"o": "O6", "sev": "ACCURACY", "msg": f"{f} 가 {mod} 를 import 하지 않음"})
+                findings.append({"o": "O6", "sev": "BUG" if judge_pass else "MODEL",
+                                 "msg": f"{f} 가 {mod} 를 import 하지 않음"})
         elif kind == "renamed":
             f, _, new = arg.partition(":")
             body = (sb / f).read_text(encoding="utf-8") if (sb / f).is_file() else ""
             if new not in body:
                 # O9 거짓 통과: 요구 변경이 없는데 judge 가 pass 를 기록했다면 BUG
-                sev = "BUG" if judge_pass else "ACCURACY"
+                # 하네스가 막았으면 MODEL, judge 가 통과시켰으면 거짓통과(BUG) — 일관 원칙
+                sev = "BUG" if judge_pass else "MODEL"
                 o = "O9" if judge_pass else "O6"
                 findings.append({"o": o, "sev": sev,
                                  "msg": f"{f} 에 리팩토링 결과 '{new}' 없음"
