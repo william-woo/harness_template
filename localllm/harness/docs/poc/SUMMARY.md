@@ -16,6 +16,7 @@
 | 03b | 멀티스텝 값 전달 (subagent 결과 치환) | ❌ **FAIL (14B 한계)** |
 | 04 | 단일역할 E2E (변환된 .opencode/agent/ + developer) | ✅ **PASS** (mode:all 보정 후) |
 | 05 | 32B 멀티스텝(G4) + loope E2E (F023) | G4 ❌ **32B 도 FAIL** / loope 도구 조작 ✅ **PASS** / 렌더 커맨드 ✅ |
+| 06 | **하네스 통합 테스트** — SDLC 풀사이클 (fizzbuzz, 하이브리드 supervisor) | ✅ **완주** — verify-loop 6기록/revision 2/에스컬레이션 0. 신규 규율 3건 |
 
 > **측정 04 (F015 세션 3)**: 변환된 `.opencode/agent/developer` 로 단일파일 코딩(add.js/sub.js)
 > 을 로컬 14B 가 end-to-end 완성 (node assert 통과). 단, 직접 진입엔 **mode: all** 필수
