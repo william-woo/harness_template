@@ -434,6 +434,50 @@ def _restore_violations(snap: dict[str, str]) -> list[str]:
             fp.write_text(original, encoding="utf-8")
     return violated
 
+def _normalize_tabs(files: list[str]) -> list[str]:
+    """
+    TabError 로 컴파일이 실패하는 파이썬 파일의 **선행 탭만** 스페이스 4칸으로 치환한다.
+
+    측정 08 / S05: 로컬 모델이 탭/스페이스를 섞어 TabError 를 낸다. 공백 정규화는 의미를
+    바꾸지 않으므로 결정론적으로 교정하고, 어떤 파일을 고쳤는지 반환해 로그에 남긴다.
+    """
+    fixed: list[str] = []
+    for rel in files:
+        fp = _ROOT / rel
+        if not fp.is_file() or not rel.endswith(".py"):
+            continue
+        body = fp.read_text(encoding="utf-8", errors="replace")
+        try:
+            compile(body, rel, "exec")
+            continue
+        except TabError:
+            pass
+        except SyntaxError:
+            # 이스케이프 유출(리터럴 \n / \") 도 기계적 직렬화 결함이다 (측정 08 / S06).
+            # 실제 줄바꿈이 없고 리터럴 \n 이 있으면 unescape 를 시도하고, 컴파일되면 채택한다.
+            if body.count("\n") <= 1 and "\\n" in body:
+                cand = body.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")
+                try:
+                    compile(cand, rel, "exec")
+                except SyntaxError:
+                    continue
+                fp.write_text(cand, encoding="utf-8")
+                fixed.append(rel + " (unescape)")
+            continue
+        lines = []
+        for ln in body.splitlines(keepends=True):
+            stripped = ln.lstrip("\t ")
+            indent = ln[: len(ln) - len(stripped)]
+            lines.append(indent.replace("\t", "    ") + stripped)
+        new_body = "".join(lines)
+        try:
+            compile(new_body, rel, "exec")
+        except SyntaxError:
+            continue
+        fp.write_text(new_body, encoding="utf-8")
+        fixed.append(rel)
+    return fixed
+
 def _artifact_problems(files: list[str]) -> list[str]:
     """
     산출 파일의 **형식 결함**을 결정론적으로 진단한다 (측정 08 라운드 10).
@@ -563,7 +607,8 @@ def cmd_run(args) -> int:
             f"Implement feature {feature}: {feat.get('title', '')}.\n"
             f"Acceptance criteria:\n{criteria}\n"
             "Create the files in the current directory with exact relative filenames "
-            "(no leading slash, no directories). Reply DONE when all files exist."
+            "(no leading slash, no directories). Indent with 4 spaces — never tab "
+            "characters. Reply DONE when all files exist."
         )
         _log("① developer(생성형) 구현 호출")
         rc, _ = _agent_call("developer", dev_prompt)
@@ -586,6 +631,10 @@ def cmd_run(args) -> int:
             _vl(["record", feature, "--grader", "test", "--verdict", "fail",
                  "--notes", f"수정 금지 파일 변경(테스트 약화 시도): {violated}"])
             return 2
+        if not getattr(args, "no_autofix", False):
+            tabfixed = _normalize_tabs(files)
+            if tabfixed:
+                _log(f"  ✎ 탭/스페이스 정규화 적용 (의미 보존): {tabfixed}")
         ok, out = _grade(args.test_cmd, args.expect)
         # 공허 통과 차단: 테스트가 통과해도 산출물 자체가 무효(assert 없음/한 줄 파일)면 실패로 본다.
         blocking = _artifact_problems(files) if ok else []
@@ -627,7 +676,8 @@ def cmd_run(args) -> int:
                if fmt else "")
             + f"{_files_context(files)}\n\n"
             "Identify the buggy file and REWRITE that file COMPLETELY with corrected "
-            "content (do not use partial edits). Use the exact relative filename. Reply DONE."
+            "content (do not use partial edits). Use the exact relative filename, real line "
+            "breaks, and 4-space indentation (no tab characters). Reply DONE."
         )
         _log("  ↻ developer 재작업 (전체 파일 재작성 지시)")
         rc, _ = _agent_call("developer", revise_prompt)
@@ -801,6 +851,8 @@ def main() -> None:
     p_run.add_argument("--expect", default=None, help="grader 기대 출력 문자열 (공허 통과 차단)")
     p_run.add_argument("--files", default="", help="대상 파일 목록 (쉼표 구분 — 재작업 주입·judge cat 용)")
     p_run.add_argument("--max-revisions", type=int, default=3, help="에스컬레이션 임계 (기본 3)")
+    p_run.add_argument("--no-autofix", action="store_true",
+                       help="탭/스페이스 결정론 정규화를 끈다 (순수 측정용)")
     p_run.add_argument("--protect", default="", metavar="FILES",
                        help="수정 금지 파일 (쉼표 구분). AC 문장에서도 자동 추출한다.")
     sub.add_parser("self", help="의존성 점검")
