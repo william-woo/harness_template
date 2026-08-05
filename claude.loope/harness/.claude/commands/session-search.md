@@ -28,4 +28,8 @@ python3 .claude/bin/session_search.py self                 # FTS5 지원·색인
 - DB: `.claude/state/sessions.db` (gitignore — 로컬 캐시, 언제든 재색인 가능)
 
 > **claude.hermes 계보 전용** (hermes/productmgr/productnw/loope/localllm) — 그 외 변형엔 session_search.py 가 없다 (LINT-MR-10 격리).
+
+> **d-2 확장 (ADR-017)**: OpenCode 호스트에서는 OpenCode 세션 DB
+> (`~/.local/share/opencode/opencode.db`, `$OPENCODE_DB` 오버라이드)의 이 프로젝트 대화도
+> 함께 색인된다 — `ref: opencode:<session-id>`. Claude Code 호스트에선 DB 부재 시 자동 생략.
 > wiki 의 `/project:wiki query`(지식 노드 검색)와 책임 분리: session-search 는 **세션 이력** 검색.

@@ -126,8 +126,64 @@ def _parse_checkpoints(ckpt_dir: Path) -> list[dict]:
     return items
 
 
+def _opencode_db_path() -> Path:
+    """OpenCode 세션 DB 경로를 반환한다 ($OPENCODE_DB > 기본 위치)."""
+    env = os.environ.get("OPENCODE_DB")
+    if env:
+        return Path(env)
+    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def _parse_opencode_sessions(db_path: Path, project_dir: Path) -> list[dict]:
+    """
+    OpenCode 세션 DB(session/message/part)에서 이 프로젝트의 대화 이력을 항목으로 추출한다.
+
+    d-2 (localllm/opencode 호스트) 확장 — ADR-017. Claude Code 호스트에서는 DB 가
+    없으므로 빈 목록 반환 (graceful degrade). 세션 1개 = 1 항목 (title + 텍스트 파트 결합).
+    """
+    if not db_path.is_file():
+        return []
+    import json as _json
+    items: list[dict] = []
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        sessions = con.execute(
+            "SELECT id, title, agent, time_created FROM session WHERE directory = ?",
+            (str(project_dir),),
+        ).fetchall()
+        for s in sessions:
+            parts = con.execute(
+                "SELECT data FROM part WHERE session_id = ? ORDER BY time_created",
+                (s["id"],),
+            ).fetchall()
+            texts: list[str] = []
+            for p in parts:
+                try:
+                    d = _json.loads(p["data"])
+                except (ValueError, TypeError):
+                    continue
+                if d.get("type") == "text" and d.get("text"):
+                    texts.append(str(d["text"]))
+            if not texts:
+                continue
+            import datetime as _dt
+            ts = _dt.datetime.fromtimestamp((s["time_created"] or 0) / 1000).strftime("%Y-%m-%d %H:%M")
+            items.append({
+                "ref": f"opencode:{s['id']}",
+                "ts": ts,
+                "agent": f"opencode/{s['agent'] or 'build'}",
+                "title": (s["title"] or s["id"])[:120],
+                "body": "\n".join(texts)[:4000],
+            })
+        con.close()
+    except sqlite3.Error:
+        return items  # 부분 결과라도 반환 (경계 방어 — DB 는 외부 산출물)
+    return items
+
+
 def cmd_index(args) -> int:
-    """세션 로그 + 체크포인트를 FTS5 테이블로 (재)색인한다."""
+    """세션 로그 + 체크포인트 (+ OpenCode 세션 DB) 를 FTS5 테이블로 (재)색인한다."""
     if not _fts5_available():
         print("[session-search] ⚠️ 이 sqlite3 빌드는 FTS5 미지원 — 색인 건너뜀 (graceful degrade)")
         return 0
@@ -137,8 +193,12 @@ def cmd_index(args) -> int:
     con.execute(
         "CREATE VIRTUAL TABLE sessions USING fts5(ref, ts, agent, title, body)"
     )
+    oc_rows = _parse_opencode_sessions(_opencode_db_path(), _ROOT)
     rows = _parse_progress(_ROOT / "claude-progress.txt") + \
-        _parse_checkpoints(_ROOT / ".claude" / "state" / "checkpoints")
+        _parse_checkpoints(_ROOT / ".claude" / "state" / "checkpoints") + \
+        oc_rows
+    if oc_rows:
+        print(f"[session-search] OpenCode 세션 {len(oc_rows)}건 포함 (d-2 확장)")
     con.executemany(
         "INSERT INTO sessions(ref, ts, agent, title, body) VALUES(?,?,?,?,?)",
         [(r["ref"], r["ts"], r["agent"], r["title"], r["body"]) for r in rows],
@@ -193,6 +253,8 @@ def cmd_self(args) -> int:
     print(f"  색인 DB: {'존재' if _DB.exists() else '없음 (index 필요)'}")
     prog = _ROOT / "claude-progress.txt"
     print(f"  claude-progress.txt: {'존재' if prog.exists() else '없음'}")
+    oc = _opencode_db_path()
+    print(f"  OpenCode 세션 DB: {'존재 — d-2 확장 색인 대상' if oc.is_file() else '없음 (Claude Code 호스트 — 정상)'}")
     return 0
 
 

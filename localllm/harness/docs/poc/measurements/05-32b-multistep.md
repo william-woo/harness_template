@@ -20,6 +20,8 @@
 | 05-6 | G4 비교: thinking 모델 오케스트레이터 | gemma4:12b | ❌ **무동작** — task 도구 미개입, 출력 없음 |
 | 05-7 | 렌더 커맨드 **로컬 LLM 힌트** 적용 후 재측정 (`--command lint report`) | 14B | ✅ **행동 교정** — 명령 즉시 실행 + 한국어 요약 (요약 충실도는 14B 한계) |
 | 05-8 | **Loop 2 풀사이클** (dev 14B → test grader → 재작업 ×2 → 에스컬레이션 → 상위 티어) | 14B+32B+상위 호스트 | ✅ **수명주기 전체 검증** — 유계 재시도·자동 에스컬레이션 실동작 |
+| 05-9 | 스킬 네이티브 발견 (`.claude/skills` → OpenCode skill 도구) | — (호스트 기능) | ✅ `service=skill count=6 init` — **렌더 불필요** (F016 agentskills.io 정합 배당) |
+| 05-10 | **세션 회상 d-2 확장** (session_search × OpenCode 세션 DB) | — (stdlib) | ✅ 21 세션 색인 + 05-5 reviewer 세션 정확 회상 |
 
 ## 발견 1 — G4 는 32B Q4 에서도 신뢰 불가 (3회 중 0회 클린 통과)
 
