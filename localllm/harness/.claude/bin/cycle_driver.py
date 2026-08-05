@@ -903,11 +903,30 @@ def cmd_run(args) -> int:
         # 기대 출력(--expect)이 없으면 그 사실을 명시적으로 지적한다: 모델이 관용적 테스트
         # 프레임워크로 바꿔 기대 토큰을 출력하지 않는 사례가 반복됐다 (측정 08 라운드 11).
         if args.expect and args.expect not in out:
-            fmt.append(
-                f"테스트 명령이 기대 토큰 '{args.expect}' 를 출력하지 않았습니다 "
-                f"(현재 출력 일부: {out[-160:]!r}). unittest 등 프레임워크로 바꾸지 말고, "
-                f"요구된 대로 plain assert 후 정확히 '{args.expect}' 를 print 하십시오."
+            uses_unittest = any(
+                "unittest" in ((_ROOT / f).read_text(encoding="utf-8", errors="replace")
+                               if (_ROOT / f).is_file() else "")
+                for f in files
             )
+            msg = (f"테스트 명령이 기대 토큰 '{args.expect}' 를 출력하지 않았습니다 "
+                   f"(현재 출력 일부: {out[-160:]!r}).")
+            if uses_unittest:
+                # 로컬 모델은 unittest 관성이 강해 추상 지시로는 안 바뀐다 (측정 08 / S01 반복).
+                # 리터럴 금지 + 코드 템플릿을 준다.
+                msg += (
+                    " 원인: unittest 프레임워크를 사용해 'OK' 만 출력합니다. "
+                    "unittest 를 import 하지 말고 TestCase 클래스를 만들지 마십시오. "
+                    "테스트 파일을 다음 형태로 다시 쓰십시오:\n"
+                    "from <module> import <func>\n\n\n"
+                    "def test_<func>():\n"
+                    "    assert <func>(<입력>) == <기대값>\n"
+                    f"    print('{args.expect}')\n\n\n"
+                    "if __name__ == '__main__':\n"
+                    "    test_<func>()"
+                )
+            else:
+                msg += f" 요구된 대로 plain assert 후 정확히 '{args.expect}' 를 print 하십시오."
+            fmt.append(msg)
         if fmt:
             _log("  ⓘ 산출물 결함 감지: " + " / ".join(x[:60] for x in fmt))
         revise_prompt = (
