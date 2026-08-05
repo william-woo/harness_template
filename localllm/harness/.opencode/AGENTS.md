@@ -36,6 +36,14 @@ OpenCode 에이전트 정의는 `.opencode/agent/*.md`, 커맨드는 `.opencode/
    권한 프롬프트에 걸리고 headless 실행이 **행**합니다. 에이전트에 넘기는 파일은
    프로젝트 루트 근처 얕은 상대경로로. (bash 명령 인자는 무관 — cwd 기준 실행.)
 
+6. **재작업 = 전체 파일 재작성** (측정 06) — 로컬 모델의 정밀 편집(edit oldString)은
+   불일치로 자주 실패합니다. 수정을 지시할 땐 **파일 전체 내용을 제시하고 통째로
+   재작성**하게 하세요 (fizzbuzz 통합 테스트: 정밀 편집 실패 → 전체 재작성 성공).
+
+7. **판정 역할의 파일 읽기 = bash `cat`** (측정 06) — read 도구는 로컬 모델이 경로를
+   날조(`/workspace/...` 등)해 권한 거부됩니다. reviewer/qa 지시문에 "ONLY the bash
+   tool" + `cat <파일>` 을 명시하면 안정적으로 동작합니다.
+
 ## 역할 → 모델 등급 (opencode.json 에 코드화됨)
 
 프로젝트 루트 `opencode.json` 이 역할별 기본 모델을 지정합니다 (전역 설정과 병합):
@@ -61,6 +69,10 @@ python3 .claude/bin/verify_loop.py record <F> --grader lint --verdict pass
 opencode run --agent reviewer "F0XX 구현을 리뷰하고 verify_loop record 로 판정을 남겨줘"
 # 3) 재시도 3회 초과 시 자동 에스컬레이션 (verify_loop.py status <F> 로 확인)
 ```
+
+> **공허 통과(vacuous pass) 주의** (측정 06): 결정론 grader 는 exit code 만 보지 말고
+> **기대 출력**(예: `PASS` 문자열)까지 확인하라 — 로컬 모델이 테스트 함수를 정의만 하고
+> 호출하지 않으면 exit 0 으로 공허 통과한다.
 
 ## 환경 설정 · 렌더링
 
