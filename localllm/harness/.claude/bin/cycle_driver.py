@@ -583,6 +583,27 @@ def _is_echo_note(notes: str) -> bool:
         return True
     return any(p in low for p in _ECHO_PATTERNS)
 
+def _docstring_evidence(files: list[str]) -> list[str]:
+    """
+    함수 docstring 이 실재함을 보여주는 증거 라인을 수집한다 (측정 08 / S01).
+
+    judge 가 "docstring 이 없다" 고 거짓 주장할 때 반박 근거로 쓴다.
+    """
+    ev: list[str] = []
+    for rel in files:
+        fp = _ROOT / rel
+        if not fp.is_file() or not rel.endswith(".py"):
+            continue
+        lines = fp.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            mm = re.match(r"^def\s+(\w+)\s*\(", line)
+            if not mm or i + 1 >= len(lines):
+                continue
+            nxt = lines[i + 1].strip()
+            if nxt.startswith(chr(34) * 3) or nxt.startswith(chr(39) * 3):
+                ev.append(f"{rel}:{i + 2}: {mm.group(1)}() docstring → {nxt[:70]}")
+    return ev
+
 def _false_absence_claims(notes: str, require_spec: str) -> list[str]:
     """
     judge 가 "없다" 고 주장한 항목이 실제로는 존재하는지 확인한다 (측정 08 / S06).
@@ -995,8 +1016,11 @@ def cmd_run(args) -> int:
             # 1회 재판정을 요청한다 (측정 08 / S06 — judge 는 양방향으로 틀린다).
             rec_r = next((a for a in reversed(_vl_state(feature).get("attempts", []))
                           if a.get("grader") == role), {})
-            ev = _false_absence_claims(rec_r.get("notes") or "",
-                                       getattr(args, "require", ""))
+            notes_r = rec_r.get("notes") or ""
+            ev = _false_absence_claims(notes_r, getattr(args, "require", ""))
+            # require 증거가 없어도 docstring 부재 주장은 기계 점검으로 반박할 수 있다 (S01)
+            if not ev and "docstring" in notes_r.lower() and not _mechanical_findings(files):
+                ev = _docstring_evidence(files)
             if ev and jround == 0:
                 _log("  ⚠️ 거짓 부재 주장 감지 — 증거 제시 후 재판정 요청")
                 before_r = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])),
