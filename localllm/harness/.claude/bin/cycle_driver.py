@@ -61,6 +61,10 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
         (returncode, 표준출력+표준에러 결합 텍스트). 두 번 모두 timeout 이면 (124, "").
     """
     cmd = ["opencode", "run"]
+    # --pure: 외부 플러그인 해석(네트워크) 생략 — 부트스트랩 간헐 행의 원인 구간 제거 (측정 07).
+    # 하네스는 OpenCode 플러그인을 사용하지 않으므로 밀폐 실행이 안전 기본값.
+    if os.environ.get("CYCLE_OC_PURE", "1") != "0":
+        cmd.append("--pure")
     if agent:
         cmd += ["--agent", agent]
     if model:
@@ -73,7 +77,10 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
             )
             return r.returncode, (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
-            _log(f"  ⚠️ opencode timeout ({_OC_TIMEOUT}s) — {'재시도' if attempt == 1 else '포기'}")
+            _log(f"  ⚠️ opencode timeout ({_OC_TIMEOUT}s) — {'10초 후 재시도' if attempt == 1 else '포기'}")
+            if attempt == 1:
+                import time
+                time.sleep(10)
     return 124, ""
 
 
@@ -144,18 +151,25 @@ def cmd_run(args) -> int:
         _vl(["start", feature, "--rubric", "code-review"])
     _log(f"▶ {feature} {feat.get('title', '')} — 사이클 시작 (grader: `{args.test_cmd}`)")
 
-    # ── DEVELOP ────────────────────────────────────────────────
-    dev_prompt = (
-        f"Implement feature {feature}: {feat.get('title', '')}.\n"
-        f"Acceptance criteria:\n{criteria}\n"
-        "Create the files in the current directory with exact relative filenames "
-        "(no leading slash, no directories). Reply DONE when all files exist."
-    )
-    _log("① developer(생성형) 구현 호출")
-    rc, _ = _opencode_run("developer", dev_prompt)
-    if rc == 124:
-        _log("❌ developer 호출 실패 (연속 timeout) — 중단")
-        return 1
+    # ── GRADE-FIRST (멱등 재개) ────────────────────────────────
+    # 결정론 게이트가 이미 통과하면 생성 모델을 호출하지 않는다 (측정 07 교훈:
+    # 재개 시 무조건 구현부터 부르면 14B 가 멀쩡한 산출물을 다시 망가뜨린다).
+    ok, _out = _grade(args.test_cmd, args.expect)
+    if ok:
+        _log("① grader 선통과 — 구현 단계 생략 (재개/멱등)")
+    else:
+        # ── DEVELOP ────────────────────────────────────────────
+        dev_prompt = (
+            f"Implement feature {feature}: {feat.get('title', '')}.\n"
+            f"Acceptance criteria:\n{criteria}\n"
+            "Create the files in the current directory with exact relative filenames "
+            "(no leading slash, no directories). Reply DONE when all files exist."
+        )
+        _log("① developer(생성형) 구현 호출")
+        rc, _ = _opencode_run("developer", dev_prompt)
+        if rc == 124:
+            _log("❌ developer 호출 실패 (연속 timeout) — 중단")
+            return 1
 
     # ── GRADE + REVISE 루프 (verify-loop 가 유계·에스컬레이션 관리) ──
     while True:

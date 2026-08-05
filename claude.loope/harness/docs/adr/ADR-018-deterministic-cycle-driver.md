@@ -55,5 +55,8 @@ exit 2/3 으로 상위 호스트(사람/Claude Code)에 인계한다. passes 반
 ## 결과
 
 - `cycle_driver.py` (stdlib, d-2 오버레이 — LINT-MR-9 등재). run/self 서브커맨드.
-- 측정 07: 무인 실행 검증 — docs/poc/measurements/07-unattended-cycle.md
+- 측정 07 (3 run): run1 부트스트랩 행→`--pure` 코드화 / run2 dev 실패 3회→정직 에스컬레이션
+  (상위 호스트 1분 개입) / 재개 버그→**grade-before-generate** 불변식 / run3 **무인 완주 exit 0**
+  — reviewer·qa(32B)가 구체 소견으로 스스로 기록, 드라이버가 passes·커밋까지 수행.
+  → docs/poc/measurements/07-unattended-cycle.md
 - supervisor 역할 재정의: 평시 = 로컬 결정론 드라이버 / 예외(에스컬레이션) = 상위 호스트.
