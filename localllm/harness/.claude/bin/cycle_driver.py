@@ -573,6 +573,9 @@ _ECHO_PATTERNS = (
     "the evidence you saw",
     "evidence seen in the code",
     "concrete finding",
+    "criterion x",              # "Criterion X not met: evidence." (R28 관측 변형)
+    "not met: evidence",
+    "all acceptance criteria met.",   # 근거 없는 포괄 진술
 )
 
 

@@ -300,7 +300,12 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
     gt_ok, gt_out = _ground_truth(sb, scn)
     state = _vl_state(sb)
     judges = _judge_verdicts(state)
-    judge_pass = [j for j in judges if j.get("verdict") == "pass"]
+    # 역할별 **최종** 판정만 본다 (측정 08 R28 / S09: 초기 pass 후 재작업으로 깨진 상태를
+    # '거짓 통과' 로 오판했다 — 하네스는 최종적으로 인계했으므로 성공을 주장하지 않았다)
+    final_by_role: dict = {}
+    for j in judges:
+        final_by_role[j.get("grader")] = j
+    judge_pass = [j for j in final_by_role.values() if j.get("verdict") == "pass"]
 
     # O1 exit code
     exp = scn["expect_exit"]
@@ -319,8 +324,12 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
     # O4 hallucination: judge notes 가 없는 파일/심볼 언급
     for j in judges:
         notes = j.get("notes") or ""
+        # 대소문자만 다른 표기는 환각이 아니다 (측정 08 R29 / S05: 'Divider.py' 로 적었을 뿐
+        # 내용은 정확했다 — 내 oracle 오탐이었다). 대소문자 무시 매칭으로 판별한다.
+        existing_lower = {p.name.lower() for p in sb.rglob("*.py")}
         for tok in re.findall(r"[\w./-]+\.py", notes):
-            if not (sb / tok).is_file():
+            base = tok.split("/")[-1].lower()
+            if not (sb / tok).is_file() and base not in existing_lower:
                 findings.append({"o": "O4", "sev": "BUG",
                                  "msg": f"HALLUCINATION — {j['grader']} notes 가 없는 파일 '{tok}' 언급"})
         if notes.strip() in {"<your concrete finding>", "short finding", ""}:
