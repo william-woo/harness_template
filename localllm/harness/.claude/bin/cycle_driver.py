@@ -67,19 +67,64 @@ def _is_transient(rc: int, out: str) -> bool:
     return any(s in out for s in sig)
 
 
+class _HostLock:
+    """
+    OpenCode 인스턴스를 머신 단위로 직렬화하는 파일 락 (측정 08).
+
+    실측: 같은 데이터 디렉토리(~/.local/share/opencode)를 공유하는 opencode 인스턴스가
+    동시에 뜨면 `createUserMessage` 가 UnknownError 로 즉시 실패한다. 드라이버 여러 개나
+    사람이 병행 사용하는 상황에서 사이클이 무더기로 무산되므로 호출 구간을 직렬화한다.
+    락 획득 실패(타임아웃)는 진행을 막지 않고 경고만 남긴다 — hook-failure-tolerance 정신.
+    """
+
+    def __init__(self, timeout: int = 900):
+        self.path = Path(os.environ.get("CYCLE_OC_LOCK", "/tmp/harness-opencode.lock"))
+        self.timeout = timeout
+        self._fh = None
+
+    def __enter__(self):
+        import fcntl
+        import time as _t
+        deadline = _t.monotonic() + self.timeout
+        self._fh = self.path.open("a+")
+        while True:
+            try:
+                fcntl.flock(self._fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except OSError:
+                if _t.monotonic() >= deadline:
+                    _log("  ⚠️ opencode 락 대기 초과 — 직렬화 없이 진행 (동시 실행 위험)")
+                    return self
+                _t.sleep(2)
+
+    def __exit__(self, *exc):
+        import fcntl
+        if self._fh:
+            try:
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+            finally:
+                self._fh.close()
+                self._fh = None
+        return False
+
+
 def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> tuple[int, str]:
     """
-    opencode run 을 실행한다. 호스트 일시 실패(행/즉시 에러)에 지수 백오프로 재시도한다.
+    opencode run 을 실행한다. 호스트 일시 실패(행/즉시 에러)에 지수 백오프로 재시도하고,
+    머신 단위 락으로 인스턴스를 직렬화한다 (동시 실행 충돌 방지 — 측정 08).
 
     Returns:
         (returncode, 표준출력+표준에러 결합 텍스트). 모든 시도가 일시 실패면 (124, 마지막 출력).
     """
+    import tempfile
     import time
 
     cmd = ["opencode", "run"]
-    # --pure: 외부 플러그인 해석(네트워크) 생략 — 부트스트랩 간헐 행의 원인 구간 제거 (측정 07).
-    # 하네스는 OpenCode 플러그인을 사용하지 않으므로 밀폐 실행이 안전 기본값.
-    if os.environ.get("CYCLE_OC_PURE", "1") != "0":
+    # `--pure` 는 쓰지 않는다 (측정 08): --agent 와 조합하면 에이전트 지정 호출이 100% 실패했다.
+    # 측정 07 에서 `--pure` 를 넣은 근거(부트스트랩 행)는 같은 업스트림 간헐 결함이었고,
+    # 실측 결과 --pure 는 그 결함을 줄이지 못하면서 에이전트 경로만 깨뜨렸다.
+    # (CYCLE_OC_PURE=1 로 명시 opt-in 만 허용 — 진단용.)
+    if os.environ.get("CYCLE_OC_PURE", "0") == "1":
         cmd.append("--pure")
     if agent:
         cmd += ["--agent", agent]
@@ -87,13 +132,20 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
         cmd += ["-m", model]
     cmd.append(prompt)
 
-    attempts = int(os.environ.get("CYCLE_OC_ATTEMPTS", "3"))
+    attempts = int(os.environ.get("CYCLE_OC_ATTEMPTS", "5"))
+    backoffs = [5, 15, 30, 60]
+    iso_dir: str | None = None
     last_out = ""
     for attempt in range(1, attempts + 1):
+        env = dict(os.environ)
+        if iso_dir:
+            env["XDG_DATA_HOME"] = iso_dir
         try:
-            r = subprocess.run(
-                cmd, cwd=_ROOT, capture_output=True, text=True, timeout=_OC_TIMEOUT
-            )
+            with _HostLock():
+                r = subprocess.run(
+                    cmd, cwd=_ROOT, capture_output=True, text=True,
+                    timeout=_OC_TIMEOUT, env=env,
+                )
             rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
         except subprocess.TimeoutExpired:
             rc, out = 124, f"timeout {_OC_TIMEOUT}s"
@@ -101,12 +153,17 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None) -> t
         if not _is_transient(rc, out):
             return rc, out
         reason = "timeout" if rc == 124 else "서버 즉시 실패"
-        if attempt < attempts:
-            backoff = 5 * attempt
-            _log(f"  ⚠️ opencode {reason} — {backoff}초 후 재시도 ({attempt}/{attempts})")
-            time.sleep(backoff)
-        else:
+        if attempt >= attempts:
             _log(f"  ⚠️ opencode {reason} — {attempts}회 모두 실패")
+            break
+        # 3번째 시도부터 데이터 디렉토리를 격리한다 (측정 08: 새 DB 에서는 정상 동작 관측).
+        # 공유 DB 의 상태 경합이 원인일 때 사이클을 살리는 폴백 — 그 실행의 세션 recall 만 분리된다.
+        if attempt >= 2 and iso_dir is None:
+            iso_dir = tempfile.mkdtemp(prefix="harness-oc-data-")
+            _log(f"  ↺ 데이터 디렉토리 격리 폴백 적용: {iso_dir}")
+        backoff = backoffs[min(attempt - 1, len(backoffs) - 1)]
+        _log(f"  ⚠️ opencode {reason} — {backoff}초 후 재시도 ({attempt}/{attempts})")
+        time.sleep(backoff)
     return 124, last_out
 
 
