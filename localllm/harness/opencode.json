@@ -5,21 +5,43 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "Ollama (local LLM)",
       "models": {
-        "qwen2.5:14b-instruct-q8_0": { "name": "Qwen2.5 14B Q8 — 생성형 역할 (G1~G3)" },
-        "qwen2.5:32b-instruct-q4_K_M": { "name": "Qwen2.5 32B Q4 — 판정·오케스트레이션 (G4~G5)" }
+        "qwen2.5:14b-instruct-q8_0": {
+          "name": "Qwen2.5 14B Q8 — 생성형 역할 (G1~G3)"
+        },
+        "qwen2.5:32b-instruct-q4_K_M": {
+          "name": "Qwen2.5 32B Q4 — 판정·오케스트레이션 (G4~G5)"
+        }
       }
     }
   },
   "model": "ollama/qwen2.5:14b-instruct-q8_0",
   "agent": {
-    "developer": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "architect": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "designer": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "planner": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "researcher": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "gatekeeper": { "model": "ollama/qwen2.5:14b-instruct-q8_0" },
-    "reviewer": { "model": "ollama/qwen2.5:32b-instruct-q4_K_M" },
-    "qa": { "model": "ollama/qwen2.5:32b-instruct-q4_K_M" },
-    "product-manager": { "model": "ollama/qwen2.5:32b-instruct-q4_K_M" }
+    "developer": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "architect": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "designer": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "planner": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "researcher": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "gatekeeper": {
+      "model": "ollama/qwen2.5:14b-instruct-q8_0"
+    },
+    "reviewer": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "qa": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    },
+    "product-manager": {
+      "model": "ollama/qwen2.5:32b-instruct-q4_K_M"
+    }
   }
 }

@@ -453,16 +453,38 @@ def _normalize_tabs(files: list[str]) -> list[str]:
         except TabError:
             pass
         except SyntaxError:
-            # 이스케이프 유출(리터럴 \n / \") 도 기계적 직렬화 결함이다 (측정 08 / S06).
-            # 실제 줄바꿈이 없고 리터럴 \n 이 있으면 unescape 를 시도하고, 컴파일되면 채택한다.
+            # 기계적 직렬화 결함 후보들을 순차 시도하고, compile() 로 검증되면 채택한다.
+            #   (a) 이스케이프 유출: 실개행 없이 리터럴 \n / \" 가 들어간 경우
+            #   (b) docstring 인용부호: `"""` 대신 `""` 로 열고 닫은 경우 (측정 08 / S06)
+            cands: list[tuple[str, str]] = []
             if body.count("\n") <= 1 and "\\n" in body:
-                cand = body.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")
+                cands.append(("unescape",
+                              body.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")))
+            dq2 = '"' * 2
+            dq3 = '"' * 3
+            if any(ln.strip() in (dq2, "''") for ln in body.splitlines()):
+                lines = []
+                for ln in body.splitlines(keepends=True):
+                    stripped = ln.strip()
+                    if stripped == dq2:
+                        lines.append(ln.replace(dq2, dq3))
+                    elif stripped == "''":
+                        lines.append(ln.replace("''", "'" * 3))
+                    else:
+                        lines.append(ln)
+                cands.append(("docstring-quote", "".join(lines)))
+            applied = False
+            for label, cand in cands:
                 try:
                     compile(cand, rel, "exec")
                 except SyntaxError:
                     continue
                 fp.write_text(cand, encoding="utf-8")
-                fixed.append(rel + " (unescape)")
+                fixed.append(f"{rel} ({label})")
+                applied = True
+                break
+            if not applied:
+                continue
             continue
         lines = []
         for ln in body.splitlines(keepends=True):
@@ -477,6 +499,67 @@ def _normalize_tabs(files: list[str]) -> list[str]:
         fp.write_text(new_body, encoding="utf-8")
         fixed.append(rel)
     return fixed
+
+def _import_diagnosis(out: str, files: list[str]) -> list[str]:
+    """
+    grader 출력의 NameError 를 import 누락 진단으로 번역한다 (측정 08 / S05).
+
+    누락 심볼이 다른 대상 파일에 정의돼 있으면 "어디서 무엇을 import 하라" 까지 지목한다.
+    """
+    out_l = out or ""
+    problems: list[str] = []
+    for m in re.finditer(r"NameError: name [\'\"](\w+)[\'\"] is not defined", out_l):
+        sym = m.group(1)
+        owner = None
+        for rel in files:
+            fp = _ROOT / rel
+            if not fp.is_file():
+                continue
+            body = fp.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"^(def|class)\s+" + re.escape(sym) + r"\b", body, re.MULTILINE):
+                owner = rel
+                break
+        if owner:
+            mod = owner.rsplit("/", 1)[-1][:-3]
+            problems.append(
+                f"{sym} 가 정의되지 않았습니다 — 테스트 파일 맨 위에 "
+                f"`from {mod} import {sym}` 를 추가하십시오 (정의 위치: {owner})."
+            )
+        else:
+            problems.append(f"{sym} 가 어디에도 정의되지 않았습니다 — 구현을 추가하십시오.")
+    return problems
+
+_ABSENCE_WORDS = ("does not", "not define", "missing", "absent", "없", "누락", "not found")
+
+
+def _false_absence_claims(notes: str, require_spec: str) -> list[str]:
+    """
+    judge 가 "없다" 고 주장한 항목이 실제로는 존재하는지 확인한다 (측정 08 / S06).
+
+    `--require` 로 검증된(통과한) 토큰을 부재라고 주장하면 거짓 revision 이다. 증거 라인을
+    함께 돌려주어 재판정 요청에 사용한다.
+    """
+    low = (notes or "").lower()
+    if not any(w in low or w in (notes or "") for w in _ABSENCE_WORDS):
+        return []
+    evidence: list[str] = []
+    for item in (require_spec or "").split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        rel, token = item.split(":", 1)
+        if token.startswith("!"):
+            continue
+        if token not in (notes or ""):
+            continue
+        fp = _ROOT / rel.strip()
+        if not fp.is_file():
+            continue
+        for i, line in enumerate(fp.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if token in line:
+                evidence.append(f"{rel.strip()}:{i}: {line.strip()[:90]}")
+                break
+    return evidence
 
 def _require_problems(spec: str) -> list[str]:
     """
@@ -592,6 +675,24 @@ def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
     return [rel for rel in files if not (_ROOT / rel).is_file()]
 
 
+def _dev_call(prompt: str, feature: str, prot_snap: dict[str, str]) -> tuple[int, list[str]]:
+    """
+    developer 를 호출하고 **즉시** 보호 파일 위반을 검사·복원한다 (측정 08 / S10).
+
+    위반 검사를 루프 진입 시점에만 두면, 마지막 재작업 직후 에스컬레이션으로 빠져나갈 때
+    치팅이 복원되지 않고 남는다. 호출 직후로 옮겨 모든 경로를 덮는다.
+
+    Returns:
+        (returncode, 위반 파일 목록) — 위반이 있으면 이미 복원됐고 fail 기록도 남았다.
+    """
+    rc, _out = _agent_call("developer", prompt)
+    violated = _restore_violations(prot_snap)
+    if violated:
+        _log(f"🚫 수정 금지 파일 변경 감지 (복원 완료): {violated} — 치팅으로 기록")
+        _vl(["record", feature, "--grader", "test", "--verdict", "fail",
+             "--notes", f"수정 금지 파일 변경(테스트 약화 시도): {violated}"])
+    return rc, violated
+
 def cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     feature = args.feature
@@ -620,12 +721,20 @@ def cmd_run(args) -> int:
     # ── GRADE-FIRST (멱등 재개) ────────────────────────────────
     # 결정론 게이트가 이미 통과하면 생성 모델을 호출하지 않는다 (측정 07 교훈:
     # 재개 시 무조건 구현부터 부르면 14B 가 멀쩡한 산출물을 다시 망가뜨린다).
-    prior_pass = any(a.get("grader") == "test" and a.get("verdict") == "pass"
-                     for a in _vl_state(feature).get("attempts", []))
-    ok, _out = _grade(args.test_cmd, args.expect) if prior_pass else (False, "")
+    # 전체 게이트 선평가 (측정 08 라운드 12·13 교훈):
+    #   - 테스트만 보고 생략하면 리팩토링/문서 요구 과제가 누락된다 (S09)
+    #   - 첫 실행이라고 무조건 개발하면 이미 완성된 산출물을 모델이 망가뜨린다 (S08 멱등 위반)
+    # → **모든 결정론 기준이 충족될 때만** 개발 단계를 생략한다.
+    gate_ok, _out = _grade(args.test_cmd, args.expect)
+    gate_problems = (_artifact_problems(files) + _require_problems(getattr(args, "require", ""))
+                     + _mechanical_findings(files)) if gate_ok else ["grader 실패"]
+    ok = gate_ok and not gate_problems
     if ok:
-        _log("① grader 선통과 + 이전 통과 기록 있음 — 구현 단계 생략 (재개/멱등)")
+        _log("① 모든 결정론 기준 충족 — 구현 단계 생략 (멱등/재개)")
     else:
+        if gate_ok:
+            _log(f"① 결정론 기준 미충족 {len(gate_problems)}건 — 개발 단계 진행: "
+                 + gate_problems[0][:70])
         # ── DEVELOP ────────────────────────────────────────────
         dev_prompt = (
             f"Implement feature {feature}: {feat.get('title', '')}.\n"
@@ -635,7 +744,9 @@ def cmd_run(args) -> int:
             "characters. Reply DONE when all files exist."
         )
         _log("① developer(생성형) 구현 호출")
-        rc, _ = _agent_call("developer", dev_prompt)
+        rc, viol0 = _dev_call(dev_prompt, feature, prot_snap)
+        if viol0:
+            return 2
         if rc == 124:
             _log("❌ developer 호출 실패 (호스트 연속 실패) — 중단")
             return 1
@@ -681,7 +792,7 @@ def cmd_run(args) -> int:
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
         # 재작업 = 전체 파일 재작성 (규칙 6) — 실패 출력 + 현재 내용을 드라이버가 주입
-        fmt = _artifact_problems(files)
+        fmt = _artifact_problems(files) + _import_diagnosis(out, files)
         # 기대 출력(--expect)이 없으면 그 사실을 명시적으로 지적한다: 모델이 관용적 테스트
         # 프레임워크로 바꿔 기대 토큰을 출력하지 않는 사례가 반복됐다 (측정 08 라운드 11).
         if args.expect and args.expect not in out:
@@ -704,7 +815,9 @@ def cmd_run(args) -> int:
             "breaks, and 4-space indentation (no tab characters). Reply DONE."
         )
         _log("  ↻ developer 재작업 (전체 파일 재작성 지시)")
-        rc, _ = _agent_call("developer", revise_prompt)
+        rc, violr = _dev_call(revise_prompt, feature, prot_snap)
+        if violr:
+            return 2
         if rc == 124:
             _log("❌ developer 재작업 호출 실패 — 중단")
             return 1
@@ -791,6 +904,31 @@ def cmd_run(args) -> int:
         # judge revision → developer 재작업 → 재채점 → 재판정 (유계 루프, 측정 08 라운드 12)
         jround = 0
         while verdict != "pass":
+            # 거짓 revision 반박: 결정론 검사가 통과한 항목을 "없다" 고 주장하면 증거를 제시하고
+            # 1회 재판정을 요청한다 (측정 08 / S06 — judge 는 양방향으로 틀린다).
+            rec_r = next((a for a in reversed(_vl_state(feature).get("attempts", []))
+                          if a.get("grader") == role), {})
+            ev = _false_absence_claims(rec_r.get("notes") or "",
+                                       getattr(args, "require", ""))
+            if ev and jround == 0:
+                _log("  ⚠️ 거짓 부재 주장 감지 — 증거 제시 후 재판정 요청")
+                before_r = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])),
+                               default=0)
+                _agent_call(role, (
+                    f"Your revision for {feature} claims something is missing, but a deterministic "
+                    f"check shows it is present:\n" + "\n".join(f"- {e}" for e in ev) + "\n"
+                    "Re-read those lines with bash cat, then record the corrected verdict via bash "
+                    f"(pass if every criterion is now satisfied):\n"
+                    f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
+                    f"--verdict pass --notes '<your finding>'\n"
+                    "The bash tool needs both arguments: command and description."
+                ))
+                again_r = _judge_recorded(feature, role, before_r)
+                if again_r:
+                    _log(f"  ↺ {role} 재판정(증거 제시 후): {again_r}")
+                    verdict = again_r
+                    if verdict == "pass":
+                        break
             state = _vl_state(feature)
             revisions = sum(1 for a in state.get("attempts", []) if a.get("verdict") == "revision")
             if state.get("escalated") or revisions >= args.max_revisions or jround >= 2:
@@ -803,23 +941,32 @@ def cmd_run(args) -> int:
                     rec_notes = a.get("notes") or ""
                     break
             mech2 = _mechanical_findings(files)
+            # 로컬 모델은 "docstring 을 추가하라" 는 추상 지시를 반복 실패한다 (S01/S02/S05).
+            # 실행 가능한 코드 템플릿을 주면 수렴한다 — 짧고 문자 그대로 따를 수 있는 지시.
+            doc_tmpl = ""
+            if any("docstring" in x for x in (mech2 + [rec_notes])):
+                doc_tmpl = (
+                    "\nDocstring template — put a triple-quoted string as the FIRST statement "
+                    "inside the function body, exactly like this shape:\n"
+                    "def divide(a, b):\n"
+                    '    """Return a divided by b. Raise ValueError when b is zero."""\n'
+                    "    ...\n"
+                    "Use three double-quote characters, on the line right after the def line.\n"
+                )
             _log(f"  ↻ {role} 지적사항으로 developer 재작업 (judge 라운드 {jround}/2)")
             fix_prompt = (
                 f"The {role} rejected {feature} and requires changes.\n"
                 f"{role} finding: {rec_notes}\n"
                 + ("Deterministic checks also report:\n"
                    + "\n".join(f"- {x}" for x in mech2) + "\n" if mech2 else "")
+                + doc_tmpl
                 + f"{_files_context(files)}\n\n"
                 "Fix exactly these points by REWRITING the affected file COMPLETELY with the "
                 "corrected content (relative filename, real line breaks). Keep the tests passing. "
                 "Reply DONE."
             )
-            _agent_call("developer", fix_prompt)
-            violated2 = _restore_violations(prot_snap)
+            _rc_fix, violated2 = _dev_call(fix_prompt, feature, prot_snap)
             if violated2:
-                _log(f"🚫 수정 금지 파일 변경 (복원): {violated2} — 인계")
-                _vl(["record", feature, "--grader", "test", "--verdict", "fail",
-                     "--notes", f"수정 금지 파일 변경: {violated2}"])
                 return 2
             ok2, out2 = _grade(args.test_cmd, args.expect)
             blk2 = _artifact_problems(files) + _require_problems(getattr(args, "require", ""))

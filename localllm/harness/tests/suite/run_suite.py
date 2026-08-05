@@ -346,10 +346,11 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
             continue
         body = fp.read_text(encoding="utf-8", errors="replace")
         if "assert" not in body:
-            sev = "BUG" if judge_pass else "ACCURACY"
+            sev = "BUG" if judge_pass else "MODEL"
             findings.append({"o": "O8", "sev": sev,
                              "msg": f"공허 테스트 — {rel} 에 assert 없음"
-                                    + (" (judge 는 pass 기록)" if judge_pass else "")})
+                                    + (" (judge 는 pass 기록 — 거짓 통과)" if judge_pass
+                                       else " (하네스가 차단)")})
 
     # O5 북키핑 정합
     fl = json.loads((sb / "feature_list.json").read_text(encoding="utf-8"))
@@ -432,11 +433,24 @@ def main() -> None:
         findings, gt_ok, judges = _oracles(sb, scn, rc, seed_orig)
         bugs = [f for f in findings if f["sev"] == "BUG"]
         acc = [f for f in findings if f["sev"] == "ACCURACY"]
+        model = [f for f in findings if f["sev"] == "MODEL"]
         infra = ("회 모두 실패" in drv_out) or ("SUITE-TIMEOUT" in drv_out)
-        if infra and not [f for f in bugs if f["o"] in ("O3", "O5")]:
-            verdict = "INFRA"   # 호스트 일시 실패 — 하네스 버그 아님 (재시도 대상)
+        # 하네스가 정직하게 차단·인계한 흔적 (모델 한계 판별용)
+        honest_stop = (rc in (2, 3)) and any(
+            k in drv_out for k in ("에스컬레이션", "치팅으로", "산출물 무효", "인계"))
+        if infra and not [f for f in bugs if f["o"] in ("O3", "O5", "O9")]:
+            verdict = "INFRA"   # 호스트 일시 실패 — 하네스 버그 아님
+        elif not findings:
+            verdict = "PASS"
+        elif [f for f in bugs if f["o"] != "O1"]:
+            verdict = "BUG"     # exit 불일치 외의 하네스 불일치 = 진짜 버그
+        elif acc:
+            verdict = "ACCURACY"
+        elif model or honest_stop:
+            # 모델이 수렴 실패했고 하네스는 정직하게 멈췄다 (하네스 무죄)
+            verdict = "MODEL"
         else:
-            verdict = "PASS" if not findings else ("BUG" if bugs else "ACCURACY")
+            verdict = "BUG"
         rec = {
             "round": rnd, "id": scn["id"], "name": scn["name"], "verdict": verdict,
             "exit": rc, "expect_exit": scn["expect_exit"], "ground_truth_ok": gt_ok,
@@ -446,9 +460,9 @@ def main() -> None:
         }
         with out_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        mark = {"PASS": "✅", "ACCURACY": "⚠️", "BUG": "❌", "INFRA": "🔌"}[verdict]
+        mark = {"PASS": "✅", "ACCURACY": "⚠️", "BUG": "❌", "INFRA": "🔌", "MODEL": "🤖"}[verdict]
         print(f"[{scn['id']}] {mark} {verdict} (exit={rc}, gt={gt_ok}, {rec['secs']}s) "
-              f"bugs={len(bugs)} acc={len(acc)}", flush=True)
+              f"bugs={len(bugs)} acc={len(acc)} model={len(model)}", flush=True)
         for f in findings:
             print(f"    - [{f['sev']}/{f['o']}] {f['msg']}", flush=True)
     print(f"\n=== round {rnd} 완료 → {out_path} ===", flush=True)
