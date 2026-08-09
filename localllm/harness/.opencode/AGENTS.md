@@ -123,6 +123,25 @@ python3 .claude/bin/cycle_driver.py self    # 의존성 점검
 드라이버가 develop(14B)→grade(결정론)→재작업(전체 재작성, 유계)→review/qa(32B, 기록 검증)
 →bookkeep(passes·커밋) 을 순서대로 실행한다. 에스컬레이션 시 정직하게 멈춘다.
 
+### 역할 정책 오버레이
+
+`.claude/policy/<role>.md` 가 있으면 그 지시문이 과제 앞에 붙는다 (없으면 무동작).
+`HARNESS_POLICY_DIR` 로 다른 디렉토리를 주입할 수 있다 — autoresearch 실험이 쓰는 경로다.
+
+## 자가 실험 루프 — autoresearch (F027, ADR-019)
+
+무인 스위트를 적합도 함수로 써서 역할 정책을 실험한다. karpathy/autoresearch 이식.
+
+```bash
+python3 .claude/bin/autoresearch.py run --experiments 3 --scenarios S06,S09 --repeats 2
+python3 .claude/bin/autoresearch.py status                  # 원장 + 챔피언 정책
+python3 .claude/bin/autoresearch.py promote exp-003 --yes    # 하네스 반영 (사람 승인)
+```
+
+게이트·oracle·시나리오는 해시로 **불변**이고, 후보 구간에 거짓 결과나 하네스 결함이 있으면
+실격·무효로 기록된다. **KEEP 은 실험 공간까지** — 측정 09 에서 KEEP 된 정책이 재현 실험에서
+동률로 반증됐다. 승격 전에 재현 실험을 한 번 더 돌린다.
+
 ## 대표 사용 패턴
 
 ```bash

@@ -193,6 +193,7 @@ def _suite_arm(exp_dir: Path, arm: str, policy_dir: Path,
         "pass": sum(1 for r in records if r.get("verdict") == "PASS"),
         "total": len(records),
         "accuracy": sum(1 for r in records if r.get("verdict") == "ACCURACY"),
+        "bug": sum(1 for r in records if r.get("verdict") == "BUG"),
         "records": records,
     }
 
@@ -346,6 +347,12 @@ def cmd_run(args) -> int:
             rec["outcome"] = "INVALID"
             rec["reason"] = "no records"
             _log("  ⚠️ 실행 기록 없음 — 무효")
+        elif cand["bug"] or base["bug"]:
+            # BUG 는 하네스·oracle 자체 결함이다 (측정 08 안정구간에선 전부 oracle 오탐이었다).
+            # 측정기가 오작동한 구간의 점수로 정책을 채택하면 결함을 개선으로 오인한다.
+            rec["outcome"] = "INVALID"
+            rec["reason"] = f"harness/oracle defect in arm (base={base['bug']}, cand={cand['bug']})"
+            _log(f"  ⚠️ 측정기 결함 감지 (base BUG {base['bug']}, cand BUG {cand['bug']}) — 무효")
         elif cand["pass"] > base["pass"]:
             rec["outcome"] = "KEEP"
             for p in _policy_files(_BEST):
