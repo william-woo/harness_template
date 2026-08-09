@@ -117,7 +117,10 @@ def _manifest() -> dict[str, str]:
 
 
 def _policy_files(d: Path) -> list[Path]:
-    return sorted(p for p in d.glob("*.md")) if d.is_dir() else []
+    """정책 파일(`<role>.md`)만 반환한다 — 디렉토리 설명서(README)는 정책이 아니다."""
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob("*.md") if p.stem in _ROLES)
 
 
 def _policy_snapshot(d: Path) -> dict[str, str]:
