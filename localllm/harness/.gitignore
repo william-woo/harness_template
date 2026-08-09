@@ -84,3 +84,6 @@ wiki/log-archive.md
 # product-cycle 핸드오프 런타임 (cycle-id 디렉토리 — gitignore, ADR-011)
 .claude/state/product-cycle/*/
 !.claude/state/product-cycle/.gitkeep
+
+# autoresearch 실험 공간 (결과·샌드박스 — 수 GB 가능, F027)
+.claude/state/autoresearch/

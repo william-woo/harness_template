@@ -212,6 +212,22 @@ def _role_prompt(role: str) -> str | None:
     return desc or body[:800]
 
 
+def _policy_overlay(role: str) -> str:
+    """
+    역할 **정책 오버레이**를 읽는다 (ADR-019, autoresearch).
+
+    `HARNESS_POLICY_DIR`(미설정 시 `.claude/policy/`)의 `<role>.md` 내용을 과제 앞에 덧붙인다.
+    이 경로는 autoresearch 실험이 변경할 수 있는 **유일한 표면**(autoresearch 의 train.py 상당)이며,
+    게이트·oracle·시나리오는 불변이다. 파일이 없으면 빈 문자열 — 평상시 동작에 영향 없다.
+    """
+    base = os.environ.get("HARNESS_POLICY_DIR")
+    d = Path(base) if base else _ROOT / ".claude" / "policy"
+    p = d / f"{role}.md"
+    if not p.is_file():
+        return ""
+    return p.read_text(encoding="utf-8").strip()[:1500]
+
+
 def _agent_call(role: str, task: str) -> tuple[int, str]:
     """
     역할 에이전트를 호출한다. `--agent` 경로가 실패하면 역할 프롬프트 주입으로 폴백한다.
@@ -224,6 +240,10 @@ def _agent_call(role: str, task: str) -> tuple[int, str]:
     폴백 모드의 한계: 도구 권한이 호스트에서 강제되지 않는다 (역할 규율은 프롬프트로만).
     """
     global _AGENT_PATH_HEALTHY
+    pol = _policy_overlay(role)
+    if pol:
+        task = f"POLICY ({role}) — follow these directives while doing the task:\n{pol}\n\n{task}"
+
     if _AGENT_PATH_HEALTHY:
         # 저비용 프로브: 이 경로의 실패는 0.6초 내 즉시 드러나므로 1회만 시도한다.
         rc, out = _opencode_run(role, task, attempts=1)

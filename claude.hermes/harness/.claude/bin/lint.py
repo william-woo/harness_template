@@ -919,6 +919,7 @@ _D2_OVERLAY_FILES = [
     "harness/.opencode/AGENTS.md",
     "harness/.claude/bin/opencode-setup.sh",
     "harness/.claude/bin/cycle_driver.py",   # 결정론 supervisor 드라이버 (F025 — ADR-018)
+    "harness/.claude/bin/autoresearch.py",   # 자가 실험 루프 (F027 — ADR-019)
 ]
 
 # d-2 상태/산출 디렉토리 (MR-9)
@@ -926,6 +927,7 @@ _D2_OVERLAY_DIRS = [
     "harness/.opencode/agent",
     "harness/.opencode/commands",   # render-commands 산출물 (F023 — ADR-017)
     "harness/docs/poc",
+    "harness/.claude/policy",       # autoresearch 승격 대상 (F027 — 사람 승인분만)
 ]
 
 # d-2 오버레이가 없어야 하는 변형 (MR-9: localllm 외 6 변형 — openai 는 별도 처리)

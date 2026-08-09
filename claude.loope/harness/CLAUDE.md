@@ -383,6 +383,30 @@ bash .claude/bin/wiki-setup.sh
 
 ---
 
+### 하네스 자가 실험 루프 (Phase 16 — F027, localllm 전용)
+
+> **사용 가능 변형**: `localllm/` 만 (ADR-019 결정 5). 무인 스위트(적합도 함수) + `cycle_driver`
+> (무인 드라이버) + 로컬 GPU(실험당 추가 과금 0) 가 모두 갖춰진 유일한 변형이기 때문이다.
+> karpathy/autoresearch 이식 — **자동 채택은 실험 결과까지, 하네스 반영은 사람 승인**.
+
+```
+python3 .claude/bin/autoresearch.py init                  # program.md + 실험 공간
+python3 .claude/bin/autoresearch.py run --experiments 3 --scenarios S06,S09 --repeats 2
+python3 .claude/bin/autoresearch.py status                # 원장 + 챔피언 정책
+python3 .claude/bin/autoresearch.py promote exp-003        # 근거·변경 표시 (미반영)
+python3 .claude/bin/autoresearch.py promote exp-003 --yes  # 하네스 본체 반영 (사람 승인)
+```
+
+한 실험 = 베이스라인 측정 → 후보 제안(로컬 LLM) → 후보 측정 → 무결성 검사 → KEEP/DISCARD.
+게이트·oracle·시나리오는 **불변**(해시 검사)이고, 후보 구간에 거짓 결과가 1건이라도 있으면
+점수와 무관하게 **실격**이다. 실험 방향은 코드가 아니라 `program.md` 를 고쳐서 조종한다.
+
+**호출 기준**: 스위트 재현율이 낮은 시나리오의 원인이 모델의 *작업 방식*으로 보일 때 / 유휴
+시간에 로컬 GPU 를 개선 실험에 쓰고 싶을 때. 실험 1건은 스위트를 2회 돌리므로 비싸다 —
+해당 없으면 호출하지 않는다.
+
+---
+
 ### 멀티 호스트 관리 (Phase 3 업그레이드 — F006)
 
 ```
@@ -762,7 +786,9 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.opencode/commands/*.md` (render-commands 산출물 — `.claude/commands/` 변환본, F023)
 - `.claude/bin/opencode-setup.sh` (OpenCode 설치 + Ollama provider 설정)
 - `.claude/bin/cycle_driver.py` (결정론 supervisor — SDLC 사이클 무인 드라이버, F025/ADR-018)
-- `docs/poc/` (측정 01~04 + SUMMARY + MODEL-GRADES)
+- `.claude/bin/autoresearch.py` (자가 실험 루프 — 스위트를 적합도 함수로, F027/ADR-019)
+- `.claude/policy/` (역할 지시 오버레이 — **사람이 승인한 것만**, autoresearch 승격 대상)
+- `docs/poc/` (측정 01~09 + SUMMARY + MODEL-GRADES)
 - coding 스킬 "상대경로 우선" 보강
 
 **hermes 오버레이** (claude.hermes + claude.productmgr + claude.productnw + claude.loope + localllm 에 존재 — F016 신설·F023 확장):

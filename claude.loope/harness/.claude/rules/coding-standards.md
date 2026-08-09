@@ -31,7 +31,10 @@
 - **F023 loope 계보 승격**: hermes(session_search/skill_forge)+pm(product-cycle)+loop(verify_loop/hill_climb) 오버레이 보유 — 전부 stdlib. 판정(judge) 역할은 32B+ 로컬 모델 권장
 - 핵심 어댑터(opencode.py)·헬퍼는 stdlib only — OpenCode/Ollama 는 *실행 환경*일 뿐
 - **검증 범위**: 단일역할(14B) E2E 검증 완료(측정 04). 멀티스텝(orchestrate)은 32B 환경 확보 시 측정 05 로 검증 — 현재 환경 부재로 보류
-- LINT-MR-9 가 d-2 오버레이(.opencode/ 런타임 + docs/poc + opencode-setup.sh) 의 localllm 전용 격리를 강제
+- **F027 autoresearch**: 무인 스위트를 적합도 함수로 쓰는 자가 실험 루프 보유 (ADR-019). 변경 표면은
+  역할 지시(`.claude/policy/<role>.md`) 하나뿐이고 게이트·oracle·시나리오는 해시로 불변 강제. **자동
+  채택은 실험 원장까지 — 하네스 본체 반영은 `promote --yes`(사람 승인)로만**. stdlib only
+- LINT-MR-9 가 d-2 오버레이(.opencode/ 런타임 + docs/poc + opencode-setup.sh + cycle_driver/autoresearch + .claude/policy) 의 localllm 전용 격리를 강제
 
 **claude.hermes 변형 예외 계약** (ADR-010):
 - NousResearch/hermes-agent 패턴 이식 — FTS5 세션검색 + 스킬 자동생성/self-improve + agentskills.io 표준

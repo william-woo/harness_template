@@ -53,19 +53,35 @@ OpenCode 에이전트 정의는 `.opencode/agent/*.md`, 커맨드는 `.opencode/
 9. **bash 도구는 `command` + `description` 두 인자 필수** (측정 05·08) — description 을 빼면
    스키마 에러로 호출이 무산된다. bash 사용을 지시할 때 이 점을 함께 알려라.
 
-## 역할 → 모델 등급 (opencode.json 에 코드화됨)
+## 역할 → 모델 매핑 (opencode.json 이 SSOT)
 
-프로젝트 루트 `opencode.json` 이 역할별 기본 모델을 지정합니다 (전역 설정과 병합):
+**현재 설정** (측정 08 라운드 14 이후 — 생성형도 32B 로 승급):
 
-| 역할 | 성격 | 기본 모델 | 근거 |
-|---|---|---|---|
-| developer / architect / designer / planner / researcher / gatekeeper | **생성형** (1홉) | `qwen2.5:14b-instruct-q8_0` | 측정 02·04 PASS |
-| reviewer / qa / product-manager | **판정(judge)·다홉** | `qwen2.5:32b-instruct-q4_K_M` | 측정 04 — 14B 검증형 불안정 |
-| orchestrate / product-cycle (supervisor 흐름) | **멀티스텝 값 전달** | 32B+ | 측정 03b FAIL(14B) |
+| 역할 | 모델 |
+|---|---|
+| architect · designer · developer · planner · product-manager · qa · researcher · reviewer | `qwen2.5:32b-instruct-q4_K_M` |
+| gatekeeper | `qwen2.5:14b-instruct-q8_0` |
+| (기본값) | `qwen2.5:14b-instruct-q8_0` |
 
-> provider `baseURL` 은 전역 설정(`~/.config/opencode/opencode.json*`)에서 병합됩니다 —
-> `bash .claude/bin/opencode-setup.sh` 가 생성. 원격 Ollama 서버를 쓰면 그쪽 baseURL 로.
+| 모델 | 크기 | 근거 |
+|---|---|---|
+| `qwen2.5:32b-instruct-q4_K_M` | 19.9GB | 측정 08 — 14B 는 다중파일·AC 준수 과제에서 3라운드 연속 수렴 실패, 32B 전환 즉시 exit 0 완주 |
+| `qwen2.5:14b-instruct-q8_0` | 15.7GB | 측정 02·04 — 단일파일·단순 과제에는 충분 (현재 gatekeeper 만 사용) |
 
+> **비교 실험용**: `gemma4:12b` 는 측정 05(G4 오케스트레이션)에서만 사용했고 무동작이었다.
+
+### ⚠️ 모델은 **전역 설정**에 등재돼야 해석된다 (측정 08 발견 2)
+
+OpenCode 1.16.2 는 프로젝트 `opencode.json` 의 `provider.*.models` 를 **모델 해석에 반영하지
+않는다**. 역할 모델이 `~/.config/opencode/opencode.json*` 에 없으면 **`--agent` 실행 전체가**
+`UnknownError` 로 실패한다 (레지스트리 로드 시 전 역할 모델을 해석하므로).
+
+```bash
+bash .claude/bin/opencode-setup.sh            # 누락 모델을 전역 설정에 자동 병합
+python3 .claude/bin/cycle_driver.py self      # 역할 모델 해석 가능 여부 프리플라이트
+```
+
+> Ollama 서버: 전역 설정의 provider `baseURL` 로 지정 (원격 서버 사용 가능).
 ## Loop 2 × 로컬 LLM — 결정론 grader 우선 (F023 핵심 규율)
 
 verify-loop 의 **결정론 grader 우선** 원칙이 로컬 LLM 의 검증 약점을 구조적으로 보완합니다:
