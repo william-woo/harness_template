@@ -50,6 +50,22 @@ python3 .claude/bin/verify_loop.py self                             # 점검
 - `.claude/rubrics/qa-acceptance.md` — QA 용 (acceptance_criteria 기반)
 - 프로젝트에 맞게 편집/추가 가능 (`.claude/rubrics/<name>.md` → `--rubric <name>`)
 
+## 항목형 판정 (AIF 오버레이 — ADR-020)
+
+이 변형은 산문형 rubric 외에 **항목형 채점표**를 갖는다. 판정이 흔들리거나 게이트가 중요할 때
+`aif_judge.py` 로 항목별 증거를 요구하고 앙상블한다:
+
+```bash
+python3 .claude/bin/aif_judge.py plan code-review --target <파일들> --repeats 3
+# 위 프롬프트로 3회 독립 판정 → 각각 기록
+python3 .claude/bin/aif_judge.py record code-review --run <F>-r1 --file j1.txt
+python3 .claude/bin/aif_judge.py aggregate <F>-r1
+# 최종이 pass/revision 이면 그대로 verify_loop record, uncertain 이면 에스컬레이션
+```
+
+`uncertain` 은 `pass|revision` 중 하나로 기록하지 않는다 — 반복을 늘려 해소하거나 사람이 본다.
+자세한 형식은 [aif-judge 커맨드](aif-judge.md) 와 [항목 스키마](../rubrics/_items-schema.md).
+
 ## 호출 기준
 
 - Reviewer/QA 가 판정을 내릴 때마다 `record` (reviewer.md/qa.md 에 연동됨)

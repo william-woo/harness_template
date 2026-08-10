@@ -113,6 +113,10 @@ npm test -- --coverage
 ## Loop 2 — verify-loop 기록 (claude.loope 정형화)
 
 판정을 내릴 때마다 **verify-loop 에 기록**한다 (rubric: `.claude/rubrics/code-review.md`).
+
+> **AIF 변형**: 판정이 흔들리거나 게이트가 중요하면 항목형 채점표로 증거를 요구한다 —
+> `python3 .claude/bin/aif_judge.py plan code-review --target <파일들>` (ADR-020).
+> 집계가 `uncertain` 이면 pass/revision 으로 기록하지 않고 에스컬레이션한다.
 이로써 재시도 횟수·판정 이력이 상태로 남고 에스컬레이션이 **자동 판정**된다:
 
 ```bash

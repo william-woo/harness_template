@@ -94,6 +94,10 @@ npm test
 ## Loop 2 — verify-loop 기록 (claude.loope 정형화)
 
 QA 판정을 verify-loop 에 기록한다 (rubric: `.claude/rubrics/qa-acceptance.md`).
+
+> **AIF 변형**: acceptance_criteria 를 항목 단위로 판정하려면
+> `python3 .claude/bin/aif_judge.py plan qa-acceptance --target <파일들>` (ADR-020).
+> `met` 은 `파일:행` 또는 실행 출력 인용이 있어야 인정된다.
 결정론 grader(qa-browser 등)를 먼저 기록해 값싼 게이트를 통과시킨 뒤 QA judge 판정을 남긴다:
 
 ```bash
