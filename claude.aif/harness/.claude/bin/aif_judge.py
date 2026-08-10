@@ -68,27 +68,39 @@ def parse_items(name: str) -> list[dict]:
         m = _ITEM_HEADER.match(line)
         if m:
             items.append({"id": m.group(1), "sev": m.group(2), "title": m.group(3),
-                          "req": "", "ev": "", "rule": ""})
+                          "req": "", "ev": "", "rule": "", "evtype": "위치"})
             continue
         if not items:
             continue
-        for key, prefix in (("req", "요구:"), ("ev", "증거:"), ("rule", "판정:")):
+        for key, prefix in (("req", "요구:"), ("ev", "증거:"), ("rule", "판정:"),
+                            ("evtype", "증거유형:")):
             if line.startswith(prefix):
                 items[-1][key] = line[len(prefix):].strip()
     return items
 
 
-def build_prompt(name: str, items: list[dict], target: str) -> str:
-    """판정 프롬프트를 만든다 (항목·요구·증거 + 출력 형식 + 금지 사항)."""
+def build_prompt(name: str, items: list[dict], target: str, context: str = "") -> str:
+    """
+    판정 프롬프트를 만든다 (항목·요구·증거 + 판정 대상 내용 + 출력 형식).
+
+    `context` 에 대상 파일 내용을 넣어야 한다. 파일명만 주면 모델이 도구로 파일을 읽으려
+    시도하다 실패하고 산문을 반환한다 (측정 10 — 첫 A/B 에서 판정 100% 무효의 원인).
+    판정은 **주어진 내용만으로** 하게 하고 도구 사용을 금지한다.
+    """
     lines = [f"{it['id']} ({it['sev']}) {it['title']}\n"
              f"    요구: {it['req']}\n    증거: {it['ev']}"
+             + ("  [부재 항목 — 확인한 범위를 서술하라]" if it.get("evtype", "").startswith("부재") else "")
              + (f"\n    판정: {it['rule']}" if it["rule"] else "")
              for it in items]
     ids = ", ".join(it["id"] for it in items)
+    body = context.strip() or "(대상 내용이 제공되지 않았다 — 확인 불가 항목은 unmet 으로 판정하라)"
     return (
         f"RUBRIC 판정 — {name}\n"
         f"대상: {target}\n\n"
-        "아래 각 항목을 대상에서 직접 확인하고 항목마다 정확히 한 줄로 판정하라.\n\n"
+        "Judge from the content below only. Do NOT use any tool (no file read, no web fetch) — "
+        "everything you need is in this prompt.\n\n"
+        f"===== 판정 대상 내용 =====\n{body}\n===== 내용 끝 =====\n\n"
+        "아래 각 항목을 위 내용에서 확인하고 항목마다 정확히 한 줄로 판정하라.\n\n"
         + "\n".join(lines) + "\n\n"
         "출력 형식 (다른 텍스트 없이 이 줄들만):\n"
         "<항목id>: <met|unmet|na> | <증거> | <인용(선택)>\n\n"
@@ -99,6 +111,16 @@ def build_prompt(name: str, items: list[dict], target: str) -> str:
         "- na 는 항목이 대상에 적용되지 않을 때만 쓰고, 사유를 적는다.\n"
         "- rubric 의 '증거:' 문구를 그대로 옮겨 적는 것은 증거가 아니다.\n"
     )
+
+
+def _read_target(target: str) -> str:
+    """`--target` 의 쉼표 구분 경로들을 읽어 판정 대상 내용을 만든다 (없는 파일은 표시)."""
+    chunks = []
+    for name in (t.strip() for t in target.split(",") if t.strip()):
+        p = _ROOT / name
+        body = p.read_text(encoding="utf-8") if p.is_file() else "(파일 없음)"
+        chunks.append(f"--- {name} ---\n{body}")
+    return "\n".join(chunks)
 
 
 # ─────────────────────────────── 판정 검증 ────────────────────────────────
@@ -139,9 +161,13 @@ def validate(items: list[dict], raw: str) -> dict:
         rec = {"verdict": verdict, "evidence": evidence, "invalid": ""}
 
         if verdict == "met":
-            if len(evidence) < 12:
+            # 부재 항목("자격증명 없음" 등)은 원리상 파일:행 증거가 불가능하다 — 대신 어떤 범위를
+            # 확인했는지 서술을 요구한다 (측정 10: 위치 증거를 강요하면 상시 UNCERTAIN 이 된다).
+            absence = by_id[iid].get("evtype", "위치").startswith("부재")
+            floor = 20 if absence else 12
+            if len(evidence) < floor:
                 rec["invalid"] = "증거 부재 또는 과소"
-            elif not (_PATH_LINE.search(evidence) or _QUOTED.search(evidence)):
+            elif not absence and not (_PATH_LINE.search(evidence) or _QUOTED.search(evidence)):
                 rec["invalid"] = "파일:행 또는 인용 증거 없음"
             elif _norm(by_id[iid]["ev"])[:15] and _norm(evidence).startswith(_norm(by_id[iid]["ev"])[:15]):
                 rec["invalid"] = "rubric 증거 문구 에코"
@@ -207,7 +233,7 @@ def cmd_plan(args) -> int:
     if not items:
         _log(f"❌ rubric 항목 없음 — {_RUBRICS / (args.rubric + '.items.md')}")
         return 1
-    _log(build_prompt(args.rubric, items, args.target))
+    _log(build_prompt(args.rubric, items, args.target, _read_target(args.target)))
     if args.repeats > 1:
         _log(f"\n# 위 프롬프트를 {args.repeats}회 독립 실행한 뒤 각각 record 하고 aggregate 한다.")
     return 0
@@ -279,7 +305,8 @@ def cmd_compare(args) -> int:
         return 1
     for first, second, tag in ((args.a, args.b, "AB"), (args.b, args.a, "BA")):
         _log(f"\n===== 순서 {tag} =====")
-        _log(build_prompt(args.rubric, items, f"후보1={first}, 후보2={second}"))
+        _log(build_prompt(args.rubric, items, f"후보1={first}, 후보2={second}",
+                          _read_target(f"{first},{second}")))
     _log("\n# 두 순서의 판정이 다르면 그 항목은 position bias 로 오염된 것이다 → UNCERTAIN 처리.")
     _log("# RLAIF 실측: 순서 편향이 큰 모델 18%, 작은 모델 56%.")
     return 0
@@ -299,7 +326,7 @@ def cmd_auto(args) -> int:
         _log("  다른 변형에서는 plan → (호스트 judge) → record → aggregate 로 쓴다.")
         return 2
 
-    prompt = build_prompt(args.rubric, items, args.target)
+    prompt = build_prompt(args.rubric, items, args.target, _read_target(args.target))
     model = cd._role_models().get(args.role)
     d = _STATE / args.run
     d.mkdir(parents=True, exist_ok=True)

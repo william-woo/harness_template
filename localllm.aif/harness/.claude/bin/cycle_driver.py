@@ -810,7 +810,7 @@ def _aif_findings(role: str, files: list[str]) -> list[str]:
     if not items:
         return []
     repeats = int(os.environ.get("CYCLE_AIF_REPEATS", "2"))
-    prompt = aj.build_prompt(rubric, items, ", ".join(files))
+    prompt = aj.build_prompt(rubric, items, ", ".join(files), _files_context(files))
     model = _role_models().get(role)
     judgments = []
     for _ in range(repeats):
@@ -819,7 +819,8 @@ def _aif_findings(role: str, files: list[str]) -> list[str]:
             return []
         judgments.append(aj.validate(items, out))
     if not any(j.get("valid") for j in judgments):
-        _log(f"  ⓘ AIF 항목 판정({role}) 전부 무효 — 주입 없음")
+        why = "; ".join(j.get("reason", "?")[:70] for j in judgments)
+        _log(f"  ⓘ AIF 항목 판정({role}) 전부 무효 — 주입 없음 ({why})")
         return []
 
     agg = aj.aggregate(items, judgments)
