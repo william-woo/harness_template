@@ -840,6 +840,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.claude/rubrics/{_items-schema,code-review.items,qa-acceptance.items}.md` (RaR 형식 채점표)
 - `.claude/commands/aif-judge.md`, `.claude/state/aif/` (판정 기록)
 - (localllm.aif 만) `cycle_driver` 의 `_aif_findings` — 항목형 앙상블 결과를 judge 입력에 주입
+- (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
 회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
 
