@@ -90,3 +90,7 @@ wiki/log-archive.md
 .claude/state/verify-loop/*.json
 !.claude/state/verify-loop/.gitkeep
 !.claude/state/verify-loop/README.md
+
+# AIF 판정 기록 (런타임 상태 — F028)
+.claude/state/aif/*
+!.claude/state/aif/.gitkeep
