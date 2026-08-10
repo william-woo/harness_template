@@ -1,0 +1,329 @@
+# claude-progress.txt
+# 에이전트 세션 인계 파일 — 자동 관리됨 (직접 수정 금지, 에이전트가 append)
+# 포맷: /project:handoff 커맨드로 업데이트
+# ============================================================
+
+============================================================
+[2026-04-25 01:46] Developer: F001 Phase 1 완료 (Safety + Learn + Context 이식)
+============================================================
+작업한 Feature: F001
+작업 내용:
+  - gstack careful/freeze/guard/learn/context-save/context-restore 6개 스킬 분석
+  - 우리 하네스에 맞게 번역·이식 (preamble 미이식, 프로젝트 로컬 상태 사용)
+  - pre-bash-check.sh에 SQL/k8s/docker 패턴 + safe exceptions 추가
+  - pre-edit-freeze-check.sh 신규 + settings.json chain wiring
+  - /project:freeze, unfreeze, guard, learn, context-save, context-restore 신규
+  - handoff.md, start-session.md, planner.md에 신규 커맨드 연동
+  - feature_list.json을 실제 Phase 로드맵(F001-F008)으로 재구성
+  - .claude/state/learnings.jsonl 초기 10개 학습 시딩
+  - src/harness_template/harness/ 동기화 완료
+
+현재 상태: done (F001)
+feature status: todo → done
+passes: false → true (F001 자체 검증 완료)
+
+체크포인트: .claude/state/checkpoints/20260425-014624-phase-1-safety-learn-context-complete.md
+
+파일 변경:
+  - 신규: .claude/hooks/pre-edit-freeze-check.sh
+  - 신규: .claude/commands/{freeze,unfreeze,guard,learn,context-save,context-restore}.md
+  - 신규: .claude/state/learnings.jsonl, checkpoints/
+  - 수정: .claude/hooks/pre-bash-check.sh (SQL/k8s/docker + safe exc)
+  - 수정: .claude/settings.json (freeze hook chain)
+  - 수정: .claude/commands/{handoff,start-session}.md (신규 커맨드 통합)
+  - 수정: .claude/agents/planner.md (learn 조회 0/5단계)
+  - 수정: CLAUDE.md (신규 커맨드 문서화 + 상태 파일 표)
+  - 수정: .gitignore (freeze-dir.txt 제외)
+  - 수정: feature_list.json (placeholder → 실제 로드맵)
+
+다음 세션 할 일:
+  - [ ] F002 Autoplan (/project:plan-full) 구현
+  - [ ] F003 Review Readiness (/project:ship) 구현
+  - [ ] F004 Retro + Analytics (/project:retro) 구현 + analytics.jsonl 스키마
+  - [ ] Phase 2 완료 후 템플릿 재동기화
+
+주의사항:
+  - 현재 디렉토리는 git repo 아님 (git init 미수행)
+  - post-write-check.sh는 HEAD 없으면 비교 스킵하므로 현재 passes:true 설정 허용됨
+  - Phase 2 Autoplan 구현 시 "설계 필요 판별 규칙"을 일원화 필요
+============================================================
+
+============================================================
+[2026-04-25 09:08] Developer: F002+F003+F004 Phase 2 완료 (Autoplan + Ship + Retro+Analytics)
+============================================================
+작업한 Feature: F002, F003, F004
+작업 내용:
+  - /project:plan-full (Autoplan: Planner→Architect→Reviewer 체인)
+  - /project:ship (diff 정규식 분류 → 카테고리별 리뷰만 추천)
+  - /project:retro + analytics.jsonl 스키마 (handoff·session_end·review_iteration 이벤트)
+  - handoff.md Step 7에 analytics append 자동화 추가
+  - session-end.sh 훅에 세션 종료 이벤트 append 추가
+  - CLAUDE.md에 Phase 2 섹션 + analytics.jsonl 행 추가
+  - feature_list.json: F002/F003/F004 → done + passes:true
+  - learnings.jsonl: Phase 2 학습 8건 추가 (총 18건)
+  - 체크포인트: 20260425-090828-phase-2-autoplan-ship-retro-complete.md
+  - src/harness_template/harness/ 동기화 완료
+
+현재 상태: done (F002, F003, F004)
+feature status: 모두 todo → done, passes false → true
+
+체크포인트: .claude/state/checkpoints/20260425-090828-phase-2-autoplan-ship-retro-complete.md
+
+파일 변경:
+  - 신규: .claude/commands/{plan-full,ship,retro}.md
+  - 수정: .claude/commands/handoff.md (Step 7 analytics append)
+  - 수정: .claude/hooks/session-end.sh (analytics append + || true)
+  - 수정: CLAUDE.md (Phase 2 섹션 + analytics 상태 파일 행)
+  - 수정: feature_list.json (F002~F004 done)
+  - append: .claude/state/learnings.jsonl (8건)
+  - 신규: .claude/state/checkpoints/20260425-090828-*.md
+
+다음 세션 할 일:
+  - [ ] git init + harness_gstack 브랜치 + 커밋 (사용자 요청)
+  - [ ] git push 는 원격 URL 필요 — 사용자가 제공해야 함
+  - [ ] F005 GBrain Local (PGLite) 착수 가능
+  - [ ] F006 멀티 호스트 아키텍처 준비
+  - [ ] F007/F008 Phase 4
+
+주의사항:
+  - post-write-check.sh가 status 역행과 passes 되돌리기를 차단 — F002~F004 done은 영구
+  - analytics.jsonl은 처음 핸드오프 호출 시 자동 생성됨
+  - retro 통계는 handoff 호출이 누적된 후에야 의미 있음 (현재 0건)
+  - meta-command(plan-full)는 직접 일하지 않고 다른 에이전트들을 순차 호출하는 패턴
+============================================================
+
+============================================================
+[2026-04-25 09:22] Developer: F005 Phase 3 Brain Local 완료 (SQLite cross-project 지식)
+============================================================
+작업한 Feature: F005
+작업 내용:
+  - .claude/bin/brain.py 단일 Python 스크립트 (외부 의존성 0, stdlib sqlite3)
+  - 5개 서브커맨드: init, sync, search, stats, list
+  - 4개 슬래시 커맨드: /project:brain-sync, brain-search, brain-stats, brain-list
+  - 스키마 4개 테이블: projects, learnings, adrs, features (project_slug 격리)
+  - learnings.jsonl + feature_list.json + docs/adr/*.md 파싱 → INSERT OR REPLACE
+  - tombstone 학습은 sync 시점에 자동 제외
+  - 빈 query + --type/--project 필터 조합 허용
+  - 모든 핸들러 try/except 로 exit 0 보장 (호출자 차단 방지)
+  - DB 위치: ~/.harness/brain.db (사용자 홈, git 미포함)
+  - PGLite 대신 SQLite 채택 — Node.js+npm 의존성 제거
+  - Dry-run 5종 테스트 통과 (init/sync/search/stats/list, /tmp 격리 DB)
+  - 멱등성 검증: 두 번 sync → 18 learnings/8 features/1 ADR 동일
+
+현재 상태: done (F005)
+feature status: todo → done, passes false → true
+
+체크포인트: .claude/state/checkpoints/20260425-092245-phase-3-brain-local-sqlite.md
+
+파일 변경:
+  - 신규: .claude/bin/brain.py (Python 헬퍼)
+  - 신규: .claude/commands/{brain-sync,brain-search,brain-stats,brain-list}.md
+  - 수정: CLAUDE.md (Phase 3 Brain 섹션)
+  - 수정: feature_list.json (F005 done, 제목/AC를 SQLite 기반으로 갱신)
+  - append: .claude/state/learnings.jsonl (6건 추가, 총 24)
+  - 신규: .claude/state/checkpoints/20260425-092245-*.md
+
+다음 세션 할 일:
+  - [ ] F006 멀티 호스트 아키텍처 준비 (settings.json agent_type)
+  - [ ] F007 Design Review 강화
+  - [ ] F008 QA 브라우저 자동화
+  - [ ] (선택) brain.py FTS5 도입 (학습 100건 넘으면)
+  - [ ] (선택) brain export — 학습을 JSON/CSV로 내보내기
+
+주의사항:
+  - ~/.harness/brain.db 는 사용자별 머신 로컬 — git 미포함
+  - PGLite로 마이그레이션 필요해도 스키마 그대로 이전 가능
+  - brain.py 의 모든 동작은 try/except 로 차단 방지 (hook-failure-tolerance 적용)
+  - F005 acceptance_criteria 의 "PGLite" 표현은 SQLite 로 갱신했음
+============================================================
+
+============================================================
+[2026-04-27 00:00] Developer: F006 세션 1 완료 (멀티 호스트 아키텍처 Step 1~6)
+============================================================
+작업한 Feature: F006
+작업 내용:
+  - .claude/host.json (SSOT — agent_type SSOT, harness_version)
+  - .claude/bin/host_adapters/__init__.py (패키지 마커)
+  - .claude/bin/host_adapters/base.py (HostAdapter 추상 베이스 + TOKEN_RE + CANONICAL_TOOLS)
+  - .claude/bin/host_adapters/claude_code.py (실구현, is_stub=False, 7개 도구 매핑)
+  - .claude/bin/host_adapters/openclaw.py (stub, is_stub=True, 안내만 출력)
+  - .claude/bin/host_adapters/codex.py (stub, is_stub=True, 안내만 출력)
+  - .claude/bin/host.py (CLI: current/info/set/render-skills/check + 모든 핸들러 exit 0 보장)
+  - .claude/commands/host.md (/project:host 슬래시 커맨드)
+  - CLAUDE.md 업데이트 (디렉토리 구조, 멀티 호스트 섹션)
+  - learnings.jsonl F006 학습 3건 추가 (총 27건)
+  - harness_template 미러링 완료
+
+현재 상태: in-progress (세션 2 남음 — AC3 미충족)
+feature status: in-progress 유지 (review 전환 X)
+passes: false (QA 에이전트 권한)
+
+인수 기준 충족:
+  - AC1 (host.json에 agent_type) ✅
+  - AC2 (호스트별 커맨드 호출 어댑터) ✅
+  - AC3 (호스트별 SKILL.md 생성 로직) ❌ 다음 세션
+  - AC4 (claude-code 기본값 + 안내) ✅
+
+체크포인트: .claude/state/checkpoints/20260427-000000-f006-multi-host-session1-step1-6.md
+
+파일 변경:
+  - 신규: .claude/host.json
+  - 신규: .claude/bin/host.py
+  - 신규: .claude/bin/host_adapters/{__init__.py,base.py,claude_code.py,openclaw.py,codex.py}
+  - 신규: .claude/commands/host.md
+  - 수정: CLAUDE.md (디렉토리 구조 + 멀티 호스트 섹션)
+  - append: .claude/state/learnings.jsonl (3건)
+  - 신규: .claude/state/checkpoints/20260427-000000-*.md
+  - 미러: src/harness_template/claude.gstack/harness/ 전체 동기화
+
+다음 세션 할 일 (F006 세션 2):
+  - [ ] examples/ 에 영구 .template 파일 1개 생성 (AC3 검증용)
+  - [ ] host.py render-skills로 토큰 치환 검증 → AC3 충족
+  - [ ] CLAUDE.md render-skills 사용 가이드 보완
+  - [ ] 무회귀 최종 검증 (claude-code/openclaw/codex 전 시나리오)
+  - [ ] feature_list.json F006 status: in-progress → review
+  - [ ] /project:context-save "F006 multi-host complete" 체크포인트
+
+주의사항:
+  - host.py의 _PROJECT_ROOT는 __file__ 기준 2단계 parent — 스크립트 위치 바뀌면 수정 필요
+  - stub render_skill_md → None, 호출자는 반드시 None 체크
+  - .claude/bin/__pycache__ gitignore 추가 검토 필요
+  - settings.json 절대 수정 금지 (ADR-001 핵심 결정)
+============================================================
+
+
+============================================================
+[2026-05-01 00:00] Developer: F006 세션 2 완료 (멀티 호스트 Step 7~10)
+============================================================
+작업한 Feature: F006
+작업 내용:
+  - .claude/skills/coding/SKILL.md.template 신규 (AC3 충족)
+    → {{HOST.NAME}}, {{HOST.TOOL.*}}, {{HOST.CMD.*}}, {{HOST.ENV.project_dir}} 7개 토큰 시연
+  - base.py TOKEN_RE 버그 수정: [a-zA-Z_]* → [a-zA-Z_-]* (하이픈 커맨드 치환 안 되는 버그)
+  - host.py _run_render_skills에 output_root 파라미터 추가
+  - render-skills 서브커맨드에 --output-root 옵션 추가
+  - codex.py stub → 최소 실구현 (is_stub=False, 토큰 치환 가능)
+    → bash→shell, read→read_file, write→write_file, edit→edit_file, glob→list_files
+    → /project:<name> → @harness.<name>
+    → CLAUDE_PROJECT_DIR → CODEX_PROJECT_ROOT
+  - src/harness_template/openai/harness/.codex/skills/coding/SKILL.md 자동 생성
+  - harness_template 미러링 완료
+
+인수 기준 충족:
+  - AC1 (host.json에 agent_type) ✅ (세션 1)
+  - AC2 (호스트별 커맨드 호출 어댑터) ✅ (세션 1)
+  - AC3 (호스트별 SKILL.md 생성 로직) ✅ (세션 2 — .template + render-skills)
+  - AC4 (claude-code 기본값 + 안내) ✅ (세션 1)
+
+현재 상태: review (Reviewer 에이전트 리뷰 필요)
+feature status: in-progress → review
+passes: false (QA 에이전트 권한)
+
+체크포인트: .claude/state/checkpoints/20260501-000000-f006-multi-host-session2-complete.md
+
+파일 변경:
+  - 신규: .claude/skills/coding/SKILL.md.template
+  - 수정: .claude/bin/host_adapters/base.py (TOKEN_RE 하이픈 지원)
+  - 수정: .claude/bin/host_adapters/codex.py (stub→최소 실구현)
+  - 수정: .claude/bin/host.py (render-skills --output-root 옵션)
+  - 수정: .claude/skills/coding/SKILL.md (claude-code 렌더 결과)
+  - 자동 생성: src/harness_template/openai/harness/.codex/skills/coding/SKILL.md
+  - 미러: src/harness_template/claude.gstack/harness/ 동기화
+  - append: .claude/state/learnings.jsonl (3건, 총 30건)
+  - 신규: .claude/state/checkpoints/20260501-000000-*.md
+
+다음 세션 할 일:
+  - [ ] Reviewer 에이전트 코드 리뷰 (F006)
+  - [ ] QA 에이전트 E2E 검증 (F006)
+  - [ ] F007 Design Review 강화 착수
+
+주의사항:
+  - codex.py is_stub=False이므로 render-skills 기본 실행 시 .claude/skills/coding/SKILL.md를 덮어씀
+    → --output-root 없이 codex로 render-skills하면 claude-code로 재렌더 필요
+  - TOKEN_RE 하이픈 지원 버그 수정으로 {{HOST.CMD.*}} 토큰이 더 정확하게 동작
+  - openclaw는 여전히 stub (실제 스펙 미확정)
+============================================================
+
+
+============================================================
+[2026-04-30 10:00] Developer: F006 NEEDS_REVISION 처리 완료 (Reviewer 재검토 준비)
+============================================================
+작업한 Feature: F006 (재작업)
+작업 내용:
+  - 설계안 (A) 보수안 선택: codex.py 완전한 stub 복원
+  - codex.py: is_stub=True, stub_info 추가, render_skill_md()→None, placeholder 메서드
+  - host.py: cmd_check에 "훅 라이프사이클·에이전트 frontmatter 추상화 후속 Feature 예정" 안내 추가
+  - host.md: render-skills 부작용 경고 단락 추가 (stub → SKILL.md 갱신 안 됨)
+  - CLAUDE.md: 멀티 호스트 섹션에 stub 어댑터 SKILL.md 무회귀 경고 1줄 추가
+  - openai/SKILL.md: 헤더에 "자동 생성 파일, 직접 수정 금지" 주석 3줄 추가
+  - 미러링: codex.py, host.py, host.md, CLAUDE.md → claude.gstack 동기화
+  - feature_list.json F006: in-progress → review
+  - learnings.jsonl: 2건 추가 (총 32건)
+  - 체크포인트: 20260430-100000-f006-re-review-ready.md
+
+현재 상태: review (Reviewer 재호출 대기)
+feature status: in-progress → review
+passes: false (QA 에이전트 권한)
+
+선택한 설계안: (A) 보수안
+  - codex.py를 openclaw와 동일한 완전 stub으로 복원
+  - openai/ SKILL.md는 정적 산출물로 보존 (헤더 주석 추가)
+  - ADR-001 정합성 100% 달성
+
+검증 시나리오 8종 모두 PASS:
+  1. current → claude-code ✅
+  2. HARNESS_AGENT_TYPE=codex current → codex (stub) + 안내 ✅
+  3. HARNESS_AGENT_TYPE=codex render-skills → SKILL.md 수정 안 함 ✅
+  4. HARNESS_AGENT_TYPE=codex render-skills --output-root /tmp/test-codex → A안: 안내 + 미생성 ✅
+  5. HARNESS_AGENT_TYPE=openclaw render-skills → SKILL.md 수정 안 함 ✅
+  6. python3 host.py check → 무회귀 + 후속 Feature 안내 ✅
+  7. planning/testing SKILL.md md5 불변 (Apr 25 timestamp) ✅
+  8. coding/SKILL.md claude-code 표기 그대로 (codex 오염 없음) ✅
+
+파일 변경:
+  - 수정: .claude/bin/host_adapters/codex.py (stub 복원)
+  - 수정: .claude/bin/host.py (cmd_check 안내 추가)
+  - 수정: .claude/commands/host.md (render-skills 경고 추가)
+  - 수정: CLAUDE.md (stub 경고 추가)
+  - 수정: src/harness_template/openai/harness/.codex/skills/coding/SKILL.md (헤더 주석)
+  - 미러: src/harness_template/claude.gstack/harness/ 4개 파일 동기화
+  - append: .claude/state/learnings.jsonl (2건)
+  - 신규: .claude/state/checkpoints/20260430-100000-f006-re-review-ready.md
+
+다음 세션 할 일:
+  - [ ] Reviewer 에이전트 재검토 (메인에서 처리)
+  - [ ] QA 에이전트 E2E 검증
+  - [ ] CONSIDER: --output-root 경로 횡단 가드 (다음 phase)
+  - [ ] F007 Design Review 강화 착수
+
+주의사항:
+  - codex는 이제 완전 stub — is_stub=True, render_skill_md()→None
+  - openai/ SKILL.md는 정적 산출물 — codex 실구현 전까지 수동 유지
+  - --output-root 경로 횡단 가드 미구현 (CONSIDER로 다음 phase)
+
+============================================================
+[2026-04-30] QA: F006 PASSED
+============================================================
+검증 항목:
+  A1. AC1 — .claude/host.json 존재, agent_type 필드 확인 ✅
+  A2. AC1 — host.py current → "claude-code" 출력 ✅
+  A3. AC1 — HARNESS_AGENT_TYPE=openclaw/codex 환경변수 우선순위 ✅
+  A4. AC2 — host.py info → 도구 매핑 7종 출력 ✅
+  A5. AC2 — host_adapters 4개 모듈 존재 (base/claude_code/openclaw/codex) ✅
+  A6. AC3 — .claude/skills/coding/SKILL.md.template 존재 ✅
+  A7. AC3 — host.py render-skills (claude-code) → SKILL.md 토큰 치환 ✅
+  A8. AC3 — openai/.codex/skills/coding/SKILL.md codex 표기 + 헤더 주석 존재 ✅
+  A9. AC4 — host.json 부재 시 claude-code fallback + exit 0 ✅
+  A10. AC4 — openclaw/codex 선택 시 stub 안내 출력 ✅
+  B1. 회귀1 — host.json 손상: [WARN] 출력 + claude-code fallback + exit 0 ✅
+  B2. 회귀2 — set codex → SKILL.md md5 불변 (fff0cf09) → set claude-code → md5 불변 → host.json claude-code 복원 ✅
+  B3. 회귀3 — HARNESS_AGENT_TYPE=unknown_host: stderr WARN + stdout claude-code + exit 0 ✅
+  C1. check → 5개 훅 OK, 18개 커맨드 OK ✅
+  C2. settings.json에 agent_type 키 없음 ✅
+  C3. planning/testing SKILL.md md5 전/후 동일 (4a05b642, 5bb6ed83) ✅
+  D1. claude.gstack/harness/ 미러: agents/commands/hooks/skills/bin/CLAUDE.md/docs/adr diff 0 ✅
+  D2. baseline claude/에 host.json/host.py/host.md 없음 (동결 확인) ✅
+
+인수 결정: PASS
+feature_list.json F006: passes false→true, status review→done
+다음 작업: /project:start-session 으로 F007 (Design Review 강화) 착수 권장

@@ -1,0 +1,37 @@
+{
+  "valid": true,
+  "reason": "",
+  "items": {
+    "A1": {
+      "verdict": "met",
+      "evidence": "src/x.py:10 | \"기준 1 분기\"",
+      "invalid": ""
+    },
+    "A2": {
+      "verdict": "met",
+      "evidence": "실행 출력 \"PASS 3 tests\"",
+      "invalid": ""
+    },
+    "A3": {
+      "verdict": "na",
+      "evidence": "해당 없음 (입력 없음)",
+      "invalid": ""
+    },
+    "A4": {
+      "verdict": "unmet",
+      "evidence": "기존 스위트를 실행하지 않았다",
+      "invalid": ""
+    },
+    "A5": {
+      "verdict": "na",
+      "evidence": "UI 기준 없음",
+      "invalid": ""
+    },
+    "A6": {
+      "verdict": "met",
+      "evidence": "lint 실행 결과 \"0 BLOCK\"",
+      "invalid": ""
+    }
+  },
+  "rubric": "qa-acceptance"
+}

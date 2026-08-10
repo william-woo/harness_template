@@ -1,0 +1,32 @@
+{
+  "valid": false,
+  "reason": "누락 ['A5']",
+  "items": {
+    "A1": {
+      "verdict": "unmet",
+      "evidence": "기준 3을 만족하는 코드가 없다",
+      "invalid": ""
+    },
+    "A2": {
+      "verdict": "met",
+      "evidence": "각 기준별로 그것을 충족하는 코드",
+      "invalid": "파일:행 또는 인용 증거 없음"
+    },
+    "A3": {
+      "verdict": "na",
+      "evidence": "x",
+      "invalid": "na 사유 부재"
+    },
+    "A4": {
+      "verdict": "met",
+      "evidence": "회귀 없음",
+      "invalid": "증거 부재 또는 과소"
+    },
+    "A6": {
+      "verdict": "met",
+      "evidence": "lint \"0 BLOCK\"",
+      "invalid": ""
+    }
+  },
+  "rubric": "qa-acceptance"
+}

@@ -1,0 +1,37 @@
+{
+  "valid": true,
+  "reason": "",
+  "items": {
+    "A1": {
+      "verdict": "met",
+      "evidence": "src/x.py:10 | \"기준 1을 충족하는 분기\"",
+      "invalid": ""
+    },
+    "A2": {
+      "verdict": "met",
+      "evidence": "실행: python3 test_x.py → \"PASS 3 tests\"",
+      "invalid": ""
+    },
+    "A3": {
+      "verdict": "na",
+      "evidence": "입력 표면이 없다",
+      "invalid": ""
+    },
+    "A4": {
+      "verdict": "met",
+      "evidence": "tests/run.sh:1 | \"12 passed\"",
+      "invalid": ""
+    },
+    "A5": {
+      "verdict": "na",
+      "evidence": "UI 기준이 없다",
+      "invalid": ""
+    },
+    "A6": {
+      "verdict": "met",
+      "evidence": "lint: 0 BLOCK, 84 PASS",
+      "invalid": "파일:행 또는 인용 증거 없음"
+    }
+  },
+  "rubric": "qa-acceptance"
+}

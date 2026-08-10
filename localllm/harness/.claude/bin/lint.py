@@ -19,7 +19,7 @@ JSON·마크다운 분석으로 검사한다.
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-MIRROR 미러링 diff (4변형)
-  LINT-MR     변형 오버레이 정합 (12변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12, F020: MR-13)
+  LINT-MR     변형 오버레이 정합 (14변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12, F020: MR-13, F028: MR-14)
 
 외부 의존성: 없음 (Python stdlib only)
 hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
@@ -932,6 +932,7 @@ _D2_OVERLAY_DIRS = [
 
 # d-2 오버레이가 없어야 하는 변형 (MR-9: localllm 외 6 변형 — openai 는 별도 처리)
 _VARIANTS_NO_D2 = [
+    "claude.aif",
     "claude",
     "claude.gstack",
     "claude.gstack.auto",
@@ -945,7 +946,7 @@ _VARIANTS_NO_D2 = [
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
-_VARIANTS_WITH_D2 = ["localllm"]
+_VARIANTS_WITH_D2 = ["localllm", "localllm.aif"]
 
 # hermes 오버레이 파일 (ⓑ⁶ claude.hermes 변형에만 존재해야 함 — MR-10, F016 신설)
 # Hermes Agent 패턴 이식: FTS5 세션검색 + 스킬 자동생성/self-improve (ADR-010)
@@ -968,7 +969,8 @@ _VARIANTS_NO_HERMES = [
 
 # hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope", "localllm"]
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope",
+                         "localllm", "claude.aif", "localllm.aif"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
@@ -990,7 +992,8 @@ _VARIANTS_NO_PM = [
 
 # pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm"]
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm",
+                     "claude.aif", "localllm.aif"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
 # 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub (ADR-012, d-3)
@@ -1001,6 +1004,8 @@ _NW_OVERLAY_FILES = [
 
 # nw 오버레이가 없어야 하는 변형 (MR-12: claude.productnw 외 10 변형 — openai 별도)
 _VARIANTS_NO_NW = [
+    "claude.aif",
+    "localllm.aif",
     "claude",
     "claude.gstack",
     "claude.gstack.auto",
@@ -1041,7 +1046,40 @@ _VARIANTS_NO_LOOP = [
 ]
 
 # loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_LOOP = ["claude.loope", "localllm"]
+_VARIANTS_WITH_LOOP = ["claude.loope", "localllm", "claude.aif", "localllm.aif"]
+
+# AIF 오버레이 파일 (ⓑ¹⁰ claude.aif + ⓑ¹¹ localllm.aif 에만 존재해야 함 — MR-14, F028 신설)
+# RLAIF/CAI 판정 설계 규율 이식: 항목형 rubric + 증거 강제 + 앙상블 + UNCERTAIN (ADR-020)
+_AIF_OVERLAY_FILES = [
+    "harness/.claude/bin/aif_judge.py",
+    "harness/.claude/commands/aif-judge.md",
+    "harness/.claude/rubrics/_items-schema.md",
+    "harness/.claude/rubrics/code-review.items.md",
+    "harness/.claude/rubrics/qa-acceptance.items.md",
+]
+
+# AIF 판정 기록 디렉토리 (MR-14)
+_AIF_OVERLAY_DIRS = [
+    "harness/.claude/state/aif",
+]
+
+# AIF 오버레이가 없어야 하는 변형 (MR-14: aif 계열 2 변형 외 전부 — openai 별도)
+_VARIANTS_NO_AIF = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "claude.hermes",
+    "claude.productmgr",
+    "claude.productnw",
+    "claude.loope",
+    "localllm",
+]
+
+# AIF 오버레이를 보유해야 하는 변형 (MR-14)
+_VARIANTS_WITH_AIF = ["claude.aif", "localllm.aif"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1652,6 +1690,43 @@ def check_mirror_regression() -> list:
                 results.append(_issue(
                     checker, PASS, loop_variant_name,
                     f"{loop_variant_name} loop 오버레이 모두 존재 OK",
+                ))
+
+        # MR-14: aif 계열 외 변형에 AIF 오버레이 없어야 함 (F028 — ADR-020)
+        all_aif = _AIF_OVERLAY_FILES + _AIF_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_AIF:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(checker, INFO, variant, f"{variant} 변형 디렉토리 부재 — 건너뜀"))
+                continue
+            found_aif = [rel for rel in all_aif if (variant_dir / rel).exists()]
+            if found_aif:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"AIF 오버레이가 {variant} 에 잘못 미러됨 (aif 계열 전용): {found_aif}",
+                ))
+            else:
+                results.append(_issue(checker, PASS, variant, f"{variant} 변형에 AIF 오버레이 부재 OK"))
+
+        # MR-14 (계속): aif 계열 변형에 AIF 오버레이 모두 존재해야 함
+        for aif_variant_name in _VARIANTS_WITH_AIF:
+            av = _HT / aif_variant_name
+            if not av.exists():
+                results.append(_issue(
+                    checker, INFO, aif_variant_name,
+                    f"{aif_variant_name} 변형 부재 (F028 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in all_aif if not (av / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, aif_variant_name,
+                    f"{aif_variant_name} 변형에 일부 AIF 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, aif_variant_name,
+                    f"{aif_variant_name} AIF 오버레이 모두 존재 OK",
                 ))
 
     except Exception as exc:  # noqa: BLE001
