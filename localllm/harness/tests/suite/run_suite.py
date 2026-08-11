@@ -20,6 +20,7 @@ oracle 은 드라이버 출력을 신뢰하지 않고 직접 사실을 확인한
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -294,6 +295,26 @@ def _judge_verdicts(state: dict) -> list[dict]:
     return [a for a in state.get("attempts", []) if a.get("kind") == "judge"]
 
 
+def _func_has_docstring(body: str, sym: str) -> bool:
+    """
+    `sym` 함수에 docstring 이 있는지 **파서로** 판정한다.
+
+    측정 11 정정 3: 이전 구현은 `def NAME(args):` 를 정규식으로 잡아서 **반환 타입 어노테이션이
+    붙으면 실패**했다 (`def to_celsius(f: float) -> float:`). 로컬 32B 는 타입 힌트를 쓰지 않아
+    159회 동안 드러나지 않았고, 타입 힌트를 쓰는 호스트에서만 거짓 ACCURACY 가 났다 —
+    즉 oracle 이 약한 호스트의 출력 문체에 암묵적으로 맞춰져 있었다.
+    ast 로 판정하면 어노테이션·데코레이터·다중행 시그니처에 영향받지 않는다.
+    """
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == sym:
+            return ast.get_docstring(node) is not None
+    return False
+
+
 def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]:
     """모든 oracle 을 실행해 findings 목록을 반환한다 (severity: BUG/ACCURACY/INFO)."""
     findings: list[dict] = []
@@ -362,9 +383,18 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
         notes = (j.get("notes") or "").lower()
         hits = _unresolved_defect_hits(notes)
         if hits:
-            findings.append({"o": "O7", "sev": "ACCURACY",
-                             "msg": f"모순 판정 — {j['grader']} pass 인데 notes 가 미해소 결함을 서술 "
-                                    f"({hits[:3]}): {(j.get('notes') or '')[:120]}"})
+            # 측정 11 정정 2: 이 휴리스틱은 **논증적 노트에서 정밀도가 0 이었다** (Claude 구간
+            # 4/4 오탐, 산출물로 반증 확인). 실패 유형이 구조적이라 키워드 보강으로는 못 고친다:
+            #   · 반박문      "the criterion flagged as missing is actually satisfied"
+            #   · 메타 언급   "my earlier NEEDS REVISION was wrong" (자기 판정 정정)
+            #   · 기대 동작   "dividing by zero fails with ValueError" ('fail' 이 정상 동작 서술)
+            # 거짓 결과 탐지는 산문이 아니라 **결정론 oracle**(O2 ground truth / O3 최종판정
+            # 대조 / O4 환각파일 / O8 공허테스트)이 담당한다 — 측정 08 의 결론과 같다.
+            # 따라서 O7 은 ACCURACY 가 아니라 **수동 확인 플래그**로 남긴다 (신호는 보존).
+            findings.append({"o": "O7", "sev": "INFO",
+                             "msg": f"[수동확인] {j['grader']} pass 인데 notes 에 결함어 "
+                                    f"({hits[:3]}) — 반박·메타·기대동작 서술일 수 있다: "
+                                    f"{(j.get('notes') or '')[:120]}"})
 
     # O8 공허 테스트: 테스트 파일에 assert 가 없으면 아무것도 검증하지 않는다 (측정 08 / S04)
     for rel in scn["files"].split(","):
@@ -428,7 +458,7 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
         elif kind == "ac_docstring_probe":
             f, _, sym = arg.partition(":")
             body = (sb / f).read_text(encoding="utf-8") if (sb / f).is_file() else ""
-            has_doc = bool(re.search(rf"def\s+{re.escape(sym)}\s*\([^)]*\):\s*\n\s+(\"\"\"|''')", body))
+            has_doc = _func_has_docstring(body, sym)
             if not has_doc and judge_pass:
                 findings.append({"o": "O6", "sev": "ACCURACY",
                                  "msg": f"docstring 미충족(AC)인데 judge pass — AC 준수 판정 실패"})
