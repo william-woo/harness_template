@@ -513,16 +513,19 @@ def main() -> None:
         seed_orig = _seed(sb, scn)
         rc, drv_out = _run_driver(sb, scn)
         findings, gt_ok, judges = _oracles(sb, scn, rc, seed_orig)
-        bugs = [f for f in findings if f["sev"] == "BUG"]
-        acc = [f for f in findings if f["sev"] == "ACCURACY"]
-        model = [f for f in findings if f["sev"] == "MODEL"]
+        # INFO 는 판정에 영향을 주지 않는다 (수동확인 플래그). 이 필터가 없으면 INFO 만 있는
+        # 기록이 아래 분류의 fallthrough 로 떨어져 BUG 가 된다 — O7 강등 때 생긴 2차 결함(측정 11).
+        findings_v = [f for f in findings if f["sev"] != "INFO"]
+        bugs = [f for f in findings_v if f["sev"] == "BUG"]
+        acc = [f for f in findings_v if f["sev"] == "ACCURACY"]
+        model = [f for f in findings_v if f["sev"] == "MODEL"]
         infra = ("회 모두 실패" in drv_out) or ("SUITE-TIMEOUT" in drv_out)
         # 하네스가 정직하게 차단·인계한 흔적 (모델 한계 판별용)
         honest_stop = (rc in (2, 3)) and any(
             k in drv_out for k in ("에스컬레이션", "치팅으로", "산출물 무효", "인계"))
         if infra and not [f for f in bugs if f["o"] in ("O3", "O5", "O9")]:
             verdict = "INFRA"   # 호스트 일시 실패 — 하네스 버그 아님
-        elif not findings:
+        elif not findings_v:
             verdict = "PASS"
         elif [f for f in bugs if f["o"] != "O1"]:
             verdict = "BUG"     # exit 불일치 외의 하네스 불일치 = 진짜 버그

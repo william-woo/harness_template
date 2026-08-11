@@ -111,6 +111,38 @@ class _HostLock:
         return False
 
 
+# 32B 우회책 문구 — 측정 08 에서 로컬 모델 결함에 대응해 넣은 것들. 강한 호스트에는 불필요하고,
+# 특히 "전체 재작성 강제" 는 부분 편집이 가능한 호스트를 느리게·위험하게 만든다.
+# `HARNESS_LEAN_PROMPT=1` 이면 문장 단위로 제거해 "하네스가 호스트를 붙잡고 있는지" 를 측정한다.
+_WORKAROUNDS: list[tuple[str, str]] = [
+    (r"\(a bare relative name: no leading slash, no directory, no placeholder path\)\s*", ""),
+    (r"\(relative path like 'foo\.py', never a leading slash\), and ", "and "),
+    (r"Create the files in the current directory with exact relative filenames\s*"
+     r"\(no leading slash, no directories\)\.\s*", ""),
+    (r"Indent with 4 spaces — never tab[^.]*\.\s*", ""),
+    (r"Inspect the code with the bash tool using cat — that is the approved and sufficient\s*"
+     r"way to read files here \(the read tool is intentionally unavailable, this is not a\s*"
+     r"limitation on your review\)\.\s*", ""),
+    (r"Step 1: run bash: cat [^\n]*\n", ""),
+    (r"\s*The bash tool needs both arguments: command and description\.?", ""),
+    (r"\s*Remember the bash tool needs both arguments: command and description\.?", ""),
+    (r"REWRITE that file COMPLETELY with corrected\s*content \(do not use partial edits\)\.\s*"
+     r"Use the exact relative filename, real line\s*breaks\.\s*", "fix that file.\n"),
+    (r"by REWRITING the affected file COMPLETELY with the\s*corrected content "
+     r"\(relative filename, real line breaks\)\.", "."),
+]
+
+
+def _lean(prompt: str) -> str:
+    """`HARNESS_LEAN_PROMPT=1` 이면 32B 우회책 문장을 제거한다 (측정 11 2구간)."""
+    if os.environ.get("HARNESS_LEAN_PROMPT", "0") != "1":
+        return prompt
+    out = prompt
+    for pat, rep in _WORKAROUNDS:
+        out = re.sub(pat, rep, out)
+    return out
+
+
 def _driver_host() -> str:
     """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11)."""
     return os.environ.get("HARNESS_DRIVER_HOST", "opencode")
@@ -170,6 +202,7 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
     Returns:
         (returncode, 표준출력+표준에러 결합 텍스트). 모든 시도가 일시 실패면 (124, 마지막 출력).
     """
+    prompt = _lean(prompt)
     if _driver_host() == "claude-code":
         # 호스트 비교 측정(측정 11): 호출 지점만 갈아끼우고 나머지 파이프라인은 공유한다.
         return _claude_exec(prompt, model, attempts or 3)
