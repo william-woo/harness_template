@@ -111,6 +111,56 @@ class _HostLock:
         return False
 
 
+def _driver_host() -> str:
+    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11)."""
+    return os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+
+
+_CLAUDE_CALLS = 0   # 호스트 비교 측정의 비용 귀속용 호출 카운터
+
+
+def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, str]:
+    """
+    `claude -p` 로 Claude Code 를 비대화 실행한다 (호스트 비교 측정 — 측정 11).
+
+    같은 프롬프트·같은 결정론 게이트를 쓰고 **호스트만** 바꾼다. 무인 실행이므로 권한 프롬프트가
+    뜨면 멈춘다 — 샌드박스 전용 경로라 `bypassPermissions` 를 쓴다.
+
+    Returns:
+        (returncode, 출력). 일시 실패(과부하·타임아웃)는 지수 백오프로 재시도한다.
+    """
+    import time
+
+    global _CLAUDE_CALLS
+    _CLAUDE_CALLS += 1
+
+    cmd = ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"]
+    if model:
+        cmd += ["--model", model]
+    timeout = int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT)))
+    backoffs = [10, 30, 60]
+    last_out = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(cmd, cwd=_ROOT, capture_output=True, text=True, timeout=timeout)
+            rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
+        except subprocess.TimeoutExpired:
+            rc, out = 124, f"timeout {timeout}s"
+        last_out = out
+        low = out.lower()
+        transient = rc == 124 or any(s in low for s in ("overloaded", "rate limit", "529", "503"))
+        if not transient:
+            _log(f"  ⓘ claude 호출 누계 {_CLAUDE_CALLS}회 (rc={rc})")
+            return rc, out
+        if attempt >= attempts:
+            _log(f"  ⚠️ claude 일시 실패 — {attempts}회 모두 실패")
+            break
+        wait = backoffs[min(attempt - 1, len(backoffs) - 1)]
+        _log(f"  ⏳ claude 일시 실패 — {wait}s 후 재시도 ({attempt}/{attempts})")
+        time.sleep(wait)
+    return 124, last_out
+
+
 def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
                   attempts: int | None = None) -> tuple[int, str]:
     """
@@ -120,6 +170,10 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
     Returns:
         (returncode, 표준출력+표준에러 결합 텍스트). 모든 시도가 일시 실패면 (124, 마지막 출력).
     """
+    if _driver_host() == "claude-code":
+        # 호스트 비교 측정(측정 11): 호출 지점만 갈아끼우고 나머지 파이프라인은 공유한다.
+        return _claude_exec(prompt, model, attempts or 3)
+
     import tempfile
     import time
 
@@ -240,6 +294,10 @@ def _agent_call(role: str, task: str) -> tuple[int, str]:
     폴백 모드의 한계: 도구 권한이 호스트에서 강제되지 않는다 (역할 규율은 프롬프트로만).
     """
     global _AGENT_PATH_HEALTHY
+    if _driver_host() == "claude-code":
+        # opencode 의 `--agent` 경로에 대응하는 것이 없으므로, 로컬 구간이 폴백으로 쓰는
+        # **주입 모드**로 고정한다 — 두 구간의 프롬프트 형태를 같게 유지하기 위해서다.
+        _AGENT_PATH_HEALTHY = False
     pol = _policy_overlay(role)
     if pol:
         task = f"POLICY ({role}) — follow these directives while doing the task:\n{pol}\n\n{task}"
@@ -328,7 +386,11 @@ def _resolvable_models() -> set[str]:
 
 
 def _role_models() -> dict[str, str]:
-    """프로젝트 opencode.json 의 역할별 모델 매핑을 반환한다."""
+    """역할별 모델 매핑 (claude-code 호스트면 단일 Claude 모델, 아니면 opencode.json)."""
+    if _driver_host() == "claude-code":
+        m = os.environ.get("HARNESS_CLAUDE_MODEL", "claude-opus-5")
+        return {r: m for r in ("developer", "reviewer", "qa", "architect", "planner",
+                               "researcher", "designer", "product-manager", "gatekeeper")}
     p = _ROOT / "opencode.json"
     if not p.is_file():
         return {}

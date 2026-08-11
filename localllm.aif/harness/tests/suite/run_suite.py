@@ -336,15 +336,34 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
             findings.append({"o": "O4", "sev": "ACCURACY",
                              "msg": f"{j['grader']} notes 가 placeholder/빈값 — 판정 근거 부재"})
 
-    # O7 모순 판정: pass 인데 notes 가 결함을 서술 (측정 08 라운드 11 / S02)
+    # O7 모순 판정: pass 인데 notes 가 **미해소** 결함을 서술 (측정 08 라운드 11 / S02)
+    # 측정 11 정정: 단순 부분문자열 매칭은 반박문을 결함 서술로 오판한다. 예를 들어
+    # "the criterion listed as missing is in fact present" 는 결함이 **없다**는 주장인데
+    # 'missing' 만 보고 ACCURACY 로 찍혔다. 로컬 모델은 노트가 짧아 걸리지 않았을 뿐이고,
+    # 논증적으로 쓰는 호스트는 상시 오탐된다 → 호스트 비교를 편향시킨다.
+    # 따라서 절 단위로 쪼개고, 결함어가 있는 절에 **해소·부재 표지**가 함께 있으면 제외한다.
     _DEFECT_WORDS = ("incorrect", "bug", "wrong", "fail", "missing", "excludes",
                      "does not", "should be", "결함", "누락", "잘못")
+    _REFUTED = ("in fact present", "in fact correct", "is present", "are present",
+                "no longer", "already present", "now present", "not missing",
+                "not incorrect", "not wrong", "does not violate", "does not contain",
+                "does not introduce", "does not break", "존재", "해소", "충족", "수정됨")
+
+    def _unresolved_defect_hits(text: str) -> list[str]:
+        """결함어가 **반박되지 않은 절**에 나타나는 경우만 모은다."""
+        hits = []
+        for clause in re.split(r"[.;\n—]|\bbut\b|\bhowever\b", text):
+            if any(m in clause for m in _REFUTED):
+                continue
+            hits += [w for w in _DEFECT_WORDS if w in clause]
+        return sorted(set(hits))
+
     for j in judge_pass:
         notes = (j.get("notes") or "").lower()
-        hits = [w for w in _DEFECT_WORDS if w in notes]
+        hits = _unresolved_defect_hits(notes)
         if hits:
             findings.append({"o": "O7", "sev": "ACCURACY",
-                             "msg": f"모순 판정 — {j['grader']} pass 인데 notes 가 결함을 서술 "
+                             "msg": f"모순 판정 — {j['grader']} pass 인데 notes 가 미해소 결함을 서술 "
                                     f"({hits[:3]}): {(j.get('notes') or '')[:120]}"})
 
     # O8 공허 테스트: 테스트 파일에 assert 가 없으면 아무것도 검증하지 않는다 (측정 08 / S04)
