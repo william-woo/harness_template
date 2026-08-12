@@ -1017,7 +1017,14 @@ def cmd_run(args) -> int:
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
         # 재작업 = 전체 파일 재작성 (규칙 6) — 실패 출력 + 현재 내용을 드라이버가 주입
-        fmt = _artifact_problems(files) + _import_diagnosis(out, files)
+        # require 위반(심볼 존재/부재)은 지금까지 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED
+        # 목록에 오르지 못했다 (측정 11 / S09: 동일 진단 3회인데 fmt 가 비어 반복 감지가 불가능).
+        # 명시 목록에 올려 ① 모델이 지적을 분명히 보고 ② 반복 감지가 동작하게 한다.
+        # require 위반(심볼 존재/부재)은 원래 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED 목록에
+        # 오르지 못했다 (측정 11 / S09) — "고쳐야 할 문제" 목록에서 문제가 빠져 있던 버그다.
+        # 효과는 A/B 에서 검증되지 않았으나(3/6→4/6, n=6 노이즈) 논리적으로 옳은 수정이라 유지한다.
+        fmt = (_artifact_problems(files) + _require_problems(getattr(args, "require", ""))
+               + _import_diagnosis(out, files))
         # 기대 출력(--expect)이 없으면 그 사실을 명시적으로 지적한다: 모델이 관용적 테스트
         # 프레임워크로 바꿔 기대 토큰을 출력하지 않는 사례가 반복됐다 (측정 08 라운드 11).
         if args.expect and args.expect not in out:
