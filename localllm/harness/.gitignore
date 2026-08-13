@@ -87,3 +87,6 @@ wiki/log-archive.md
 
 # autoresearch 실험 공간 (결과·샌드박스 — 수 GB 가능, F027)
 .claude/state/autoresearch/
+
+# 진단 프록시 작업 산출물 (런타임 — F029)
+.claude/state/probe/
