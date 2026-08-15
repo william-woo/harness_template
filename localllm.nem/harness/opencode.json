@@ -1,0 +1,49 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local LLM)",
+      "models": {
+        "nemotron-3-nano:30b": {
+          "name": "Nemotron 3 Nano 30B MoE — 전 역할 (추론 모델)",
+          "limit": { "context": 32768, "output": 4096 }
+        },
+        "nemotron-mini:latest": {
+          "name": "Nemotron Mini 4.2B — 경량 옵션 (미배정, 미검증)",
+          "limit": { "context": 32768, "output": 2048 }
+        }
+      }
+    }
+  },
+  "model": "ollama/nemotron-3-nano:30b",
+  "agent": {
+    "developer": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "architect": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "designer": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "planner": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "researcher": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "gatekeeper": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "reviewer": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "qa": {
+      "model": "ollama/nemotron-3-nano:30b"
+    },
+    "product-manager": {
+      "model": "ollama/nemotron-3-nano:30b"
+    }
+  }
+}

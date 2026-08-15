@@ -946,7 +946,7 @@ _VARIANTS_NO_D2 = [
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
-_VARIANTS_WITH_D2 = ["localllm", "localllm.aif"]
+_VARIANTS_WITH_D2 = ["localllm", "localllm.nem", "localllm.aif"]
 
 # hermes 오버레이 파일 (ⓑ⁶ claude.hermes 변형에만 존재해야 함 — MR-10, F016 신설)
 # Hermes Agent 패턴 이식: FTS5 세션검색 + 스킬 자동생성/self-improve (ADR-010)
@@ -970,7 +970,7 @@ _VARIANTS_NO_HERMES = [
 # hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
 _VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope",
-                         "localllm", "claude.aif", "localllm.aif"]
+                         "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
@@ -992,7 +992,7 @@ _VARIANTS_NO_PM = [
 
 # pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm",
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm", "localllm.nem",
                      "claude.aif", "localllm.aif"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
@@ -1012,7 +1012,7 @@ _VARIANTS_NO_NW = [
     "claude.gstack.auto.design",
     "claude.gstack.auto.design.wiki",
     "claude.gstack.auto.design.wiki.orch",
-    "localllm",
+    "localllm", "localllm.nem",
     "claude.hermes",
     "claude.productmgr",
     "claude.loope",
@@ -1046,7 +1046,7 @@ _VARIANTS_NO_LOOP = [
 ]
 
 # loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_LOOP = ["claude.loope", "localllm", "claude.aif", "localllm.aif"]
+_VARIANTS_WITH_LOOP = ["claude.loope", "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
 
 # AIF 오버레이 파일 (ⓑ¹⁰ claude.aif + ⓑ¹¹ localllm.aif 에만 존재해야 함 — MR-14, F028 신설)
 # RLAIF/CAI 판정 설계 규율 이식: 항목형 rubric + 증거 강제 + 앙상블 + UNCERTAIN (ADR-020)
@@ -1075,7 +1075,7 @@ _VARIANTS_NO_AIF = [
     "claude.productmgr",
     "claude.productnw",
     "claude.loope",
-    "localllm",
+    "localllm", "localllm.nem",
 ]
 
 # AIF 오버레이를 보유해야 하는 변형 (MR-14)
