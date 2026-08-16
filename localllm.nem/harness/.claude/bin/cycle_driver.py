@@ -353,9 +353,12 @@ def _agent_call(role: str, task: str) -> tuple[int, str]:
          f"(호스트 권한 강제 없음 — 프롬프트 규율만)")
     combined = (
         f"ROLE ({role}): {preamble[:900]}\n\n"
-        "TOOL RULES: do the work with tools now. Use the edit tool for each file "
-        "(relative path like 'foo.py', never a leading slash), and the bash tool to run "
-        "commands. Explaining or printing code is not enough — the files must exist on disk.\n\n"
+        "TOOL RULES: do the work with tools now. Use the write tool to create each file "
+        "(arguments: filePath as a relative path like 'foo.py' with no leading slash, and "
+        "content holding the complete file text). The edit tool is for modifying an existing "
+        "file — it requires oldString and newString and cannot create one. Use the bash tool "
+        "to run commands. Explaining or printing code is not enough — the files must exist "
+        "on disk.\n\n"
         f"TASK: {task}"
     )
     return _opencode_run(None, combined, model=model)
@@ -848,9 +851,10 @@ def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
             hint = "\n".join(ln for ln in criteria.splitlines() if rel.split("/")[-1] in ln) or criteria
             task = (
                 f"Create ONE file named {rel} — nothing else.\n"
-                f"Call the edit tool with filePath exactly \"{rel}\" "
+                f"Call the write tool with filePath exactly \"{rel}\" "
                 "(a bare relative name: no leading slash, no directory, no placeholder path) "
-                "and the complete file content.\n"
+                "and content set to the complete file text. Do not use the edit tool — it "
+                "requires oldString/newString and cannot create a file.\n"
                 f"Content requirements:\n{hint}\n"
                 "Write the content with REAL line breaks (never the two characters "
                 "backslash+n). Do not describe the file; create it. Reply DONE."
