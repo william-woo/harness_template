@@ -2,3 +2,4 @@
 기록 명령: `python3 .claude/bin/verify_loop.py record <FEATURE> --grader qa --verdict pass|revision --notes '<근거 한 줄>'`
 인수 기준을 하나라도 확인하지 못했으면 revision 으로 기록하라.
 추론은 짧게, 도구 호출은 확실하게 — 추론이 길어지면 기록할 지면이 남지 않는다.
+도구 호출이 실패하면 마지막 줄에 `VERDICT: pass|revision — <근거>` 를 남겨라. 드라이버가 대신 기록한다.

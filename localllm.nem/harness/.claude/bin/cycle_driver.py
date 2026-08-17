@@ -833,6 +833,47 @@ def _artifact_problems(files: list[str]) -> list[str]:
     return problems
 
 
+def _tool_schema() -> dict:
+    """도구 스키마 스냅샷을 읽는다 (ADR-022 결정 1). 없으면 빈 dict."""
+    p = _ROOT / ".claude" / "schema" / "opencode-tools.json"
+    if not p.is_file():
+        return {}
+    return json.loads(p.read_text(encoding="utf-8")).get("tools") or {}
+
+
+def _write_instruction(rel: str) -> str:
+    """파일 생성 지시문을 **스키마에서 파생**해 만든다.
+
+    도구 이름과 인자를 손으로 쓰면 스키마와 어긋나도 아무도 모른다. 실제로
+    `edit` 에 `content` 를 넘기라는 만족 불가능한 지시가 오래 살아남았고, 지시를
+    문자 그대로 따르는 모델만 손해를 봤다 (측정 11 결과 13 / ADR-022).
+
+    스냅샷이 없으면 `write` 기준 기본 문구로 물러난다 — 하네스는 계속 동작해야 한다.
+    """
+    tools = _tool_schema()
+    spec = tools.get("write")
+    if not spec:
+        return (f"Call the write tool with filePath exactly \"{rel}\" "
+                "(a bare relative name: no leading slash, no directory, no placeholder path) "
+                "and content set to the complete file text.\n")
+    req = spec.get("required") or []
+    # 인자 설명을 스냅샷의 required 순서대로 생성한다.
+    described = {
+        "filePath": f"filePath exactly \"{rel}\" (a bare relative name: no leading slash, "
+                    "no directory, no placeholder path)",
+        "content": "content set to the complete file text",
+    }
+    args = " and ".join(described.get(k, f"{k} set appropriately") for k in req)
+    note = ""
+    edit = tools.get("edit")
+    if edit:
+        missing = [k for k in (edit.get("required") or []) if k not in ("filePath",)]
+        if missing:
+            note = (f" Do not use the edit tool — it requires {'/'.join(missing)} "
+                    "and cannot create a file.")
+    return f"Call the write tool with {args}.{note}\n"
+
+
 def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
     """
     대상 파일이 실제로 생성될 때까지 **파일 1건씩** 생성 지시하고 존재를 검증한다.
@@ -851,11 +892,8 @@ def _ensure_files(files: list[str], criteria: str, feature: str) -> list[str]:
             hint = "\n".join(ln for ln in criteria.splitlines() if rel.split("/")[-1] in ln) or criteria
             task = (
                 f"Create ONE file named {rel} — nothing else.\n"
-                f"Call the write tool with filePath exactly \"{rel}\" "
-                "(a bare relative name: no leading slash, no directory, no placeholder path) "
-                "and content set to the complete file text. Do not use the edit tool — it "
-                "requires oldString/newString and cannot create a file.\n"
-                f"Content requirements:\n{hint}\n"
+                + _write_instruction(rel)
+                + f"Content requirements:\n{hint}\n"
                 "Write the content with REAL line breaks (never the two characters "
                 "backslash+n). Do not describe the file; create it. Reply DONE."
             )
@@ -886,6 +924,36 @@ def _dev_call(prompt: str, feature: str, prot_snap: dict[str, str]) -> tuple[int
              "--notes", f"수정 금지 파일 변경(테스트 약화 시도): {violated}"])
     return rc, violated
 
+_VERDICT_LINE = re.compile(r"^\s*VERDICT:\s*(pass|revision|fail)\b[ \t]*[—:-]?[ \t]*(.*)$",
+                           re.IGNORECASE | re.MULTILINE)
+
+
+def _record_from_prose(role: str, feature: str, out: str, before: int) -> str | None:
+    """judge 가 도구를 부르지 않았을 때, 응답의 `VERDICT:` 줄을 드라이버가 대신 기록한다.
+
+    왜 (F031 실측): 추론 모델은 길게 추론한 뒤 **마지막 도구 호출을 빠뜨린다**. 실측에서
+    판정 미기록 재시도가 11회 발생했고, 재시도 1회가 100~200초라 그것만으로 1500초
+    타임아웃이 났다. 재요청은 같은 실패를 반복시킬 뿐이다.
+
+    판정 **내용**은 여전히 judge 의 몫이다 — 드라이버는 judge 가 명시한 결론을 옮겨 적을 뿐,
+    없는 판정을 만들지 않는다. `VERDICT:` 줄이 없으면 아무것도 기록하지 않는다.
+    이것이 결정론 grader 우선 원칙(ADR-014)의 판정 기록 판(ADR-022 계열).
+
+    Returns:
+        str | None: 기록한 verdict, 줄이 없으면 None
+    """
+    m = _VERDICT_LINE.search(out or "")
+    if not m:
+        return None
+    verdict, note = m.group(1).lower(), (m.group(2) or "").strip()
+    if not note or _is_echo_note(note):
+        _log(f"  ⚠️ {role} VERDICT 줄에 근거가 없음 — 기록하지 않음")
+        return None
+    _vl(["record", feature, "--grader", role, "--verdict", verdict, "--notes", note[:300]])
+    _log(f"  ⓘ {role} 가 도구를 부르지 않아 드라이버가 VERDICT 줄을 대신 기록: {verdict}")
+    return _judge_recorded(feature, role, before)
+
+
 def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -> str | None:
     """
     judge 를 호출하고 판정이 기록될 때까지 재요청한다 (측정 08 / S05 — 재판정 비대칭 해소).
@@ -904,10 +972,13 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
             "Run this bash command now (use revision instead of pass if a criterion is unmet):\n"
             f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
             f"--verdict pass --notes '<your concrete finding>'\n"
-            "The bash tool needs both arguments: command and description."
+            "The bash tool needs both arguments: command and description.\n"
+            "If the bash call fails, end your reply with: VERDICT: pass|revision — <finding>"
         )
         rc, _out = _agent_call(role, ask)
         verdict = _judge_recorded(feature, role, before)
+        if not verdict:
+            verdict = _record_from_prose(role, feature, _out, before)
         if verdict:
             rec = next((a for a in reversed(_vl_state(feature).get("attempts", []))
                         if a.get("grader") == role), {})
@@ -1105,7 +1176,13 @@ def cmd_run(args) -> int:
               "Your notes must name the specific unmet acceptance criterion and the evidence "
               "you saw in the code. A revision verdict without a concrete criterion is invalid; "
               "if every criterion is satisfied, record pass.\n"
-              f"Reply PASS or NEEDS REVISION with one sentence."
+              # 추론 모델은 길게 추론한 뒤 마지막 도구 호출을 빠뜨린다 (F031 실측 — 미기록
+              # 재시도 11회가 타임아웃을 만들었다). 텍스트 한 줄은 훨씬 안정적으로 나오므로,
+              # 도구 호출이 없을 때 드라이버가 이 줄을 대신 기록한다 (_record_from_prose).
+              "Finally, end your reply with exactly one line in this form so the verdict "
+              "survives even if the bash call fails:\n"
+              "VERDICT: pass — <your concrete finding>\n"
+              "(or 'VERDICT: revision — <the unmet criterion and its evidence>')\n"
         )
         _log(f"③ {role}(judge, 32B) 판정 호출")
         verdict = None
