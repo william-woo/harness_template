@@ -35,7 +35,12 @@ SUITE_DIR = Path(__file__).resolve().parent
 TEMPLATE = Path(os.environ.get("SUITE_TEMPLATE", SUITE_DIR.parent.parent))
 RESULTS = Path(os.environ.get("SUITE_RESULTS", SUITE_DIR / "results"))
 SANDBOX_ROOT = Path(os.environ.get("SUITE_SANDBOX", SUITE_DIR / "sandboxes"))
-DRIVER_TIMEOUT = 1500  # 초 — 드라이버 자체가 내부 timeout/재시도를 가짐
+# 시나리오 예산. 기본 1500초는 **qwen 속도를 전제로 정해진 값**이다 (호출당 30~77초 ×
+# 사이클 7~10 호출 = 300~700초 → 여유). 호출당 비용이 다른 모델은 판정을 완벽히 해도
+# 이 예산을 넘는다 — nemotron 은 150~220초 × 7~10 = 1650~2200초다 (측정 11 결과 14).
+# 예산이 모델 속도를 벌하지 않도록 환경변수로 모델별 산정을 허용한다 (조건 A / ADR-022 결정 4 계열).
+#   산정식: 호출당 실측 비용 × 사이클 최소 호출 수 × 1.5(재작업 여유)
+DRIVER_TIMEOUT = int(os.environ.get("SUITE_DRIVER_TIMEOUT", "1500"))
 
 # ── 시나리오 정의 ──────────────────────────────────────────────────────────
 # seed: 샌드박스에 미리 쓸 파일 {상대경로: 내용}
