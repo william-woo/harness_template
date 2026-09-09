@@ -942,7 +942,7 @@ _VARIANTS_NO_D2 = [
     "claude.hermes",
     "claude.productmgr",
     "claude.productnw",
-    "claude.loope",
+    "claude.loope", "claude.vela.v0.1",
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
@@ -969,7 +969,7 @@ _VARIANTS_NO_HERMES = [
 
 # hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope",
+_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope", "claude.vela.v0.1",
                          "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
@@ -992,7 +992,7 @@ _VARIANTS_NO_PM = [
 
 # pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "localllm", "localllm.nem",
+_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "claude.vela.v0.1", "localllm", "localllm.nem",
                      "claude.aif", "localllm.aif"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
@@ -1015,7 +1015,7 @@ _VARIANTS_NO_NW = [
     "localllm", "localllm.nem",
     "claude.hermes",
     "claude.productmgr",
-    "claude.loope",
+    "claude.loope", "claude.vela.v0.1",
 ]
 
 # nw 오버레이를 보유해야 하는 변형 (MR-12: claude.productnw 만)
@@ -1046,7 +1046,7 @@ _VARIANTS_NO_LOOP = [
 ]
 
 # loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_LOOP = ["claude.loope", "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
+_VARIANTS_WITH_LOOP = ["claude.loope", "claude.vela.v0.1", "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
 
 # AIF 오버레이 파일 (ⓑ¹⁰ claude.aif + ⓑ¹¹ localllm.aif 에만 존재해야 함 — MR-14, F028 신설)
 # RLAIF/CAI 판정 설계 규율 이식: 항목형 rubric + 증거 강제 + 앙상블 + UNCERTAIN (ADR-020)
@@ -1074,12 +1074,45 @@ _VARIANTS_NO_AIF = [
     "claude.hermes",
     "claude.productmgr",
     "claude.productnw",
-    "claude.loope",
+    "claude.loope", "claude.vela.v0.1",
     "localllm", "localllm.nem",
 ]
 
 # AIF 오버레이를 보유해야 하는 변형 (MR-14)
 _VARIANTS_WITH_AIF = ["claude.aif", "localllm.aif"]
+
+# Atlassian 오버레이 파일 (ⓑ¹³ claude.vela.* 계열에만 존재해야 함 — MR-15, F032 신설)
+# Jira·Confluence 연동 (ADR-023): 공식 MCP 가 도구를 주므로 API 래퍼는 만들지 않고,
+# 매핑·멱등성(중복 발행 방지)만 결정론 코드로 둔다.
+_ATLASSIAN_OVERLAY_FILES = [
+    "harness/.claude/bin/atlassian_map.py",
+    "harness/.claude/commands/atlassian.md",
+    "harness/.claude/skills/atlassian/SKILL.md",
+]
+
+# Atlassian 매핑 상태 디렉토리 (MR-15)
+_ATLASSIAN_OVERLAY_DIRS = [
+    "harness/.claude/state/atlassian",
+]
+
+# Atlassian 오버레이가 없어야 하는 변형 (MR-15: vela 계열 외 전부 — openai 별도)
+_VARIANTS_NO_ATLASSIAN = [
+    "claude",
+    "claude.gstack",
+    "claude.gstack.auto",
+    "claude.gstack.auto.design",
+    "claude.gstack.auto.design.wiki",
+    "claude.gstack.auto.design.wiki.orch",
+    "claude.hermes",
+    "claude.productmgr",
+    "claude.productnw",
+    "claude.loope",
+    "claude.aif",
+    "localllm", "localllm.nem", "localllm.aif",
+]
+
+# Atlassian 오버레이를 보유해야 하는 변형 (MR-15: vela 계열)
+_VARIANTS_WITH_ATLASSIAN = ["claude.vela.v0.1"]
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1727,6 +1760,43 @@ def check_mirror_regression() -> list:
                 results.append(_issue(
                     checker, PASS, aif_variant_name,
                     f"{aif_variant_name} AIF 오버레이 모두 존재 OK",
+                ))
+
+        # MR-15: vela 계열 외 변형에 Atlassian 오버레이 없어야 함 (F032 — ADR-023)
+        all_atl = _ATLASSIAN_OVERLAY_FILES + _ATLASSIAN_OVERLAY_DIRS
+        for variant in _VARIANTS_NO_ATLASSIAN:
+            variant_dir = _HT / variant
+            if not variant_dir.exists():
+                results.append(_issue(checker, INFO, variant, f"{variant} 변형 디렉토리 부재 — 건너뜀"))
+                continue
+            found_atl = [rel for rel in all_atl if (variant_dir / rel).exists()]
+            if found_atl:
+                results.append(_issue(
+                    checker, BLOCK, variant,
+                    f"Atlassian 오버레이가 {variant} 에 잘못 미러됨 (vela 계열 전용): {found_atl}",
+                ))
+            else:
+                results.append(_issue(checker, PASS, variant, f"{variant} 변형에 Atlassian 오버레이 부재 OK"))
+
+        # MR-15 (계속): vela 계열 변형에 Atlassian 오버레이 모두 존재해야 함
+        for vela_variant_name in _VARIANTS_WITH_ATLASSIAN:
+            vv = _HT / vela_variant_name
+            if not vv.exists():
+                results.append(_issue(
+                    checker, INFO, vela_variant_name,
+                    f"{vela_variant_name} 변형 부재 (F032 미적용 가능)",
+                ))
+                continue
+            missing = [rel for rel in all_atl if not (vv / rel).exists()]
+            if missing:
+                results.append(_issue(
+                    checker, CONCERN, vela_variant_name,
+                    f"{vela_variant_name} 변형에 일부 Atlassian 오버레이 부재: {missing}",
+                ))
+            else:
+                results.append(_issue(
+                    checker, PASS, vela_variant_name,
+                    f"{vela_variant_name} Atlassian 오버레이 모두 존재 OK",
                 ))
 
     except Exception as exc:  # noqa: BLE001

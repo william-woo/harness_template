@@ -17,6 +17,7 @@ claude (baseline, 동결)
                                 └─ claude.productmgr (PM 주도 통합 SDLC)
                                      ├─ claude.productnw (분산 멀티팀 컨소시엄, d-3)
                                      └─ claude.loope ★ (검증 루프 — 메인과 1:1, SSOT)
+                                          ├─ claude.vela.v0.1 🚀 (배포 단위 + Atlassian 연동)
                                           ├─ claude.aif (항목형 판정 — RLAIF/CAI 규율)
                                           └─ localllm (OpenCode + 로컬 LLM, d-2)
                                                ├─ localllm.aif (d-2 + 항목형 판정)
@@ -35,6 +36,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | **기능 축** | 오버레이 누적 | baseline → gstack → auto → … → loope |
 | **호스트 축** | 하네스를 구동하는 프로그램 | `localllm` (Claude Code → OpenCode + Ollama) |
 | **모델 축** | 모델만 교체 (오버레이 동일) | `localllm.nem` (qwen2.5 → nemotron) |
+| **배포 축** | 릴리스 스냅샷 — 다운스트림에 건네는 단위 | `claude.vela.v0.1` |
 
 ---
 
@@ -51,6 +53,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | 제품 기획부터 배포까지 PM 주도로 통합 진행 | `claude.productmgr` |
 | 여러 팀이 한 제품을 분담해 만든다 (팀 간 메시지 계약) | `claude.productnw` (d-3) |
 | **전 기능 + 검증 루프를 명시·유계로 쓰고 싶다 (권장 기본)** | **`claude.loope`** ★ |
+| **팀이 Jira·Confluence 로 일한다 — 배포 단위로 받고 싶다** | **`claude.vela.v0.1`** 🚀 |
 | 판정(reviewer/qa)의 재현성이 낮아 채점을 정밀화하고 싶다 | `claude.aif` |
 | 로컬 LLM(OpenCode+Ollama)으로 비용 0·오프라인 추론 | `localllm` (d-2) |
 | 로컬 LLM + 항목형 판정을 **수치로 A/B** 하고 싶다 | `localllm.aif` |
@@ -185,7 +188,37 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 - **언제**: **전 스택을 쓰면서 검증을 명시·유계로 돌리고 싶을 때 — 사실상 권장 기본값**입니다.
 - **외부 의존성**: productmgr 상속분 허용, loop 오버레이는 stdlib/문서뿐.
 
-### ⓑ⁹ `claude.aif/` — 항목형 판정 (RLAIF/CAI 규율)
+### ⓑ⁹ `claude.vela.v0.1/` 🚀 — 배포 단위 + Atlassian 연동
+- **무엇**: `claude.loope` 1:1 복사 + **Atlassian 오버레이** (F032, ADR-023).
+  **배포 단위**로 건네는 릴리스 스냅샷입니다.
+- **이름 규약**: 앞으로 배포 단위 변형은 **`claude.vela.v<major>.<minor>`** 로 명명합니다.
+  기능 서술 이름(`claude.gstack.auto.design.wiki.orch`)과 축 접미사(`.aif`·`.nem`)는
+  **개명하지 않습니다** — ADR·측정 문서의 참조가 전부 깨집니다.
+- **SSOT 관계**: v0.1 에서 SSOT 는 **여전히 `claude.loope`** 이고 vela 는 그 위의 스냅샷입니다.
+  장기 관계(매 릴리스 복사 vs SSOT 이관)는 v0.2 착수 시 재검토합니다.
+- **추가 오버레이** (Atlassian):
+  - `atlassian_map.py` — 하네스 산출물 ↔ Atlassian 객체 매핑. **API 래퍼가 아닙니다.**
+  - `.claude/skills/atlassian/SKILL.md` — 방향 규약·번역 규칙
+  - `/project:atlassian` — `check` / `import` / `pending` / `publish` / `comment`
+- **핵심 설계 — 만들지 않은 것이 요점입니다**:
+  Atlassian **공식 MCP 커넥터**가 41개 도구를 이미 제공하므로 자체 MCP 도, API 래퍼도
+  만들지 않습니다. MCP 도구는 **에이전트가 직접** 부릅니다. 코드가 필요한 곳은 하나뿐 —
+  **"이걸 이미 발행했는가"** 입니다. 모델에게 그 기억을 맡기면 중복 페이지·중복 이슈가
+  생기고 되돌리기 어렵습니다. `atlassian_map.py` 가 digest 비교로 종료 코드를 냅니다
+  (`0` 최신 / `2` 신규 / `3` 갱신). **판단은 모델이, 멱등성은 코드가** — loope 의
+  grader/judge 분리를 발행 경로에 적용한 것입니다.
+- **방향 규약**: **우리 리포가 SSOT**, Atlassian 은 발행 대상입니다.
+  Atlassian 에서 편집한 내용을 리포로 **역반영하지 않습니다** — 두 SSOT 는 반드시 어긋납니다.
+- **승인 층위**: 발행은 외부 공개이고 팀에 알림이 갑니다. **PR 과 같은 층위**로 다루며
+  자동 발행하지 않습니다 (handoff·lint 가 부르지 않음).
+- **검증 범위 (정직하게)**: 커넥터 실측(사이트·권한·Jira 81 프로젝트)과 매핑 왕복 시험은
+  완료했습니다. **실제 발행(Confluence 페이지·Jira 코멘트)은 미검증**입니다.
+- **언제**: 팀이 Jira·Confluence 로 일하고, 하네스를 배포 단위로 받고 싶을 때.
+- **외부 의존성**: loope 상속분 + **Atlassian 공식 MCP 커넥터** (선택적 — 미연결 시 안내만
+  하고 하네스는 정상 동작). 사용자별 인증이라 다운스트림은 각자 연결해야 합니다.
+  `localllm` 계열(OpenCode 호스트)에는 이 커넥터가 없습니다.
+
+### ⓑ¹⁰ `claude.aif/` — 항목형 판정 (RLAIF/CAI 규율)
 - **무엇**: loope 1:1 복사 + **aif 오버레이** (F028, ADR-020). RLAIF·Constitutional AI·
   Rubrics-as-Rewards 문헌의 **판정 설계 규율**을 judge 에 이식했습니다.
 - **왜**: 측정 09 의 결론이 **"판정 분산이 개선 신호를 덮는다"** 였습니다 — 같은 취지의 정책이
@@ -204,7 +237,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
   판정 호출이 N배로 늘어나므로 그 외에는 산문형 rubric + verify-loop 로 충분합니다.
 - **외부 의존성**: loope 상속분 허용, aif 오버레이는 stdlib/문서뿐.
 
-### ⓑ¹⁰ `localllm/` — OpenCode + 로컬 LLM (호스트 축, d-2)
+### ⓑ¹¹ `localllm/` — OpenCode + 로컬 LLM (호스트 축, d-2)
 - **무엇**: **loope 계보** 복사 + **d-2 오버레이** (F015 신설 → F023 승격, ADR-009/017).
   Claude Code 가 아니라 **OpenCode(오픈소스 agent framework) + 로컬 LLM(Ollama)** 으로
   하네스를 구동합니다. **호스트 축**의 변형입니다.
@@ -229,7 +262,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 - **언제**: API 비용 0 · 오프라인 내부망 추론이 목적일 때.
 - **외부 의존성**: 허용 (OpenCode/Ollama) — 어댑터·헬퍼 자체는 stdlib only.
 
-### ⓑ¹¹ `localllm.aif/` — d-2 + 항목형 판정
+### ⓑ¹² `localllm.aif/` — d-2 + 항목형 판정
 - **무엇**: `localllm` 1:1 복사 + aif 오버레이 (F028).
 - **왜 별도 변형인가**: **수치 A/B 가 가능한 유일한 aif 변형**입니다. 무인 스위트(적합도 함수)와
   `cycle_driver`(무인 드라이버)를 함께 갖췄고, 로컬 GPU라 실험당 추가 과금이 0 입니다.
@@ -242,7 +275,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
   **판정 품질 향상이 곧 완주율 상승은 아닙니다.**
 - **외부 의존성**: localllm 상속분 + OpenCode/Ollama.
 
-### ⓑ¹² `localllm.nem/` — d-2 + nemotron (모델 축)
+### ⓑ¹³ `localllm.nem/` — d-2 + nemotron (모델 축)
 - **무엇**: `localllm` 1:1 복사 + **모델 축만 교체** (F030, ADR-021).
   오버레이 추가가 없는 **형제 변형**입니다 — 전 9 역할이 `nemotron-3-nano:30b` 단일.
 - **왜 부모를 갈아끼우지 않는가**: 부모 `localllm` 은 qwen2.5 기준으로 **불변 유지**합니다.
@@ -288,6 +321,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | `claude.productmgr` | **허용**(hermes 상속) | Obsidian/qmd/Marp (pm 오버레이는 stdlib/문서) |
 | `claude.productnw` | **허용**(productmgr 상속) | Obsidian/qmd/Marp (nw 오버레이는 stdlib/문서) |
 | **`claude.loope`** ★ | **허용**(productmgr 상속) | Obsidian/qmd/Marp (loop 오버레이는 stdlib/문서) |
+| **`claude.vela.v0.1`** 🚀 | **허용**(loope 상속) | 위 + **Atlassian 공식 MCP 커넥터** (선택적 — 미연결 시 안내만) |
 | `claude.aif` | **허용**(loope 상속) | Obsidian/qmd/Marp (aif 오버레이는 stdlib/문서) |
 | `localllm` | **허용**(loope 상속 + 호스트) | 위 + OpenCode / Ollama |
 | `localllm.aif` | **허용**(localllm 상속) | 위 + OpenCode / Ollama |
@@ -302,7 +336,7 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 ## 미러·정합성
 
 - 변형 간 오버레이 격리는 `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드됩니다
-  (**MR-1~14**). 신규 변형은 이 목록에 등재해야 하며, 등재 누락은 BLOCK 으로 잡힙니다.
+  (**MR-1~15**). 신규 변형은 이 목록에 등재해야 하며, 등재 누락은 BLOCK 으로 잡힙니다.
 - **미러 방향**: 메인(`harness_update_agent/.claude/`) → **`claude.loope`(1:1)** → 하위 변형은
   오버레이 규칙대로 제외 미러 (F021 / ADR-015).
 - **미러링 주의 (실제로 겪은 회귀)**: `CLAUDE.md` 를 **통째로 복사하지 마세요**.
@@ -320,3 +354,4 @@ openai (.codex) — codex 호스트 정적 변형 (별도 계보)
 | ADR-018 · 019 | 결정론 supervisor(cycle_driver) · autoresearch |
 | ADR-020 | aif 판정 오버레이 |
 | ADR-021 · 022 | 모델 축 분기 · 모델의 선의에 기대지 않는 도구 지시 |
+| **ADR-023** | **vela 버전 계보 · Atlassian(Jira·Confluence) 연동** |
