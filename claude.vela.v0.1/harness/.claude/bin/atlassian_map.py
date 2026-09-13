@@ -126,6 +126,30 @@ def cmd_put(args) -> int:
     return 0
 
 
+def cmd_forget(args) -> int:
+    """매핑을 지운다. **원격 페이지는 지우지 않는다** — 기록만 끊는다.
+
+    필요한 경우: 원격에서 페이지가 삭제됐거나, 시험용으로 남은 기록을 정리할 때.
+    이 명령 뒤에는 다음 `check` 가 '신규'로 판정하므로 새 페이지가 생긴다 — 원격에
+    페이지가 남아 있는 상태에서 부르면 중복이 만들어진다. 그래서 확인을 요구한다.
+    """
+    data = _load()
+    k = _key(args.kind, args.local_id)
+    entry = (data.get("entries") or {}).get(k)
+    if not entry:
+        print(f"[atlassian-map] 기록 없음: {k}")
+        return 1
+    if not args.yes:
+        print(f"[atlassian-map] 지울 기록: {k} → {entry.get('url')}\n"
+              "  원격 페이지는 지워지지 않습니다. 이후 발행하면 **새 페이지가 생깁니다**.\n"
+              "  진행하려면 --yes 를 붙이십시오.")
+        return 2
+    del data["entries"][k]
+    _save(data)
+    print(f"[atlassian-map] ✅ 기록 삭제: {k} (원격 페이지는 그대로)")
+    return 0
+
+
 def cmd_check(args) -> int:
     """재발행이 필요한지 판정한다.
 
@@ -201,10 +225,15 @@ def main() -> int:
     s = sub.add_parser("pending", help="발행 대상 나열")
     s.add_argument("--kind", default="adr", choices=_KINDS)
 
+    s = sub.add_parser("forget", help="매핑 기록 삭제 (원격 페이지는 유지)")
+    s.add_argument("kind", choices=_KINDS)
+    s.add_argument("local_id")
+    s.add_argument("--yes", action="store_true", help="확인 없이 삭제")
+
     args = ap.parse_args()
     return {
-        "show": cmd_show, "get": cmd_get, "put": cmd_put,
-        "check": cmd_check, "digest": cmd_digest, "pending": cmd_pending,
+        "show": cmd_show, "get": cmd_get, "put": cmd_put, "check": cmd_check,
+        "digest": cmd_digest, "pending": cmd_pending, "forget": cmd_forget,
     }[args.cmd](args)
 
 
