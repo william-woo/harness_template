@@ -8,16 +8,33 @@ MCP 도구를 직접 부르고, 매핑·멱등성만 `atlassian_map.py` 가 담�
 ## 사용
 
 ```
+/project:atlassian init --space <KEY>           # ★ 작업 시작 시 1회 — 스페이스 결정
 /project:atlassian check                        # 커넥터 연결·권한·사이트 확인
 /project:atlassian import <ISSUE-KEY>           # Jira 이슈 → feature_list 초안 (읽기)
 /project:atlassian pending                      # 발행 대상 나열 (신규·변경분)
-/project:atlassian publish adr ADR-014 --space SD   # ADR → Confluence (승인 필요)
-/project:atlassian publish checkpoint <파일명> --space SD
+/project:atlassian publish adr ADR-014           # ADR → Confluence (스페이스는 init 값)
+/project:atlassian publish checkpoint <파일명>
 /project:atlassian comment <ISSUE-KEY> --feature F001   # 판정 결과 → Jira 코멘트
 /project:atlassian map                          # 현재 매핑 표 출력
+/project:atlassian forget <kind> <id> --yes     # 매핑 기록만 삭제 (원격 유지)
 ```
 
 ## 실행 순서
+
+### `init` — 작업 시작 시 한 번
+
+발행할 때마다 스페이스를 고르면 판단이 반복되고, 40개가 넘는 스페이스 중 하나를 언젠가
+틀리게 고른다. **틀린 스페이스는 되돌리기 어렵다** — 페이지를 지워도 알림은 이미 갔다.
+`backup.py init` 과 같은 규약으로 **처음에 한 번 정한다**.
+
+```bash
+python3 .claude/bin/atlassian_map.py init \
+  --site <호스트> --cloud-id <UUID> \
+  --space <기본KEY> --space-for adr=<KEY> --space-for checkpoint=<KEY>
+```
+
+설정은 `host.json` 의 `atlassian` 필드(머신 로컬 — 미러 제외). 인자 없이 부르면
+현재 설정만 표시하고 덮어쓰지 않는다. 변경은 `--force` 또는 값 인자로.
 
 ### `check` — 항상 먼저
 
@@ -46,14 +63,19 @@ claude mcp list | grep -i atlassian
 python3 .claude/bin/atlassian_map.py pending --kind adr
 ```
 
-### `publish <kind> <local-id> --space <KEY>` — 승인 필요
+### `publish <kind> <local-id>` — 승인 필요
 
 발행은 외부 공개이고 팀에 알림이 간다. **사용자 승인 없이 발행하지 않는다.**
+스페이스는 `init` 에서 정한 값을 **조회만** 한다 — 여기서 다시 판단하지 않는다.
 
 ```bash
+SPACE=$(python3 .claude/bin/atlassian_map.py space <kind>) || {
+  echo "스페이스 미설정 — init 먼저"; exit 1; }
 D=$(python3 .claude/bin/atlassian_map.py digest <파일경로>)
 python3 .claude/bin/atlassian_map.py check <kind> <local-id> --digest "$D"
 ```
+
+`space` 가 exit 1 이면 **추측하지 말고 사용자에게 묻는다.**
 
 종료 코드로 분기한다 — 모델의 기억으로 판단하지 않는다:
 

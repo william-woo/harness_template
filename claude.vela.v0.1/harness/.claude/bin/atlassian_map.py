@@ -45,6 +45,33 @@ def _root() -> Path:
 
 _ROOT = _root()
 _MAP = _ROOT / ".claude" / "state" / "atlassian" / "map.json"
+_HOST = _ROOT / ".claude" / "host.json"
+
+
+def _load_host() -> dict:
+    """host.json 을 읽는다 (backup.py 와 같은 설정 자리 — 머신 로컬, 미러 제외)."""
+    if not _HOST.is_file():
+        return {}
+    return json.loads(_HOST.read_text(encoding="utf-8"))
+
+
+def _save_host(data: dict) -> None:
+    """host.json 을 쓴다."""
+    _HOST.parent.mkdir(parents=True, exist_ok=True)
+    _HOST.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def resolve_space(kind: str) -> str | None:
+    """이 종류의 산출물이 갈 스페이스를 반환한다.
+
+    **작업 시작 시 한 번 정하고, 발행할 때마다 다시 판단하지 않는다.**
+    스페이스가 40개가 넘는 사이트에서 매번 고르면 언젠가 틀린 곳에 공개된다 —
+    틀린 스페이스는 페이지를 지워도 알림이 이미 간 뒤다 (ADR-023 결정 5).
+
+    우선순위: kind 별 지정 → default → 없음(None → 호출부가 사용자에게 묻는다).
+    """
+    spaces = (_load_host().get("atlassian") or {}).get("spaces") or {}
+    return spaces.get(kind) or spaces.get("default")
 
 
 def _load() -> dict:
@@ -123,6 +150,65 @@ def cmd_put(args) -> int:
     _save(data)
     verb = "갱신" if prev else "신규"
     print(f"[atlassian-map] ✅ {verb} 기록: {k} → {args.url} (revision {entries[k]['revision']})")
+    return 0
+
+
+def cmd_init(args) -> int:
+    """스페이스·사이트를 **작업 시작 시 한 번** 정한다 (backup.py init 과 같은 규약).
+
+    발행 때마다 스페이스를 고르면 판단이 반복되고, 40개가 넘는 스페이스 중 하나를
+    언젠가 틀리게 고른다. 틀린 스페이스는 되돌리기 어렵다 — 페이지를 지워도 알림은 이미 갔다.
+
+    설정은 `host.json` 의 `atlassian` 필드에 둔다 (머신 로컬 — 미러 제외, ADR-015 결정 2).
+    이미 설정돼 있으면 현재 값을 보여주고 `--force` 없이는 덮어쓰지 않는다.
+    """
+    host = _load_host()
+    cur = host.get("atlassian") or {}
+    if cur and not (args.force or args.space or args.site or args.space_for):
+        print("[atlassian-map] 현재 설정:")
+        print(f"  사이트   : {cur.get('site', '-')}")
+        print(f"  cloudId  : {cur.get('cloudId', '-')}")
+        for k, v in sorted((cur.get("spaces") or {}).items()):
+            print(f"  스페이스 : {k:12} → {v}")
+        print("  변경하려면 --space/--site/--space-for 를 주거나 --force 를 붙이십시오.")
+        return 0
+
+    spaces = dict(cur.get("spaces") or {})
+    if args.space:
+        spaces["default"] = args.space
+    for pair in args.space_for or []:
+        if "=" not in pair:
+            raise SystemExit(f"[atlassian-map] ❌ --space-for 형식은 kind=KEY 입니다: {pair}")
+        kind, key = pair.split("=", 1)
+        if kind not in _KINDS:
+            raise SystemExit(f"[atlassian-map] ❌ 알 수 없는 kind: {kind} (허용: {', '.join(_KINDS)})")
+        spaces[kind] = key
+    if not spaces:
+        raise SystemExit("[atlassian-map] ❌ 최소한 --space <KEY> 로 기본 스페이스를 정하십시오.")
+
+    host["atlassian"] = {
+        "site": args.site or cur.get("site", ""),
+        "cloudId": args.cloud_id or cur.get("cloudId", ""),
+        "spaces": spaces,
+    }
+    _save_host(host)
+    print("[atlassian-map] ✅ 설정 저장 (host.json · 머신 로컬)")
+    print(f"  사이트   : {host['atlassian']['site'] or '(미지정)'}")
+    print(f"  cloudId  : {host['atlassian']['cloudId'] or '(미지정 — getAccessibleAtlassianResources 로 확인)'}")
+    for k, v in sorted(spaces.items()):
+        print(f"  스페이스 : {k:12} → {v}")
+    return 0
+
+
+def cmd_space(args) -> int:
+    """이 종류가 갈 스페이스를 출력한다. 미설정이면 exit 1 (호출부가 사용자에게 묻는다)."""
+    key = resolve_space(args.kind)
+    if not key:
+        print(f"[atlassian-map] 스페이스 미설정 ({args.kind}) — "
+              "`atlassian_map.py init --space <KEY>` 로 먼저 정하십시오.\n"
+              "  추측해서 발행하지 않습니다. 틀린 스페이스는 되돌리기 어렵습니다.")
+        return 1
+    print(key)
     return 0
 
 
@@ -230,10 +316,22 @@ def main() -> int:
     s.add_argument("local_id")
     s.add_argument("--yes", action="store_true", help="확인 없이 삭제")
 
+    s = sub.add_parser("init", help="스페이스·사이트 초기 설정 (작업 시작 시 1회)")
+    s.add_argument("--space", help="기본 스페이스 키 (예: SD)")
+    s.add_argument("--space-for", action="append", metavar="kind=KEY",
+                   help="종류별 스페이스 (예: adr=SD). 여러 번 지정 가능")
+    s.add_argument("--site", help="사이트 호스트명 (예: obigoinc.atlassian.net)")
+    s.add_argument("--cloud-id", help="cloudId (UUID)")
+    s.add_argument("--force", action="store_true", help="기존 설정 덮어쓰기")
+
+    s = sub.add_parser("space", help="이 종류가 갈 스페이스 출력 (미설정이면 exit 1)")
+    s.add_argument("kind", choices=_KINDS)
+
     args = ap.parse_args()
     return {
         "show": cmd_show, "get": cmd_get, "put": cmd_put, "check": cmd_check,
         "digest": cmd_digest, "pending": cmd_pending, "forget": cmd_forget,
+        "init": cmd_init, "space": cmd_space,
     }[args.cmd](args)
 
 

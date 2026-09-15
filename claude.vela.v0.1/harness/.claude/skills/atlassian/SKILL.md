@@ -17,6 +17,52 @@ Atlassian **공식 MCP 커넥터**(`mcp.atlassian.com/v1/mcp`)가 Jira·Confluen
 빈 곳은 도구가 아니라 **매핑**입니다: 우리 `FNNN` 이 어느 Jira 이슈인지, 이 ADR 을 이미
 발행했는지. 이 스킬은 그 규약을, `atlassian_map.py` 는 그 상태를 담당합니다.
 
+## 작업 시작 시 한 번 — 스페이스를 정한다
+
+발행할 때마다 스페이스를 고르면 판단이 반복되고, 40개가 넘는 스페이스 중 하나를 언젠가
+틀리게 고릅니다. **틀린 스페이스는 되돌리기 어렵습니다** — 페이지를 지워도 알림은 이미 갔습니다.
+
+그래서 `backup.py init` 과 같은 규약을 씁니다 — **처음에 한 번 정하고, 그 뒤로는 묻지 않습니다.**
+
+```bash
+python3 .claude/bin/atlassian_map.py init \
+  --site obigoinc.atlassian.net --cloud-id <UUID> \
+  --space SD --space-for adr=SD --space-for checkpoint=SD
+```
+
+설정은 `host.json` 의 `atlassian` 필드에 저장됩니다. 인자 없이 부르면 현재 설정만
+보여 주고 덮어쓰지 않습니다.
+
+> **템플릿에는 설정을 넣지 않습니다.** `backup` 설정과 같은 규약입니다 — 사이트·cloudId·
+> 스페이스는 머신·조직마다 다르므로, 템플릿의 `host.json` 은 `agent_type`·`harness_version`·
+> `notes` 3개 키만 담고 나머지는 **런타임 `init` 으로 추가**합니다. 템플릿에 테스트값이
+> 섞이면 그것을 받는 다운스트림이 엉뚱한 스페이스로 발행하게 됩니다.
+
+다운스트림 프로젝트에서 이 하네스를 쓸 때는 그 프로젝트 루트에서 `init` 을 부르면 됩니다.
+하네스 자체를 개발하며 변형 디렉토리에서 스크립트를 돌릴 때는 프로젝트 루트를 명시합니다:
+
+```bash
+CLAUDE_PROJECT_DIR=<프로젝트 루트> python3 <변형>/harness/.claude/bin/atlassian_map.py space adr
+```
+
+발행 직전에는 **조회만** 합니다:
+
+```bash
+SPACE=$(python3 .claude/bin/atlassian_map.py space adr) || {
+  echo "스페이스 미설정 — init 먼저"; exit 1; }
+```
+
+`space` 가 exit 1 이면 **추측하지 말고 사용자에게 묻습니다.**
+
+### 스페이스를 고르는 기준 (init 할 때 한 번 판단)
+
+| 산출물 | 독자 | 스페이스 |
+|---|---|---|
+| ADR (설계 결정) | 그 프로젝트 개발자 | 프로젝트 스페이스 (Jira 키와 동일한 이름이 이 조직의 관행) |
+| 체크포인트·진행 로그 | 그 프로젝트 팀 | 프로젝트 스페이스 |
+| 하네스 자체 문서 | 하네스를 쓰는 모든 팀 | 조직 공통 (`SD`) |
+| 실험·PoC 기록 | 임시 | `IT` 또는 개인 스페이스 |
+
 ## 전제 확인 (항상 먼저)
 
 ```bash
