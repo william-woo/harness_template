@@ -84,6 +84,11 @@ _EXCLUDE_PATTERNS: list[str] = [
     # Binary state — gitignore 일관
     ".claude/state/qa-browser/screenshots/",
     ".claude/state/qa-browser/runs/",
+    # 컨소시엄 런타임 — 로스터·큐에 팀 간 업무 메시지가 쌓이고,
+    # .secrets/ 하위에 게이트웨이 자격증명이 놓일 수 있다 (F019 리뷰 MUST-4)
+    ".claude/state/consortium/",
+    # Atlassian 매핑 — 머신 로컬 (ADR-023 비용 절)
+    ".claude/state/atlassian/",
 ]
 
 # 보안 BLOCK 패턴 — 누락 시 exit 1 (결정 5 예외, 결정 6 보안)
@@ -107,6 +112,12 @@ _SECURITY_BLOCK_PATTERNS: list[str] = [
     "*.p12",
     "*.pfx",
     "*.jks",
+    # 자격증명 보관 관례 디렉토리 — 이름만으로 내용이 비밀임이 드러난다 (F019 리뷰 MUST-4)
+    ".secrets/",
+    # 토큰·웹훅 파일명 관례 (consortium 게이트웨이 등)
+    "*token.txt",
+    "*webhook.txt",
+    "*secret.txt",
 ]
 
 # 보안 BLOCK 화이트리스트 접미사 — 자격증명이 아닌 양식 파일 (ADR-005 결정 6 보강)
@@ -293,8 +304,16 @@ def _is_rsync_excluded(rel: str, excludes: list[str]) -> bool:
     for pattern in excludes:
         p = pattern.rstrip("/")
         if pattern.endswith("/"):
-            # 디렉토리 패턴 — 경로 어느 깊이에서든 매칭 (rsync 동일)
-            if p in parts[:-1]:
+            # 디렉토리 패턴. 두 형태를 구분해야 한다 (F019 리뷰 중 발견):
+            #   ① 단일 세그먼트 (`node_modules/`) — 경로 어느 깊이에서든 매칭
+            #   ② 다중 세그먼트 (`.claude/state/qa-browser/screenshots/`) — 루트 기준 prefix
+            # 이전 구현은 ①만 처리해 `p in parts[:-1]` 로 비교했는데, ②는 `p` 가
+            # 여러 세그먼트를 담은 한 문자열이라 단일 세그먼트 목록과 **절대 같아지지 않았다**.
+            # 그래서 qa-browser 스크린샷·실행로그가 제외되지 않고 백업에 실려 왔다.
+            if "/" in p:
+                if rel == p or rel.startswith(p + "/"):
+                    return True
+            elif p in parts[:-1]:
                 return True
         elif "/" in p:
             # 경로 지정 패턴 (예: .claude/state/lint-last.json) — 루트 기준
