@@ -98,6 +98,23 @@ _ENVELOPE_RE = re.compile(re.escape(_ENVELOPE_PREFIX) + r"([A-Za-z0-9+/=]+)")
 _TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
+def _safe_component(value: str, fallback: str) -> str:
+    """원격에서 받은 값을 파일명 **한 성분**으로 쓸 수 있게 화이트리스트로 거른다.
+
+    수신 봉투의 필드는 **신뢰할 수 없는 입력**이다 — 채널에 글을 쓸 수 있는 누구나
+    값을 정한다. 이전 구현은 `:` 와 `-` 만 지웠기 때문에 `/` 와 `..` 가 그대로 남았고,
+    그 값이 파일명 **선두**에 놓여 경로를 벗어날 수 있었다:
+
+        ts="/etc/ABSOLUTE"    → /etc/ABSOLUTE__from-x.json   (inbox 완전 이탈)
+        ts="../../../ESCAPED" → inbox/../../../ESCAPED__...  (상위로 탈출)
+
+    pathlib 은 절대경로 세그먼트를 만나면 앞의 base 를 버리므로 첫 줄이 특히 위험하다.
+    제거가 아니라 **허용 문자만 남기는** 방식이라, 새로운 구분자가 생겨도 안전하다.
+    """
+    kept = re.sub(r"[^A-Za-z0-9T+]", "", str(value or ""))
+    return kept or fallback
+
+
 def _now() -> str:
     """UTC ISO 타임스탬프."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -366,8 +383,9 @@ def _receive_teams() -> int:
             continue
         contract["status"] = "received"
         contract["graph_msg_id"] = gid
-        safe_ts = str(contract.get("ts", "")).replace(":", "").replace("-", "") or gid
-        out = _INBOX / f"{safe_ts}__from-{contract.get('from_team','?')}__{gid[-6:]}.json"
+        safe_ts = _safe_component(contract.get("ts", ""), gid)
+        safe_from = _safe_component(contract.get("from_team", ""), "unknown")
+        out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json"
         out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
               f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
@@ -444,8 +462,8 @@ def _receive_openclaw() -> int:
         contract["status"] = "received"
         if record.get("conversation_ref"):
             contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
-        safe_ts = str(contract.get("ts", "")).replace(":", "").replace("-", "") or rf.stem
-        out = _INBOX / f"{safe_ts}__from-{contract.get('from_team','?')}.json"
+        safe_ts = _safe_component(contract.get("ts", ""), rf.stem)
+        out = _INBOX / f"{safe_ts}__from-{_safe_component(contract.get('from_team', ''), 'unknown')}.json"
         out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
         rf.rename(processed_dir / rf.name)
         print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
