@@ -71,7 +71,7 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 [Gatekeeper](.claude/agents/gatekeeper.md) 가 모든 모호 케이스를 처리.
 
-### 규칙 #3 — 사용자 승인 필수 경계 (2026-08-16 축소)
+### 규칙 #3 — 사용자 승인 필수 경계 (2026-09-17 갱신)
 
 승인이 필요한 것은 **둘뿐**이다 — 나머지는 전부 자율 진행한다:
 
@@ -83,18 +83,7 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 `permissions.ask` 에 위 패턴을 등재해 자동 허용을 오버라이드한다 (precedence: deny > ask > allow).
 `rm -rf /`·`~`·`$HOME` 류는 `deny` 로 **완전 차단**한다.
 
-> **이전 정책과의 차이**: 계정·인증(`sudo`, `gh auth login`), 외부 디렉토리 접근, 시스템 패키지
-> 설치, `git push` 는 **더 이상 승인을 요구하지 않는다**. 장시간 자율 작업이 프롬프트로 끊기는
-> 비용이 그 보호막의 값어치보다 크다는 판단이다 (사용자 지시).
 
-선언 규칙이 못 잡는 삭제 경로(예: `python3` 스크립트 내 삭제, 복합 명령)는 에이전트가
-**행동 규칙으로 삭제 전 확인**한다. 실제로 복합 명령(`rm … ; mkdir …`)은 패턴 매칭을
-빠져나가므로, 삭제가 필요하면 **새 디렉토리를 쓰는 쪽을 먼저 검토**한다.
-
-강제 메커니즘:
-- `permissions.ask` — 선언적 차단 (1차)
-- `pre-bash-auto-boundary-check.sh` 훅 — 패턴 매칭 (2차)
-- Gatekeeper 에이전트 — 컨텍스트 기반 판정 (모호 케이스)
 
 ### Autonomous Mode 비활성화 시
 `.claude/settings.json` 의 `permissions.allow` 에서 wildcard 제거 + autonomous 훅 wiring 제거.

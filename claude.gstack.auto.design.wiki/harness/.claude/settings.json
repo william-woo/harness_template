@@ -20,14 +20,16 @@
       "Bash(rm -rf $HOME/*)"
     ],
     "ask": [
+      "Bash(find * -delete*)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(git clean *)",
       "Bash(rm *)",
       "Bash(rm)",
       "Bash(rmdir *)",
-      "Bash(unlink *)",
       "Bash(shred *)",
-      "Bash(git clean *)",
       "Bash(trash *)",
-      "Bash(find * -delete*)"
+      "Bash(unlink *)"
     ]
   },
   "hooks": {

@@ -41,17 +41,26 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 [Gatekeeper](.claude/agents/gatekeeper.md) 가 모든 모호 케이스를 처리.
 
-### 규칙 #3 — 사용자 승인 필수 경계 (2026-08-16 축소)
+### 규칙 #3 — 사용자 승인 필수 경계 (2026-09-17 갱신)
 
-승인이 필요한 것은 **둘뿐**이다 — 나머지는 전부 자율 진행한다:
+승인이 필요한 것은 **셋뿐**이다 — 나머지는 전부 자율 진행한다:
 
 | 경계 | 대상 | 이유 |
 |---|---|---|
 | **3-A 삭제** | `rm` / `rmdir` / `unlink` / `shred` / `git clean` / `trash` / `find … -delete` | 비가역이고, 잘못 지우면 복구가 불가능하다 |
 | **3-B PR 생성·병합** | `gh pr create` / `gh pr merge` | 외부에 공개되고 팀에 알림이 간다 |
+| **3-C Confluence·Jira 쓰기·삭제** | Atlassian 커넥터의 **변경** 도구 전부 — `createConfluencePage` / `updateConfluencePage` / 코멘트 생성 2종 / `createJiraIssue` / `editJiraIssue` / `addCommentToJiraIssue` / `addWorklogToJiraIssue` / `transitionJiraIssue` / `createIssueLink` / Compass 생성 3종 / `addTeamworkGraphContext` | 팀이 보는 기록을 바꾼다. 되돌려도 알림·이력은 남는다 (ADR-023 "발행은 PR 과 같은 승인 층위") |
+
+> **조회는 자동**이다 — `getConfluencePage` / `getPagesInConfluenceSpace` / `searchConfluenceUsingCql` /
+> `getJiraIssue` / `searchJiraIssuesUsingJql` / `getVisibleJiraProjects` / `fetch` / `search` 등
+> read-only 도구는 승인 없이 쓴다. 읽기까지 막으면 조사가 매번 끊긴다.
 
 `permissions.ask` 에 위 패턴을 등재해 자동 허용을 오버라이드한다 (precedence: deny > ask > allow).
 `rm -rf /`·`~`·`$HOME` 류는 `deny` 로 **완전 차단**한다.
+
+> **변형별 적용**: 3-A·3-B 는 자율 변형 14종 전부. 3-C 는 Atlassian 커넥터를 쓰는
+> **vela 계열에만** 등재한다 — LINT-MR-15 의 오버레이 격리를 설정에서도 지킨다
+> (커넥터가 없는 변형에 규칙만 넣으면 영영 매칭되지 않는 죽은 설정이 된다).
 
 > **이전 정책과의 차이**: 계정·인증(`sudo`, `gh auth login`), 외부 디렉토리 접근, 시스템 패키지
 > 설치, `git push` 는 **더 이상 승인을 요구하지 않는다**. 장시간 자율 작업이 프롬프트로 끊기는
