@@ -18,6 +18,7 @@
 실행:
     python3 tests/test_consortium_gateway.py
 """
+import base64
 import importlib.util
 import json
 import os
@@ -330,13 +331,17 @@ class PoisonPillTest(unittest.TestCase):
         self.assertEqual(list(inbound.glob("*.json")), [], "큐가 비워지지 않았다")
 
     def test_오염된_ts_는_inbox_경로를_벗어나지_못한다(self):
-        """`_safe_component` 단위 테스트와 별개 — **호출을 빼먹는 회귀**를 잡는다."""
+        """`_safe_component` 단위 테스트와 별개 — **호출을 빼먹는 회귀**를 잡는다.
+
+        `ts` 는 계약 필수 필드가 아니라 검증이 걸리지 않는다. 그래서 위생 처리
+        (`_safe_component`)가 유일한 방어이고, 이 경로가 살아 있는지 여기서 본다.
+        """
         mod, root = self._node("node-escape")
         state = root / ".claude/state/consortium"
         inbound = state / "openclaw-inbound"
         inbound.mkdir(parents=True, exist_ok=True)
         (inbound / "00-escape.json").write_text(json.dumps({"consortium_msg": {
-            "from_team": "../../../etc", "to_team": "team-b", "role": "developer",
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
             "cycle_id": "C3", "msg": "탈출 시도", "ts": "../../../../ESCAPED",
         }}, ensure_ascii=False), encoding="utf-8")
 
@@ -346,6 +351,37 @@ class PoisonPillTest(unittest.TestCase):
         self.assertEqual(written[0].parent.resolve(), (state / "inbox").resolve(),
                          "inbox 밖에 파일이 쓰였다 — 경로 탈출")
         self.assertNotIn("..", written[0].name)
+
+    def test_계약을_위반한_원격_레코드는_거부된다(self):
+        """수신에도 계약 검증이 걸리는지 (ADR-012 결정 3 수정).
+
+        `_safe_component` 는 파일명만 지킨다. `role`·`cycle_id` 는 downstream
+        product-cycle 라우팅 키로 흘러가므로, 계약 검증이 없으면 원격이
+        `to_team` 만 맞추고 나머지 필드에 무엇이든 넣을 수 있다.
+        """
+        violations = {
+            "team-id 형식 위반": {"from_team": "../../../etc", "to_team": "team-b",
+                              "role": "developer", "cycle_id": "C1", "msg": "x"},
+            "필수 필드 누락(role)": {"from_team": "team-a", "to_team": "team-b",
+                                "role": "", "cycle_id": "C1", "msg": "x"},
+            "stage 값 오류": {"from_team": "team-a", "to_team": "team-b", "role": "developer",
+                          "cycle_id": "C1", "msg": "x", "stage": "배포해줘"},
+        }
+        for label, contract in violations.items():
+            with self.subTest(violation=label):
+                mod, root = self._node(f"node-v{abs(hash(label))}")
+                state = root / ".claude/state/consortium"
+                inbound = state / "openclaw-inbound"
+                inbound.mkdir(parents=True, exist_ok=True)
+                (inbound / "00-bad.json").write_text(
+                    json.dumps({"consortium_msg": contract}, ensure_ascii=False), encoding="utf-8")
+                (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+                self.assertEqual(mod._receive_openclaw(), 0)
+                self.assertEqual(len(list((state / "inbox").glob("*.json"))), 1,
+                                 f"{label} 이 적재됐거나 정상분이 막혔다")
+                self.assertEqual(len(list((inbound / "quarantine").glob("*.json"))), 1,
+                                 f"{label} 이 격리되지 않았다")
 
 
 class MessageDurabilityTest(unittest.TestCase):
@@ -427,6 +463,97 @@ class MessageDurabilityTest(unittest.TestCase):
         inbox = list((root / ".claude/state/consortium/inbox").glob("*.json"))
         got = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"] for f in inbox)
         self.assertEqual(got, ["FIRST", "SECOND"], f"수신 메시지가 덮어써졌다: {got}")
+
+
+class ReceiveBoundaryParityTest(unittest.TestCase):
+    """**같은** 악성 입력을 두 transport 에 태운다 (F019 에스컬레이션 산출).
+
+    수신 경계가 2벌로 복제돼 있던 동안, 수정은 리뷰어가 찔러본 사본에만 갔다 —
+    `except Exception` 이 openclaw 에만 적용되고 teams 는 열거형으로 남아 같은
+    `RecursionError` 로 뚫렸다. 클래스를 닫으려던 수정조차 인스턴스만 닫은 것이다.
+
+    그래서 이 테스트는 transport 별로 복제하지 않는다. 복제하면 테스트가 같은 병에
+    걸린다 — 한쪽에만 케이스를 추가하고 끝난다. 악성 입력 목록은 **하나**이고,
+    두 transport 가 그것을 공유한다.
+    """
+
+    POISONS = {
+        "최상위가 배열": [1, 2, 3],
+        "계약이 문자열": {"consortium_msg": "x"},
+        "과다 중첩": None,          # 아래에서 raw 문자열로 특별 처리
+        "과다 길이 ts": {"consortium_msg": {
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C1", "msg": "x", "ts": "A" * 300}},
+        "계약 위반(team-id)": {"consortium_msg": {
+            "from_team": "../../etc", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C1", "msg": "x"}},
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _node(self, name: str):
+        root = Path(self.tmp.name) / name
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        old = sys.argv
+        sys.argv = ["consortium.py", "init", "team-b", "--agents", "developer"]
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old
+        return mod, root
+
+    def test_openclaw_경계가_모든_악성입력을_견딘다(self):
+        for label, payload in self.POISONS.items():
+            with self.subTest(transport="openclaw", poison=label):
+                mod, root = self._node(f"oc-{abs(hash(label))}")
+                inbound = root / ".claude/state/consortium/openclaw-inbound"
+                inbound.mkdir(parents=True, exist_ok=True)
+                body = "[" * 100000 if payload is None else json.dumps(payload, ensure_ascii=False)
+                (inbound / "00-bad.json").write_text(body, encoding="utf-8")
+                (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+                self.assertEqual(mod._receive_openclaw(), 0, f"{label} 으로 수신이 죽었다")
+                # 악성분이 거부될지 위생 처리 후 적재될지는 입력마다 다르다.
+                # 경계의 계약은 하나 — **정상분은 반드시 도착하고 큐는 비워진다**.
+                arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                           for f in (root / ".claude/state/consortium/inbox").glob("*.json")]
+                self.assertIn("정상 메시지", arrived, f"{label} 뒤의 정상분이 막혔다: {arrived}")
+                self.assertEqual(list(inbound.glob("*.json")), [], "큐가 비워지지 않았다")
+
+    def test_teams_경계가_같은_악성입력을_견딘다(self):
+        good = base64.b64encode(json.dumps({
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C1", "msg": "정상", "ts": "2026-09-17T00:00:00+00:00",
+        }, ensure_ascii=False).encode()).decode()
+
+        for label, payload in self.POISONS.items():
+            with self.subTest(transport="teams", poison=label):
+                mod, root = self._node(f"tm-{abs(hash(label))}")
+                raw = "[" * 100000 if payload is None else json.dumps(payload, ensure_ascii=False)
+                evil = base64.b64encode(raw.encode()).decode()
+                mod._graph_get = lambda url, token, _e=evil, _g=good: (True, {"value": [
+                    {"id": "gid-evil-01", "body": {"content": mod._ENVELOPE_PREFIX + _e}},
+                    {"id": "gid-good-01", "body": {"content": mod._ENVELOPE_PREFIX + _g}},
+                ]})
+                os.environ.update({"CONSORTIUM_TEAMS_TOKEN": "tok",
+                                   "CONSORTIUM_TEAMS_TEAM_ID": "t",
+                                   "CONSORTIUM_TEAMS_CHANNEL_ID": "c"})
+                try:
+                    self.assertEqual(mod._receive_teams(), 0, f"{label} 으로 폴링이 죽었다")
+                finally:
+                    for key in ("CONSORTIUM_TEAMS_TOKEN", "CONSORTIUM_TEAMS_TEAM_ID",
+                                "CONSORTIUM_TEAMS_CHANNEL_ID"):
+                        os.environ.pop(key, None)
+                arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                           for f in (root / ".claude/state/consortium/inbox").glob("*.json")]
+                self.assertIn("정상", arrived, f"{label} 뒤의 정상분이 막혔다: {arrived}")
 
 
 class SeenPersistenceTest(unittest.TestCase):

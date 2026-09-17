@@ -152,6 +152,66 @@ def _write_unique(path: Path, text: str) -> Path:
     raise OSError(f"파일명 충돌 1000회 초과: {path.name}")
 
 
+class RejectedRecord(Exception):
+    """수신 경계가 레코드를 거부했다 (거부 사유를 메시지로 싣는다)."""
+
+
+def _ingest_record(raw: object, me: str, unique_hint: str, extra: dict | None = None) -> dict | None:
+    """**수신 신뢰 경계** — 원격이 만든 레코드 1건을 검증·위생 처리해 inbox 에 적재한다.
+
+    transport(Teams Graph / OpenClaw 드롭)는 "바이트를 어디서 가져오는가" 만 다르고
+    그 뒤는 전부 같다. 그래서 이 경계는 **하나뿐이어야 한다** — ADR-013 결정 1 범위 정정.
+
+    경계가 2벌로 복제돼 있던 동안 "결함의 클래스를 닫는다" 가 주소를 갖지 못했다.
+    리뷰어는 자기가 찔러본 사본만 보고하고, 수정은 그 사본에만 갔다. 실측 증거:
+    `except Exception` 수정이 openclaw 쪽에만 적용되고 teams 쪽은 열거형으로 남아
+    같은 `RecursionError` 로 뚫렸다 — 클래스를 닫으려던 수정조차 인스턴스만 닫았다.
+
+    Args:
+        raw: 원격이 만든 레코드 (Graph 메시지 dict 또는 드롭 파일의 파싱 결과)
+        me: 내 팀 id — 지목 필터 기준
+        unique_hint: 파일명 유일성 보조 성분 (graph id 꼬리 / 드롭 파일명 꼬리)
+        extra: 계약에 덧붙일 로컬 메타 (graph_msg_id 등)
+
+    Returns:
+        적재한 계약 dict. consortium 메시지가 아니거나 내 앞으로가 아니면 None.
+
+    Raises:
+        RejectedRecord: 계약 위반 — 호출자가 격리·집계한다.
+        그 외 모든 예외는 호출자의 경계 핸들러가 잡는다 (예외를 열거하지 않는다).
+    """
+    if not isinstance(raw, dict):
+        raise RejectedRecord(f"최상위가 객체가 아님: {type(raw).__name__}")
+    # 계약 복원: 명시 consortium_msg(openclaw 드롭) 우선, 없으면 텍스트의 base64 봉투 스캔(Teams)
+    contract = raw.get("consortium_msg") or _extract_envelope(raw)
+    if not contract:
+        return None  # consortium 메시지 아님
+    if not isinstance(contract, dict):
+        raise RejectedRecord(f"계약이 객체가 아님: {type(contract).__name__}")
+    # 지목 필터 — 채널은 공유되므로 내 앞으로가 아니면 무시
+    if contract.get("to_team") != me or contract.get("from_team") == me:
+        return None
+
+    # 계약 검증을 **수신에도** 건다 (ADR-012 결정 3 수정). 발신만 검증하면
+    # 위협이 있는 쪽엔 검증이 없다 — 값을 정하는 것은 원격이다.
+    # `_safe_component` 는 파일명만 지킨다. role·cycle_id 는 product-cycle
+    # 라우팅 키로 흘러가므로 계약 검증이 아니면 아무도 지키지 않는다.
+    errs = _validate_message(contract)
+    if errs:
+        raise RejectedRecord("; ".join(errs))
+
+    contract["status"] = "received"
+    if extra:
+        contract.update(extra)
+    safe_ts = _safe_component(contract.get("ts", ""), unique_hint)
+    safe_from = _safe_component(contract.get("from_team", ""), "unknown")
+    _write_unique(_INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(unique_hint[-6:], 'x')}.json",
+                  json.dumps(contract, ensure_ascii=False, indent=2))
+    print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
+          f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
+    return contract
+
+
 def _load_roster() -> dict:
     """roster.json 을 읽는다 (없으면 빈 구조)."""
     if _ROSTER.exists():
@@ -399,8 +459,10 @@ def _receive_teams() -> int:
 
     _INBOX.mkdir(parents=True, exist_ok=True)
     seen_file = _STATE / "received-seen.json"
-    # seen 이 깨져도 수신은 계속되어야 한다. 이 파일은 멱등 힌트일 뿐이고,
-    # 잃으면 최악이 중복 적재인데 inbox 파일명이 graph id 를 포함해 덮어쓰기로 끝난다.
+    # seen 이 깨져도 수신은 계속되어야 한다. 이 파일은 멱등 힌트일 뿐이다.
+    # 잃으면 같은 메시지가 `-1` 접미사로 **중복 적재**된다 (덮어쓰기가 아니다 —
+    # `_write_unique` 도입 후 의미론이 at-most-once → at-least-once 로 바뀌었다).
+    # 유실보다 중복을 택한 것이고, 소비측은 `graph_msg_id` 로 dedupe 하면 된다.
     # 읽기를 무방어로 두면 torn write 한 번에 Teams 수신이 **영구 정지**한다.
     seen: set[str] = set()
     if seen_file.exists():
@@ -424,26 +486,13 @@ def _receive_teams() -> int:
             seen.add(gid)  # 봉투 유무와 무관하게 본 메시지는 기록 (재스캔 방지)
             # 채널 메시지는 누구나 쓴다 — 한 건의 이상 데이터가 폴링 전체를 멈추면
             # 그 뒤 메시지가 영원히 도착하지 않는다. 건별로 격리하고 계속한다.
+            # 예외를 열거하지 않는다 — 열거하면 반드시 빠뜨린다 (실측: RecursionError).
             try:
-                contract = _extract_envelope(msg)
-                if not contract:
-                    continue  # consortium 메시지 아님
-                if not isinstance(contract, dict):
-                    raise TypeError(f"계약이 객체가 아님: {type(contract).__name__}")
-                # 나에게 온 것만, 내가 보낸 건 제외
-                if contract.get("to_team") != me or contract.get("from_team") == me:
+                if _ingest_record(msg, me, gid, extra={"graph_msg_id": gid}) is None:
                     skipped += 1
-                    continue
-                contract["status"] = "received"
-                contract["graph_msg_id"] = gid
-                safe_ts = _safe_component(contract.get("ts", ""), gid)
-                safe_from = _safe_component(contract.get("from_team", ""), "unknown")
-                _write_unique(_INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json",
-                              json.dumps(contract, ensure_ascii=False, indent=2))
-                print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
-                      f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
-                ingested += 1
-            except (ValueError, TypeError, OSError, AttributeError, UnicodeDecodeError) as exc:
+                else:
+                    ingested += 1
+            except Exception as exc:  # noqa: BLE001 — 신뢰 불가 원격 입력의 경계
                 print(f"  ⚠️ 메시지 처리 실패(건너뜀): {gid[-12:]} — "
                       f"{type(exc).__name__}: {str(exc)[:80]}")
                 failed += 1
@@ -457,7 +506,7 @@ def _receive_teams() -> int:
 
     tail = f", 실패 {failed}건 건너뜀" if failed else ""
     print(f"[consortium] Teams 수신 완료: {ingested}건 inbox 적재 "
-          f"(타팀행 {skipped}건 제외, 누적 seen {len(seen)}{tail})")
+          f"(미적재 {skipped}건 — 타팀행·비consortium, 누적 seen {len(seen)}{tail})")
     return 0
 
 
@@ -517,46 +566,25 @@ def _receive_openclaw() -> int:
     for rf in sorted(_OC_INBOUND.glob("*.json")):
         # courier 가 드롭하는 파일은 **신뢰할 수 없는 입력**이다 — 전송 중 잘리거나
         # 다른 도구가 쓰다 만 것이 섞인다. 항목 하나의 실패가 큐 전체를 멈추면
-        # 그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 영구히 죽는다**
-        # (실측: 손상 1건 뒤의 정상 메시지가 영원히 처리되지 않음).
-        #
-        # 파싱만 감싸는 것으로는 부족하다 — 재리뷰 실측에서 유효 JSON 세 종류가
-        # 같은 wedge 를 냈다: 비객체(`[1,2,3]` → AttributeError), 계약이 dict 가
-        # 아닌 경우(`"consortium_msg": "x"`), 과다 길이 ts(OSError). 따라서 한 건
-        # 처리 **전체**를 감싼다. 어떤 필드가 무슨 예외를 낼지 미리 셀 수 없다.
+        # 그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 영구히 죽는다**.
+        # 검증·위생·적재는 전부 `_ingest_record`(단일 수신 경계)가 한다 — 여기 남는
+        # 것은 "바이트를 가져온다" 와 성공 후 장부(파일 이동)뿐이다.
         try:
             record = json.loads(rf.read_text(encoding="utf-8"))
-            if not isinstance(record, dict):
-                raise TypeError(f"최상위가 객체가 아님: {type(record).__name__}")
-            # 계약 복원: 명시 consortium_msg 우선, 없으면 text 의 base64 봉투 스캔
-            contract = record.get("consortium_msg") or _extract_envelope(record)
-            if not contract:
-                rf.rename(processed_dir / rf.name)
-                continue  # consortium 메시지 아님
-            if not isinstance(contract, dict):
-                raise TypeError(f"계약이 객체가 아님: {type(contract).__name__}")
-            if contract.get("to_team") != me or contract.get("from_team") == me:
-                rf.rename(processed_dir / rf.name)
-                skipped += 1
-                continue
-            contract["status"] = "received"
-            if record.get("conversation_ref"):
-                contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
-            safe_ts = _safe_component(contract.get("ts", ""), rf.stem)
-            safe_from = _safe_component(contract.get("from_team", ""), "unknown")
-            # ts·from_team 은 둘 다 원격이 정하므로 유일성이 없다. 드롭 파일명 꼬리를
-            # 접미사로 붙여도 courier 의 명명 규약에 따라 상수가 될 수 있어(실측:
-            # 왕복 규약에서 항상 `teamb`) 확률적 회피가 성립하지 않는다 — 배타 생성에 맡긴다.
-            _write_unique(_INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(rf.stem[-6:], 'x')}.json",
-                          json.dumps(contract, ensure_ascii=False, indent=2))
+            contract = _ingest_record(
+                record, me, rf.stem,
+                # 답장 스레드 복귀용 — 드롭 레코드에만 있는 로컬 메타
+                extra={"conversation_ref": record["conversation_ref"]}
+                if isinstance(record, dict) and record.get("conversation_ref") else None)
             rf.rename(processed_dir / rf.name)
-            print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
-                  f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
-            ingested += 1
+            if contract is None:
+                skipped += 1
+            else:
+                ingested += 1
         except Exception as exc:  # noqa: BLE001 — 신뢰 불가 파일 입력의 경계
             # 예외를 열거하면 반드시 빠뜨린다. 실제로 `RecursionError`("["*100000)가
-            # 열거형 튜플을 뚫고 큐를 영구 정지시켰다 — 위 주석("어떤 필드가 무슨
-            # 예외를 낼지 미리 셀 수 없다")과 열거형 except 는 모순이었다.
+            # 열거형 튜플을 뚫고 큐를 영구 정지시켰다 — "어떤 필드가 무슨 예외를 낼지
+            # 미리 셀 수 없다" 와 열거형 except 는 모순이었다.
             # coding-standards "에러 처리는 경계에서만" 의 바로 그 경계가 여기다.
             quarantine_dir.mkdir(exist_ok=True)
             if rf.exists():  # rename 이후 실패면 이미 processed/ 로 옮겨진 상태
@@ -566,7 +594,7 @@ def _receive_openclaw() -> int:
             continue
     tail = f", 손상 {damaged}건 quarantine/ 격리" if damaged else ""
     print(f"[consortium] OpenClaw 수신 완료: {ingested}건 inbox 적재 "
-          f"(타팀행 {skipped}건 제외, openclaw-inbound/processed/ 로 이동{tail})")
+          f"(미적재 {skipped}건 — 타팀행·비consortium, openclaw-inbound/processed/ 로 이동{tail})")
     return 0
 
 
@@ -633,7 +661,12 @@ def cmd_gateway(args) -> int:
     else:
         print(f"    - 지원 플랫폼: {', '.join(_GATEWAYS)}")
         return 1
-    print("  계약: outbox/*.json 을 그대로 실어 보내고, 수신은 같은 스키마로 inbox/ 에 적재하면 됨.")
+    # 예전 문구는 "수신은 같은 스키마로 inbox/ 에 적재하면 됨" 이었다. 그건 다운스트림에게
+    # **수신 경계를 우회하라고 초대**하는 말이었다 — 검증·위생·유일성이 전부 그 경계에 있다.
+    # 경계 바깥에서 inbox 에 직접 쓰면 이 변형이 3라운드에 걸쳐 고친 결함이 그대로 재생산된다.
+    print("  계약: outbox/*.json 을 그대로 실어 보내고, **수신분은 openclaw-inbound/ 에 드롭**한다.")
+    print("    → `gateway <platform> --receive` 가 단일 수신 경계에서 계약 검증·위생·유일성을 처리.")
+    print("    ⚠️ inbox/ 에 직접 쓰지 말 것 — 경계를 건너뛰면 원격 값이 그대로 파일명·라우팅 키가 된다.")
     print("  → graceful degrade: 봇 미연동이어도 로컬 큐로 협업 흐름은 검증 가능.")
     return 0
 
