@@ -130,6 +130,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _write_unique(path: Path, text: str) -> Path:
+    """이름이 겹치면 `-1`, `-2` … 를 붙여 **절대 덮어쓰지 않고** 쓴다.
+
+    큐의 최소 계약은 "넣은 메시지가 사라지지 않는다" 이다. 파일명은 초 단위 ts +
+    팀 id 로 만들어지는데, 둘 다 유일성을 보장하지 않는다 (실측: 같은 초에 send 2회
+    → outbox 1건, 첫 메시지가 rc=0 인 채 소멸). 수신 경로도 ts·from_team 을
+    원격이 정하므로 같은 일이 난다.
+
+    접미사를 늘려 확률을 낮추는 대신 **파일시스템의 배타 생성**에 유일성을 맡긴다 —
+    확률적 회피는 언젠가 실패하고, 실패가 조용하다.
+    """
+    for n in range(1000):
+        candidate = path if n == 0 else path.with_name(f"{path.stem}-{n}{path.suffix}")
+        try:
+            with open(candidate, "x", encoding="utf-8") as fh:
+                fh.write(text)
+            return candidate
+        except FileExistsError:
+            continue
+    raise OSError(f"파일명 충돌 1000회 초과: {path.name}")
+
+
 def _load_roster() -> dict:
     """roster.json 을 읽는다 (없으면 빈 구조)."""
     if _ROSTER.exists():
@@ -204,8 +226,10 @@ def cmd_send(args) -> int:
     """팀 간 메시지를 계약 검증 후 outbox 에 기록한다 (게이트웨이가 transport)."""
     _OUTBOX.mkdir(parents=True, exist_ok=True)
     msg = {
-        "from_team": args.from_team or _load_roster().get("self", ""),
-        "to_team": args.to,
+        # strip 은 저장 시점에 한다 — 검증만 strip 후 매칭하면 `" team-b"` 가 통과해
+        # 파일명과 계약에 공백째 남고, 수신측이 `!= me` 로 조용히 버린다.
+        "from_team": (args.from_team or _load_roster().get("self", "")).strip(),
+        "to_team": args.to.strip(),
         "role": args.role,
         "cycle_id": args.cycle,
         "stage": args.stage or "",
@@ -223,12 +247,12 @@ def cmd_send(args) -> int:
         for e in errs:
             print(f"      - {e}")
         return 1
-    # 파일명: ts + to_team (정렬 가능)
+    # 파일명: ts + to_team (정렬 가능). ts 는 초 단위라 유일하지 않다 — _write_unique 가 보장.
     safe_ts = msg["ts"].replace(":", "").replace("-", "")
-    out_file = _OUTBOX / f"{safe_ts}__to-{args.to}.json"
-    out_file.write_text(json.dumps(msg, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_file = _write_unique(_OUTBOX / f"{safe_ts}__to-{msg['to_team']}.json",
+                             json.dumps(msg, ensure_ascii=False, indent=2))
     print(f"[consortium] outbox 기록: {out_file.relative_to(_ROOT)}")
-    print(f"  {msg['from_team']} → {args.to} [{args.role}] cycle={args.cycle}")
+    print(f"  {msg['from_team']} → {msg['to_team']} [{args.role}] cycle={args.cycle}")
     print("  → 실제 전송은 `gateway <platform>` (현재 stub — 다운스트림 봇 연동 필요)")
     return 0
 
@@ -414,8 +438,8 @@ def _receive_teams() -> int:
                 contract["graph_msg_id"] = gid
                 safe_ts = _safe_component(contract.get("ts", ""), gid)
                 safe_from = _safe_component(contract.get("from_team", ""), "unknown")
-                out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json"
-                out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+                _write_unique(_INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json",
+                              json.dumps(contract, ensure_ascii=False, indent=2))
                 print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
                       f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
                 ingested += 1
@@ -520,15 +544,20 @@ def _receive_openclaw() -> int:
                 contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
             safe_ts = _safe_component(contract.get("ts", ""), rf.stem)
             safe_from = _safe_component(contract.get("from_team", ""), "unknown")
-            # rf.stem 접미사로 고유화 — 없으면 ts·from_team 을 맞춘 드롭이
-            # 먼저 온 inbox 메시지를 덮어쓴다 (둘 다 원격이 정하는 값이다).
-            out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(rf.stem[-6:], 'x')}.json"
-            out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+            # ts·from_team 은 둘 다 원격이 정하므로 유일성이 없다. 드롭 파일명 꼬리를
+            # 접미사로 붙여도 courier 의 명명 규약에 따라 상수가 될 수 있어(실측:
+            # 왕복 규약에서 항상 `teamb`) 확률적 회피가 성립하지 않는다 — 배타 생성에 맡긴다.
+            _write_unique(_INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(rf.stem[-6:], 'x')}.json",
+                          json.dumps(contract, ensure_ascii=False, indent=2))
             rf.rename(processed_dir / rf.name)
             print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
                   f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
             ingested += 1
-        except (ValueError, TypeError, OSError, UnicodeDecodeError) as exc:
+        except Exception as exc:  # noqa: BLE001 — 신뢰 불가 파일 입력의 경계
+            # 예외를 열거하면 반드시 빠뜨린다. 실제로 `RecursionError`("["*100000)가
+            # 열거형 튜플을 뚫고 큐를 영구 정지시켰다 — 위 주석("어떤 필드가 무슨
+            # 예외를 낼지 미리 셀 수 없다")과 열거형 except 는 모순이었다.
+            # coding-standards "에러 처리는 경계에서만" 의 바로 그 경계가 여기다.
             quarantine_dir.mkdir(exist_ok=True)
             if rf.exists():  # rename 이후 실패면 이미 processed/ 로 옮겨진 상태
                 rf.rename(quarantine_dir / rf.name)

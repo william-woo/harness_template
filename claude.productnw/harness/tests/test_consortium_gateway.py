@@ -292,6 +292,9 @@ class PoisonPillTest(unittest.TestCase):
             "최상위가 배열": "[1, 2, 3]",
             "계약이 문자열": json.dumps({"consortium_msg": "x"}),
             "계약이 배열": json.dumps({"consortium_msg": [1]}),
+            # RecursionError 는 열거형 except 튜플을 뚫었다 — 예외를 세려 들면
+            # 반드시 빠뜨린다는 증거라서 목록에 남긴다 (3차 리뷰 MUST-A).
+            "깊은 중첩": "[" * 100000,
         }
         for label, body in poisons.items():
             with self.subTest(poison=label):
@@ -343,6 +346,87 @@ class PoisonPillTest(unittest.TestCase):
         self.assertEqual(written[0].parent.resolve(), (state / "inbox").resolve(),
                          "inbox 밖에 파일이 쓰였다 — 경로 탈출")
         self.assertNotIn("..", written[0].name)
+
+
+class MessageDurabilityTest(unittest.TestCase):
+    """넣은 메시지가 사라지지 않는지 — 큐의 최소 계약 (3차 리뷰 MUST-B).
+
+    파일명은 ts + 팀 id 로 만드는데 둘 다 유일하지 않다. `_now()` 는 **초 단위**라
+    같은 초에 send 2회면 outbox 가 1건이 되고 첫 메시지가 rc=0 인 채 사라졌다
+    (CLI 기동이 ~50ms 이므로 스크립트 fan-out 에서 자연 발생한다).
+    수신 경로는 ts·from_team 을 원격이 정하므로 더 쉽게 겹친다 — 드롭 파일명
+    꼬리를 접미사로 붙여도 courier 명명 규약에 따라 상수가 될 수 있다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, mod, *argv):
+        old = sys.argv
+        sys.argv = ["consortium.py", *argv]
+        try:
+            return mod.main()
+        except SystemExit as exc:
+            return exc.code
+        finally:
+            sys.argv = old
+
+    def test_같은_초에_보낸_두_메시지가_모두_남는다(self):
+        root = Path(self.tmp.name) / "send-node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, "init", "team-a")
+        self._run(mod, "send", "--to", "team-b", "--role", "developer", "--cycle", "C1", "--msg", "첫번째")
+        self._run(mod, "send", "--to", "team-b", "--role", "developer", "--cycle", "C2", "--msg", "두번째")
+
+        outbox = list((root / ".claude/state/consortium/outbox").glob("*.json"))
+        got = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"] for f in outbox)
+        self.assertEqual(got, ["두번째", "첫번째"], f"메시지가 덮어써졌다: {got}")
+
+    def test_팀id_앞뒤_공백은_정규화된다(self):
+        """검증만 strip 하면 `' team-b'` 가 통과해 수신측이 조용히 버린다."""
+        root = Path(self.tmp.name) / "strip-node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, "init", "team-a")
+        self._run(mod, "send", "--to", " team-b ", "--role", "developer", "--cycle", "C1", "--msg", "공백")
+
+        outbox = list((root / ".claude/state/consortium/outbox").glob("*.json"))
+        self.assertEqual(len(outbox), 1)
+        self.assertEqual(json.loads(outbox[0].read_text(encoding="utf-8"))["to_team"], "team-b")
+        self.assertNotIn(" ", outbox[0].name)
+
+    def test_잘못된_팀id_는_거부된다(self):
+        root = Path(self.tmp.name) / "reject-node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, "init", "team-a")
+        rc = self._run(mod, "send", "--to", "Team_B", "--role", "developer", "--cycle", "C1", "--msg", "x")
+        self.assertEqual(rc, 1, "형식 위반 team-id 가 통과했다")
+        self.assertEqual(list((root / ".claude/state/consortium/outbox").glob("*.json")), [])
+
+    def test_동일한_ts_와_from_team_드롭이_겹쳐도_둘_다_남는다(self):
+        root = Path(self.tmp.name) / "recv-node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, "init", "team-b")
+
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        for idx, label in enumerate(("FIRST", "SECOND")):
+            # 꼬리가 상수가 되는 courier 명명 규약 — 프로젝트 자체 왕복 테스트가 쓰는 형태다
+            (inbound / f"{idx}__to-team-b.json").write_text(json.dumps({"consortium_msg": {
+                "from_team": "team-a", "to_team": "team-b", "role": "developer",
+                "cycle_id": "C1", "msg": label, "ts": "2026-09-17T00:00:00+00:00",
+            }}, ensure_ascii=False), encoding="utf-8")
+
+        self.assertEqual(mod._receive_openclaw(), 0)
+        inbox = list((root / ".claude/state/consortium/inbox").glob("*.json"))
+        got = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"] for f in inbox)
+        self.assertEqual(got, ["FIRST", "SECOND"], f"수신 메시지가 덮어써졌다: {got}")
 
 
 class SeenPersistenceTest(unittest.TestCase):
