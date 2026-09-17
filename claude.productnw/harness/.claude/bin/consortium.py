@@ -88,7 +88,9 @@ _TEAMS_WEBHOOK_ENV = "CONSORTIUM_TEAMS_WEBHOOK"
 _TEAMS_TOKEN_ENV = "CONSORTIUM_TEAMS_TOKEN"      # OAuth Bearer 토큰 (앱 등록 + ChannelMessage.Read.All)
 _TEAMS_TEAM_ENV = "CONSORTIUM_TEAMS_TEAM_ID"     # Graph team(group) id
 _TEAMS_CHANNEL_ENV = "CONSORTIUM_TEAMS_CHANNEL_ID"  # Graph channel id
-_GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+# Graph 엔드포인트. 환경변수로 덮어쓸 수 있게 둔 이유는 **테스트 주입** 하나뿐이다
+# (`tests/test_consortium_gateway.py` 가 로컬 mock 서버를 가리킨다). 운영에서는 건드리지 않는다.
+_GRAPH_BASE = os.environ.get("CONSORTIUM_GRAPH_BASE", "https://graph.microsoft.com/v1.0")
 
 # 계약 봉투 — 사람용 카드 안에 기계가 무손실 복원할 원본 계약 JSON 을 base64 로 심는다.
 # 수신측은 메시지 어디에 박혀 있든 이 마커를 스캔해 원본 메시지를 그대로 복원한다.

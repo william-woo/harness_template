@@ -257,7 +257,9 @@ OpenClaw 채널 설정(Azure Bot·`~/.openclaw/openclaw.json`·터널)은 OpenCl
 - consortium 쪽 **계약↔핸드오프 매핑 + 지목/멱등 라우팅** 은 stdlib 로 **실재·테스트**됨.
 - 핸드오프 레코드를 **실제 OpenClaw 채널로 싣고 내리는 courier**(OpenClaw 에이전트의 채널 도구
   호출, 또는 Gateway 플로/ACP)는 OpenClaw 런타임에 바인딩 — §2~8 Teams stub→real 과 같은 seam.
-- 같은 머신에서 courier 를 모킹하면 **완전 왕복 검증 가능** (실 OpenClaw 연결은 다운스트림 몫).
+- courier 를 모킹한 **완전 왕복이 테스트로 실재**한다 —
+  `tests/test_consortium_gateway.py` (Teams 웹훅+Graph 폴링 4건, openclaw 브리지 포함).
+  실 OpenClaw·실 Teams 채널 연결은 다운스트림 몫.
 
 ---
 

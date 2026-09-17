@@ -67,4 +67,7 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 - 신규: `_detect_host()` + `_send_openclaw()`/`_receive_openclaw()` (consortium.py),
   핸드오프 디렉토리 2종, 이 ADR, 설치 가이드 §9.
 - 변경: `gateway teams --send/--receive` 가 host 에 따라 transport 분기. self-check 에 host/transport 표시.
-- 미구현(다운스트림): OpenClaw courier 의 실제 채널 I/O 바인딩 (ACP/Gateway 도구) — 모킹으로 왕복 검증함.
+- 미구현(다운스트림): OpenClaw courier 의 실제 채널 I/O 바인딩 (ACP/Gateway 도구).
+  브리지 왕복(outbox → openclaw-outbound → courier → openclaw-inbound → inbox)은
+  `tests/test_consortium_gateway.py::OpenClawBridgeRoundTripTest` 가 실제로 태운다 —
+  courier 자리만 파일 이동으로 대체하고 나머지는 실제 코드다.
