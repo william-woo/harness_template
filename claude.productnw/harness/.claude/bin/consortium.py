@@ -151,6 +151,11 @@ def _validate_message(m: dict) -> list[str]:
     """메시지가 계약을 만족하는지 검증하고 위반 목록을 반환한다 (빈 = 통과)."""
     errs = [f"필수 필드 누락: {f}" for f in _REQUIRED_MSG_FIELDS
             if not str(m.get(f, "")).strip()]
+    # 팀 id 는 outbox 파일명에 들어간다 — init 은 _TEAM_RE 로 걸렀는데 send 는
+    # 안 걸렀다. 운영자 오타가 파일명으로 새는 것을 여기서 막는다.
+    errs += [f"team-id 형식 오류: {f}={m.get(f)!r} (소문자·숫자·하이픈)"
+             for f in ("from_team", "to_team")
+             if str(m.get(f, "")).strip() and not _TEAM_RE.match(str(m[f]).strip())]
     stage = m.get("stage", "")
     if stage and stage not in ("plan", "design", "develop", "verify", "deploy"):
         errs.append(f"stage 값 오류: {stage} (plan|design|develop|verify|deploy)")

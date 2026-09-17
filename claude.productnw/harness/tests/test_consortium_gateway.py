@@ -92,6 +92,12 @@ class TeamsGatewayRoundTripTest(unittest.TestCase):
         _CHANNEL.clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.base = f"http://127.0.0.1:{self.port}"
+        # 환경변수는 프로세스 전역이다 — 복원하지 않으면 뒤에 도는 테스트가
+        # mock 서버를 가리킨 채 실행되고, 그 순서 의존을 나중에 진단하기 어렵다.
+        self._env_backup = {k: os.environ.get(k) for k in (
+            "CONSORTIUM_GRAPH_BASE", "CONSORTIUM_TEAMS_WEBHOOK",
+            "CONSORTIUM_TEAMS_TOKEN", "CONSORTIUM_TEAMS_TEAM_ID",
+            "CONSORTIUM_TEAMS_CHANNEL_ID")}
         os.environ["CONSORTIUM_GRAPH_BASE"] = self.base
         os.environ["CONSORTIUM_TEAMS_WEBHOOK"] = f"{self.base}/webhook"
         os.environ["CONSORTIUM_TEAMS_TOKEN"] = "mock-token"
@@ -99,6 +105,11 @@ class TeamsGatewayRoundTripTest(unittest.TestCase):
         os.environ["CONSORTIUM_TEAMS_CHANNEL_ID"] = "c1"
 
     def tearDown(self):
+        for key, val in self._env_backup.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
         self.tmp.cleanup()
 
     def _run(self, mod, argv: list[str]) -> int:
