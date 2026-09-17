@@ -234,5 +234,52 @@ class OpenClawBridgeRoundTripTest(unittest.TestCase):
         self.assertEqual(got["msg"], "브리지 왕복")
 
 
+class PoisonPillTest(unittest.TestCase):
+    """손상된 드롭 하나가 수신 큐 전체를 멈추지 않는지 (리뷰 MUST-3).
+
+    수정 전에는 `json.loads` 가 무방어라 손상 1건이 traceback 으로 루프를 끝냈고,
+    그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 다시 죽었다** —
+    뒤에 있던 정상 메시지는 영원히 도착하지 않는다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_손상된_드롭은_격리되고_정상분은_처리된다(self):
+        root = Path(self.tmp.name) / "node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        old = sys.argv
+        sys.argv = ["consortium.py", "init", "team-b", "--agents", "developer"]
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old
+
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "00-bad.json").write_text("{ 손상된 JSON", encoding="utf-8")
+        (inbound / "01-good.json").write_text(json.dumps({"consortium_msg": {
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C1", "msg": "정상 메시지", "ts": "2026-09-17T00:00:00+00:00",
+            "stage": "", "status": "queued",
+        }}, ensure_ascii=False), encoding="utf-8")
+
+        self.assertEqual(mod._receive_openclaw(), 0, "손상분 때문에 수신이 실패했다")
+
+        state = root / ".claude/state/consortium"
+        self.assertEqual(len(list((state / "inbox").glob("*.json"))), 1,
+                         "손상분 뒤의 정상 메시지가 처리되지 않았다")
+        self.assertEqual(len(list((inbound / "quarantine").glob("*.json"))), 1,
+                         "손상분이 격리되지 않았다")
+        self.assertEqual(list(inbound.glob("*.json")), [],
+                         "큐가 비워지지 않았다 — 재실행 시 같은 지점에서 또 죽는다")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

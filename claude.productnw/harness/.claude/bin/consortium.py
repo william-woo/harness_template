@@ -370,32 +370,44 @@ def _receive_teams() -> int:
         print(f"[consortium] ❌ Graph 폴링 실패 — {data}")
         return 1
 
-    ingested = skipped = 0
-    for msg in data.get("value", []):
-        gid = msg.get("id", "")
-        if gid in seen:
-            continue
-        seen.add(gid)  # 봉투 유무와 무관하게 본 메시지는 기록 (재스캔 방지)
-        contract = _extract_envelope(msg)
-        if not contract:
-            continue  # consortium 메시지 아님
-        # 나에게 온 것만, 내가 보낸 건 제외
-        if contract.get("to_team") != me or contract.get("from_team") == me:
-            skipped += 1
-            continue
-        contract["status"] = "received"
-        contract["graph_msg_id"] = gid
-        safe_ts = _safe_component(contract.get("ts", ""), gid)
-        safe_from = _safe_component(contract.get("from_team", ""), "unknown")
-        out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json"
-        out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
-              f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
-        ingested += 1
+    ingested = skipped = failed = 0
+    try:
+        for msg in data.get("value", []):
+            gid = msg.get("id", "")
+            if gid in seen:
+                continue
+            seen.add(gid)  # 봉투 유무와 무관하게 본 메시지는 기록 (재스캔 방지)
+            # 채널 메시지는 누구나 쓴다 — 한 건의 이상 데이터가 폴링 전체를 멈추면
+            # 그 뒤 메시지가 영원히 도착하지 않는다. 건별로 격리하고 계속한다.
+            try:
+                contract = _extract_envelope(msg)
+                if not contract:
+                    continue  # consortium 메시지 아님
+                # 나에게 온 것만, 내가 보낸 건 제외
+                if contract.get("to_team") != me or contract.get("from_team") == me:
+                    skipped += 1
+                    continue
+                contract["status"] = "received"
+                contract["graph_msg_id"] = gid
+                safe_ts = _safe_component(contract.get("ts", ""), gid)
+                safe_from = _safe_component(contract.get("from_team", ""), "unknown")
+                out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json"
+                out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
+                      f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
+                ingested += 1
+            except (ValueError, TypeError, OSError) as exc:
+                print(f"  ⚠️ 메시지 처리 실패(건너뜀): {gid[-12:]} — "
+                      f"{type(exc).__name__}: {str(exc)[:80]}")
+                failed += 1
+    finally:
+        # seen 은 **반드시** 영속시킨다. 루프 뒤에서만 쓰면 중간 예외 시 저장되지 않아
+        # 같은 메시지가 매 폴링마다 다시 처리되고 다시 죽는다 (영구 반복).
+        seen_file.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
 
-    seen_file.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+    tail = f", 실패 {failed}건 건너뜀" if failed else ""
     print(f"[consortium] Teams 수신 완료: {ingested}건 inbox 적재 "
-          f"(타팀행 {skipped}건 제외, 누적 seen {len(seen)})")
+          f"(타팀행 {skipped}건 제외, 누적 seen {len(seen)}{tail})")
     return 0
 
 
@@ -450,8 +462,21 @@ def _receive_openclaw() -> int:
     processed_dir = _OC_INBOUND / "processed"
     processed_dir.mkdir(exist_ok=True)
     ingested = skipped = 0
+    quarantine_dir = _OC_INBOUND / "quarantine"
+    damaged = 0
     for rf in sorted(_OC_INBOUND.glob("*.json")):
-        record = json.loads(rf.read_text(encoding="utf-8"))
+        # courier 가 드롭하는 파일은 **신뢰할 수 없는 입력**이다 — 전송 중 잘리거나
+        # 다른 도구가 쓰다 만 것이 섞인다. 항목 하나의 손상이 큐 전체를 멈추면
+        # 그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 영구히 죽는다**
+        # (실측: 손상 1건 뒤의 정상 메시지가 영원히 처리되지 않음).
+        try:
+            record = json.loads(rf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            quarantine_dir.mkdir(exist_ok=True)
+            rf.rename(quarantine_dir / rf.name)
+            print(f"  ⚠️ 손상된 드롭 격리: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
+            damaged += 1
+            continue
         # 계약 복원: 명시 consortium_msg 우선, 없으면 text 의 base64 봉투 스캔
         contract = record.get("consortium_msg") or _extract_envelope(record)
         if not contract:
@@ -471,8 +496,9 @@ def _receive_openclaw() -> int:
         print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
               f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
         ingested += 1
+    tail = f", 손상 {damaged}건 quarantine/ 격리" if damaged else ""
     print(f"[consortium] OpenClaw 수신 완료: {ingested}건 inbox 적재 "
-          f"(타팀행 {skipped}건 제외, openclaw-inbound/processed/ 로 이동)")
+          f"(타팀행 {skipped}건 제외, openclaw-inbound/processed/ 로 이동{tail})")
     return 0
 
 
