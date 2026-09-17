@@ -30,6 +30,26 @@ agent_type > 기본 claude-code)에 따라 선택한다:
 
 > 과잉 추상화 금지(Karpathy): 클래스 계층 대신 host 분기 + 함수(`_send_teams`/`_send_openclaw`)로 단순 유지.
 
+> **범위 정정 (2026-09-17, F019 에스컬레이션)** — 이 결정은 **발신에만** 적용된다.
+> 결정을 번복하는 것이 아니라 적용 범위를 좁히는 것이므로 Superseded 로 올리지 않는다.
+>
+> 발신은 host 별로 **진짜 다르다** (HTTP POST vs 파일 드롭). 수신은 바이트를 어디서
+> 가져오는가만 다르고, 그 뒤 6단계(봉투 복원 → 형식 확인 → 지목 필터 → status 각인 →
+> 안전 파일명 → 기록)가 동일하다. 그런데 이 결정을 수신에도 대칭 적용해
+> `_receive_teams` / `_receive_openclaw` 두 벌로 복제했다.
+>
+> **대가**: 신뢰 불가 입력을 다루는 경계가 2개가 되면서 "결함의 클래스를 닫는다"가
+> **주소를 갖지 못했다**. 리뷰어는 자기가 찔러본 사본만 보고하고, 수정은 그 사본에만
+> 갔다. 실측 증거 — 3차 MUST 의 `except Exception` 수정이 `_receive_openclaw` 에만
+> 적용되고 `_receive_teams` 는 열거형으로 남아 같은 `RecursionError` 로 뚫렸다.
+> 클래스를 닫으려던 수정조차 인스턴스만 닫은 것이다.
+>
+> **따라서 수신은 단일 경계 + host 별 fetch 로 한다**: `_ingest_record()` 하나가
+> 예외 격리·계약 검증·파일명 위생·유일성을 소유하고, `_receive_*` 는 "후보 레코드를
+> 가져온다" + 성공 후 장부(seen 기록 vs 파일 이동)만 남긴다.
+> 같은 연산의 사본이 2개가 되는 순간이 Simplicity First 의 "2곳 이상이면 추출"
+> 발동 시점이다 — 추측 추상화가 아니라 **사후 추출**이라 원칙에 어긋나지 않는다.
+
 ### 결정 2 — OpenClaw 브리지 = 핸드오프 디렉토리 계약 (consortium ↔ OpenClaw 에이전트)
 OpenClaw 에이전트(= Claude Code 등 백엔드, bash/python 실행 가능)가 **courier** 역할을 한다.
 consortium 과 OpenClaw 에이전트 사이의 interop 경계는 **두 핸드오프 디렉토리**다:
