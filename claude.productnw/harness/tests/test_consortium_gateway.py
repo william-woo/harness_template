@@ -234,12 +234,25 @@ class OpenClawBridgeRoundTripTest(unittest.TestCase):
         self.assertEqual(got["msg"], "브리지 왕복")
 
 
-class PoisonPillTest(unittest.TestCase):
-    """손상된 드롭 하나가 수신 큐 전체를 멈추지 않는지 (리뷰 MUST-3).
+_GOOD_DROP = json.dumps({"consortium_msg": {
+    "from_team": "team-a", "to_team": "team-b", "role": "developer",
+    "cycle_id": "C1", "msg": "정상 메시지", "ts": "2026-09-17T00:00:00+00:00",
+    "stage": "", "status": "queued",
+}}, ensure_ascii=False)
 
-    수정 전에는 `json.loads` 가 무방어라 손상 1건이 traceback 으로 루프를 끝냈고,
-    그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 다시 죽었다** —
-    뒤에 있던 정상 메시지는 영원히 도착하지 않는다.
+
+class PoisonPillTest(unittest.TestCase):
+    """드롭 하나가 수신 큐 전체를 멈추지 않는지 (리뷰 MUST-3 + 재리뷰 연장).
+
+    1차 수정은 `json.loads` 만 감쌌다. 재리뷰가 **유효한 JSON** 세 종류로 같은
+    영구 wedge 를 재현했다 — 파싱을 통과해도 그 뒤 단계가 무방어였기 때문이다:
+      · 최상위가 객체가 아님 (`[1,2,3]`) → `record.get` 에서 AttributeError
+      · 계약이 객체가 아님 (`"consortium_msg": "x"`) → 같은 자리
+      · 과다 길이 ts → 파일명이 255바이트를 넘어 OSError
+
+    어느 경우든 그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 다시
+    죽고**, 뒤에 있던 정상 메시지는 영원히 도착하지 않는다. 그래서 이 테스트는
+    "손상 JSON" 한 종류가 아니라 **처리 단계별 실패**를 모두 건다.
     """
 
     def setUp(self):
@@ -248,7 +261,104 @@ class PoisonPillTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_손상된_드롭은_격리되고_정상분은_처리된다(self):
+    def _node(self, name: str):
+        root = Path(self.tmp.name) / name
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        old = sys.argv
+        sys.argv = ["consortium.py", "init", "team-b", "--agents", "developer"]
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old
+        return mod, root
+
+    def test_처리불가_드롭은_격리되고_정상분은_처리된다(self):
+        poisons = {
+            "손상 JSON": "{ 손상된 JSON",
+            "최상위가 배열": "[1, 2, 3]",
+            "계약이 문자열": json.dumps({"consortium_msg": "x"}),
+            "계약이 배열": json.dumps({"consortium_msg": [1]}),
+        }
+        for label, body in poisons.items():
+            with self.subTest(poison=label):
+                mod, root = self._node(f"node-{abs(hash(label))}")
+                inbound = root / ".claude/state/consortium/openclaw-inbound"
+                inbound.mkdir(parents=True, exist_ok=True)
+                (inbound / "00-bad.json").write_text(body, encoding="utf-8")
+                (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+                self.assertEqual(mod._receive_openclaw(), 0, f"{label} 때문에 수신이 실패했다")
+                state = root / ".claude/state/consortium"
+                self.assertEqual(len(list((state / "inbox").glob("*.json"))), 1,
+                                 f"{label} 뒤의 정상 메시지가 처리되지 않았다")
+                self.assertEqual(len(list((inbound / "quarantine").glob("*.json"))), 1,
+                                 f"{label} 이 격리되지 않았다")
+                self.assertEqual(list(inbound.glob("*.json")), [],
+                                 "큐가 비워지지 않았다 — 재실행 시 같은 지점에서 또 죽는다")
+
+    def test_과다_길이_ts_는_잘려서_적재된다(self):
+        """계약 자체는 유효하므로 격리가 아니라 **적재**되어야 한다 — 파일명만 잘린다."""
+        mod, root = self._node("node-longts")
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "00-long.json").write_text(json.dumps({"consortium_msg": {
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C2", "msg": "긴 ts", "ts": "A" * 300,
+        }}, ensure_ascii=False), encoding="utf-8")
+
+        self.assertEqual(mod._receive_openclaw(), 0, "긴 ts 때문에 수신이 실패했다")
+        inbox = list((root / ".claude/state/consortium/inbox").glob("*.json"))
+        self.assertEqual(len(inbox), 1, "유효한 계약이 적재되지 않았다")
+        self.assertLessEqual(len(inbox[0].name.encode()), 255, "파일명이 여전히 상한을 넘는다")
+        self.assertEqual(list(inbound.glob("*.json")), [], "큐가 비워지지 않았다")
+
+    def test_오염된_ts_는_inbox_경로를_벗어나지_못한다(self):
+        """`_safe_component` 단위 테스트와 별개 — **호출을 빼먹는 회귀**를 잡는다."""
+        mod, root = self._node("node-escape")
+        state = root / ".claude/state/consortium"
+        inbound = state / "openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "00-escape.json").write_text(json.dumps({"consortium_msg": {
+            "from_team": "../../../etc", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C3", "msg": "탈출 시도", "ts": "../../../../ESCAPED",
+        }}, ensure_ascii=False), encoding="utf-8")
+
+        self.assertEqual(mod._receive_openclaw(), 0)
+        written = list((state / "inbox").glob("*.json"))
+        self.assertEqual(len(written), 1, "적재되지 않았다")
+        self.assertEqual(written[0].parent.resolve(), (state / "inbox").resolve(),
+                         "inbox 밖에 파일이 쓰였다 — 경로 탈출")
+        self.assertNotIn("..", written[0].name)
+
+
+class SeenPersistenceTest(unittest.TestCase):
+    """`received-seen.json` 이 깨져도 Teams 수신이 계속되는지 (재리뷰 신규 MUST).
+
+    MUST-3 수정이 "seen 은 반드시 영속" 을 도입하면서 그 파일이 단일 장애점이 됐다.
+    읽기가 무방어면 torn write(디스크 풀·프로세스 kill) 한 번에 수신이 **영구 정지**한다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env_backup = {k: os.environ.get(k) for k in
+                           ("CONSORTIUM_TEAMS_TOKEN", "CONSORTIUM_TEAMS_TEAM_ID",
+                            "CONSORTIUM_TEAMS_CHANNEL_ID")}
+        os.environ.update({"CONSORTIUM_TEAMS_TOKEN": "tok",
+                           "CONSORTIUM_TEAMS_TEAM_ID": "t",
+                           "CONSORTIUM_TEAMS_CHANNEL_ID": "c"})
+
+    def tearDown(self):
+        for key, val in self.env_backup.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.tmp.cleanup()
+
+    def test_깨진_seen_기록에서_복구한다(self):
         root = Path(self.tmp.name) / "node"
         root.mkdir(parents=True, exist_ok=True)
         mod = _load_consortium(root)
@@ -261,24 +371,16 @@ class PoisonPillTest(unittest.TestCase):
         finally:
             sys.argv = old
 
-        inbound = root / ".claude/state/consortium/openclaw-inbound"
-        inbound.mkdir(parents=True, exist_ok=True)
-        (inbound / "00-bad.json").write_text("{ 손상된 JSON", encoding="utf-8")
-        (inbound / "01-good.json").write_text(json.dumps({"consortium_msg": {
-            "from_team": "team-a", "to_team": "team-b", "role": "developer",
-            "cycle_id": "C1", "msg": "정상 메시지", "ts": "2026-09-17T00:00:00+00:00",
-            "stage": "", "status": "queued",
-        }}, ensure_ascii=False), encoding="utf-8")
-
-        self.assertEqual(mod._receive_openclaw(), 0, "손상분 때문에 수신이 실패했다")
-
+        mod._graph_get = lambda url, token: (True, {"value": [{"id": "gid-1", "body": {"content": "noise"}}]})
         state = root / ".claude/state/consortium"
-        self.assertEqual(len(list((state / "inbox").glob("*.json"))), 1,
-                         "손상분 뒤의 정상 메시지가 처리되지 않았다")
-        self.assertEqual(len(list((inbound / "quarantine").glob("*.json"))), 1,
-                         "손상분이 격리되지 않았다")
-        self.assertEqual(list(inbound.glob("*.json")), [],
-                         "큐가 비워지지 않았다 — 재실행 시 같은 지점에서 또 죽는다")
+        seen_file = state / "received-seen.json"
+        seen_file.write_text('["m1", "m2', encoding="utf-8")  # torn write 재현
+
+        self.assertEqual(mod._receive_teams(), 0, "깨진 seen 때문에 수신이 죽었다")
+        self.assertEqual(mod._receive_teams(), 0, "재실행에서도 죽었다 — 영구 정지")
+        self.assertEqual(json.loads(seen_file.read_text(encoding="utf-8")), ["gid-1"],
+                         "seen 이 복구되지 않았다")
+        self.assertEqual(list(state.glob("*.tmp")), [], "원자적 교체의 임시 파일이 남았다")
 
 
 if __name__ == "__main__":

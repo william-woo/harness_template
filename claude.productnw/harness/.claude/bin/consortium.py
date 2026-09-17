@@ -98,6 +98,9 @@ _ENVELOPE_PREFIX = "[[consortium-msg]]"
 _ENVELOPE_RE = re.compile(re.escape(_ENVELOPE_PREFIX) + r"([A-Za-z0-9+/=]+)")
 
 _TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# 파일명 한 성분에 허용할 문자 + 그 길이 상한 (_safe_component 참조)
+_SAFE_RE = re.compile(r"[^A-Za-z0-9T+]")
+_MAX_COMPONENT = 64
 
 
 def _safe_component(value: str, fallback: str) -> str:
@@ -112,9 +115,14 @@ def _safe_component(value: str, fallback: str) -> str:
 
     pathlib 은 절대경로 세그먼트를 만나면 앞의 base 를 버리므로 첫 줄이 특히 위험하다.
     제거가 아니라 **허용 문자만 남기는** 방식이라, 새로운 구분자가 생겨도 안전하다.
+
+    길이도 자른다. 화이트리스트만으로는 탈출은 막아도 **길이 공격**이 남는다 —
+    ts 300자면 파일명이 255바이트(ext4)를 넘어 `OSError: File name too long` 이 나고,
+    그 예외가 수신 루프를 멈추면 경로 탈출과 같은 영구 wedge 가 된다 (재리뷰 실측).
+    fallback 도 원격 유래일 수 있으므로(gid) 같은 규칙을 적용한다.
     """
-    kept = re.sub(r"[^A-Za-z0-9T+]", "", str(value or ""))
-    return kept or fallback
+    kept = _SAFE_RE.sub("", str(value or ""))[:_MAX_COMPONENT]
+    return kept or _SAFE_RE.sub("", str(fallback or ""))[:_MAX_COMPONENT] or "x"
 
 
 def _now() -> str:
@@ -362,7 +370,15 @@ def _receive_teams() -> int:
 
     _INBOX.mkdir(parents=True, exist_ok=True)
     seen_file = _STATE / "received-seen.json"
-    seen = set(json.loads(seen_file.read_text(encoding="utf-8"))) if seen_file.exists() else set()
+    # seen 이 깨져도 수신은 계속되어야 한다. 이 파일은 멱등 힌트일 뿐이고,
+    # 잃으면 최악이 중복 적재인데 inbox 파일명이 graph id 를 포함해 덮어쓰기로 끝난다.
+    # 읽기를 무방어로 두면 torn write 한 번에 Teams 수신이 **영구 정지**한다.
+    seen: set[str] = set()
+    if seen_file.exists():
+        try:
+            seen = set(json.loads(seen_file.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError, TypeError) as exc:
+            print(f"  ⚠️ seen 기록 손상 — 빈 상태로 재시작: {type(exc).__name__}: {str(exc)[:60]}")
 
     url = f"{_GRAPH_BASE}/teams/{team_id}/channels/{channel_id}/messages?$top=50"
     ok, data = _graph_get(url, token)
@@ -383,6 +399,8 @@ def _receive_teams() -> int:
                 contract = _extract_envelope(msg)
                 if not contract:
                     continue  # consortium 메시지 아님
+                if not isinstance(contract, dict):
+                    raise TypeError(f"계약이 객체가 아님: {type(contract).__name__}")
                 # 나에게 온 것만, 내가 보낸 건 제외
                 if contract.get("to_team") != me or contract.get("from_team") == me:
                     skipped += 1
@@ -394,16 +412,19 @@ def _receive_teams() -> int:
                 out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(gid[-6:], 'x')}.json"
                 out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
-                      f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
+                      f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
                 ingested += 1
-            except (ValueError, TypeError, OSError) as exc:
+            except (ValueError, TypeError, OSError, AttributeError, UnicodeDecodeError) as exc:
                 print(f"  ⚠️ 메시지 처리 실패(건너뜀): {gid[-12:]} — "
                       f"{type(exc).__name__}: {str(exc)[:80]}")
                 failed += 1
     finally:
         # seen 은 **반드시** 영속시킨다. 루프 뒤에서만 쓰면 중간 예외 시 저장되지 않아
         # 같은 메시지가 매 폴링마다 다시 처리되고 다시 죽는다 (영구 반복).
-        seen_file.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+        # 쓰기는 원자적으로 — 부분 기록된 JSON 이 남으면 다음 폴링이 그걸 읽는다.
+        tmp = seen_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, seen_file)
 
     tail = f", 실패 {failed}건 건너뜀" if failed else ""
     print(f"[consortium] Teams 수신 완료: {ingested}건 inbox 적재 "
@@ -466,36 +487,49 @@ def _receive_openclaw() -> int:
     damaged = 0
     for rf in sorted(_OC_INBOUND.glob("*.json")):
         # courier 가 드롭하는 파일은 **신뢰할 수 없는 입력**이다 — 전송 중 잘리거나
-        # 다른 도구가 쓰다 만 것이 섞인다. 항목 하나의 손상이 큐 전체를 멈추면
+        # 다른 도구가 쓰다 만 것이 섞인다. 항목 하나의 실패가 큐 전체를 멈추면
         # 그 파일이 processed/ 로 가지 못해 **매 실행 같은 지점에서 영구히 죽는다**
         # (실측: 손상 1건 뒤의 정상 메시지가 영원히 처리되지 않음).
+        #
+        # 파싱만 감싸는 것으로는 부족하다 — 재리뷰 실측에서 유효 JSON 세 종류가
+        # 같은 wedge 를 냈다: 비객체(`[1,2,3]` → AttributeError), 계약이 dict 가
+        # 아닌 경우(`"consortium_msg": "x"`), 과다 길이 ts(OSError). 따라서 한 건
+        # 처리 **전체**를 감싼다. 어떤 필드가 무슨 예외를 낼지 미리 셀 수 없다.
         try:
             record = json.loads(rf.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            if not isinstance(record, dict):
+                raise TypeError(f"최상위가 객체가 아님: {type(record).__name__}")
+            # 계약 복원: 명시 consortium_msg 우선, 없으면 text 의 base64 봉투 스캔
+            contract = record.get("consortium_msg") or _extract_envelope(record)
+            if not contract:
+                rf.rename(processed_dir / rf.name)
+                continue  # consortium 메시지 아님
+            if not isinstance(contract, dict):
+                raise TypeError(f"계약이 객체가 아님: {type(contract).__name__}")
+            if contract.get("to_team") != me or contract.get("from_team") == me:
+                rf.rename(processed_dir / rf.name)
+                skipped += 1
+                continue
+            contract["status"] = "received"
+            if record.get("conversation_ref"):
+                contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
+            safe_ts = _safe_component(contract.get("ts", ""), rf.stem)
+            safe_from = _safe_component(contract.get("from_team", ""), "unknown")
+            # rf.stem 접미사로 고유화 — 없으면 ts·from_team 을 맞춘 드롭이
+            # 먼저 온 inbox 메시지를 덮어쓴다 (둘 다 원격이 정하는 값이다).
+            out = _INBOX / f"{safe_ts}__from-{safe_from}__{_safe_component(rf.stem[-6:], 'x')}.json"
+            out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
+            rf.rename(processed_dir / rf.name)
+            print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
+                  f"cycle={contract.get('cycle_id','?')}: {str(contract.get('msg') or '')[:50]}")
+            ingested += 1
+        except (ValueError, TypeError, OSError, UnicodeDecodeError) as exc:
             quarantine_dir.mkdir(exist_ok=True)
-            rf.rename(quarantine_dir / rf.name)
-            print(f"  ⚠️ 손상된 드롭 격리: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
+            if rf.exists():  # rename 이후 실패면 이미 processed/ 로 옮겨진 상태
+                rf.rename(quarantine_dir / rf.name)
+            print(f"  ⚠️ 처리 불가 드롭 격리: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
             damaged += 1
             continue
-        # 계약 복원: 명시 consortium_msg 우선, 없으면 text 의 base64 봉투 스캔
-        contract = record.get("consortium_msg") or _extract_envelope(record)
-        if not contract:
-            rf.rename(processed_dir / rf.name)
-            continue  # consortium 메시지 아님
-        if contract.get("to_team") != me or contract.get("from_team") == me:
-            rf.rename(processed_dir / rf.name)
-            skipped += 1
-            continue
-        contract["status"] = "received"
-        if record.get("conversation_ref"):
-            contract["conversation_ref"] = record["conversation_ref"]  # 답장 스레드 복귀용
-        safe_ts = _safe_component(contract.get("ts", ""), rf.stem)
-        out = _INBOX / f"{safe_ts}__from-{_safe_component(contract.get('from_team', ''), 'unknown')}.json"
-        out.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
-        rf.rename(processed_dir / rf.name)
-        print(f"  ⬇ {contract.get('from_team','?')} → {me} [{contract.get('role','?')}] "
-              f"cycle={contract.get('cycle_id','?')}: {contract.get('msg','')[:50]}")
-        ingested += 1
     tail = f", 손상 {damaged}건 quarantine/ 격리" if damaged else ""
     print(f"[consortium] OpenClaw 수신 완료: {ingested}건 inbox 적재 "
           f"(타팀행 {skipped}건 제외, openclaw-inbound/processed/ 로 이동{tail})")

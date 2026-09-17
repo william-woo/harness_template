@@ -343,7 +343,14 @@ def scan_security_blocks(root: Path) -> list[str]:
     blocked: list[str] = []
 
     def _add(rel: str) -> None:
-        """화이트리스트·rsync 제외 대상이 아닌 경우에만 BLOCK 목록에 추가한다."""
+        """화이트리스트·rsync 제외 대상이 아닌 경우에만 BLOCK 목록에 추가한다.
+
+        한 파일이 여러 패턴에 걸릴 수 있으므로(`.secrets/x_token.txt` 는 디렉토리
+        패턴과 `*token.txt` 글롭 양쪽) 중복을 막는다 — 사용자에게 같은 경로를
+        두 번 보여 주면 차단 건수를 신뢰할 수 없게 된다.
+        """
+        if rel in blocked:
+            return
         if not _is_security_whitelisted(rel) and not _is_rsync_excluded(rel, excludes):
             blocked.append(rel)
 
@@ -358,8 +365,21 @@ def scan_security_blocks(root: Path) -> list[str]:
                         rel = str(p.relative_to(root))
                         if ".git" not in rel.split("/") and not rel.startswith(".git"):
                             _add(rel)
+            elif pattern.endswith("/"):
+                # 디렉토리 패턴 (예: `.secrets/`, `.aws/`) — 깊이 무관하게 찾는다.
+                # 이 분기가 없으면 `.secrets` 는 "정확한 파일명" 분기로 떨어지고,
+                # rglob 이 디렉토리를 찾아도 `is_file()` 이 False 라 **아무것도
+                # 차단하지 않는다** (재리뷰 실측: `.secrets/foo.bin` 0건 차단).
+                # `*token.txt` 가 우연히 겹쳐 잡는 바람에 테스트가 이를 가렸다.
+                for target in root.rglob(pat):
+                    if not target.is_dir():
+                        continue
+                    for p in target.rglob("*"):
+                        rel = str(p.relative_to(root))
+                        if p.is_file() and ".git" not in rel.split("/"):
+                            _add(rel)
             elif "/" in pat:
-                # 경로 포함 패턴 (예: .aws/credentials, .aws/)
+                # 경로 포함 패턴 (예: .aws/credentials)
                 # 루트 기준 상대 경로로 매핑
                 target = root / pat
                 if target.is_file():
