@@ -231,8 +231,13 @@ _REQUIRED_MSG_FIELDS = ("from_team", "to_team", "role", "cycle_id", "msg")
 
 def _validate_message(m: dict) -> list[str]:
     """메시지가 계약을 만족하는지 검증하고 위반 목록을 반환한다 (빈 = 통과)."""
-    errs = [f"필수 필드 누락: {f}" for f in _REQUIRED_MSG_FIELDS
-            if not str(m.get(f, "")).strip()]
+    # `str(m.get(f, ""))` 로 비교하면 비문자열이 전부 "존재" 로 통과한다 —
+    # str(None)="None", str([])="[]", str(False)="False". send 는 argparse 가 문자열만
+    # 주므로 도달하지 않지만 **수신은 원격이 타입까지 정한다**: `role: null` 이 그대로
+    # 적재됐다(실측). ADR-012 정정문이 "role·cycle_id 는 라우팅 키, 계약 검증이 지킨다"
+    # 고 적은 바로 그 필드라, 타입을 안 보면 그 약속이 성립하지 않는다.
+    errs = [f"필수 필드 누락·형식 오류: {f}={m.get(f)!r}" for f in _REQUIRED_MSG_FIELDS
+            if not (isinstance(m.get(f), str) and m[f].strip())]
     # 팀 id 는 outbox 파일명에 들어간다 — init 은 _TEAM_RE 로 걸렀는데 send 는
     # 안 걸렀다. 운영자 오타가 파일명으로 새는 것을 여기서 막는다.
     errs += [f"team-id 형식 오류: {f}={m.get(f)!r} (소문자·숫자·하이픈)"
@@ -477,10 +482,13 @@ def _receive_teams() -> int:
         print(f"[consortium] ❌ Graph 폴링 실패 — {data}")
         return 1
 
-    ingested = skipped = failed = 0
+    ingested = skipped = failed = rejected = 0
     try:
         for msg in data.get("value", []):
-            gid = msg.get("id", "")
+            # Graph 응답은 인증된 MS 엔드포인트지만 이 두 줄이 레코드 try **바깥**이라,
+            # 비-dict 항목이나 비문자열 id 하나가 폴링 전체를 죽인다 — 경계 밖에 남은
+            # 마지막 지점이었다. 타입을 여기서 눌러 둔다.
+            gid = str(msg.get("id", "")) if isinstance(msg, dict) else ""
             if gid in seen:
                 continue
             seen.add(gid)  # 봉투 유무와 무관하게 본 메시지는 기록 (재스캔 방지)
@@ -492,6 +500,11 @@ def _receive_teams() -> int:
                     skipped += 1
                 else:
                     ingested += 1
+            except RejectedRecord as exc:
+                # 계약 위반(원격이 보낸 것)과 장애(디스크 풀 등)를 한 카운터에 넣으면
+                # 요약 줄이 공격과 사고를 구분하지 못한다.
+                print(f"  ⚠️ 계약 위반(거부): {gid[-12:]} — {str(exc)[:80]}")
+                rejected += 1
             except Exception as exc:  # noqa: BLE001 — 신뢰 불가 원격 입력의 경계
                 print(f"  ⚠️ 메시지 처리 실패(건너뜀): {gid[-12:]} — "
                       f"{type(exc).__name__}: {str(exc)[:80]}")
@@ -504,7 +517,7 @@ def _receive_teams() -> int:
         tmp.write_text(json.dumps(sorted(seen), ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, seen_file)
 
-    tail = f", 실패 {failed}건 건너뜀" if failed else ""
+    tail = (f", 거부 {rejected}건" if rejected else "") + (f", 실패 {failed}건 건너뜀" if failed else "")
     print(f"[consortium] Teams 수신 완료: {ingested}건 inbox 적재 "
           f"(미적재 {skipped}건 — 타팀행·비consortium, 누적 seen {len(seen)}{tail})")
     return 0
@@ -560,7 +573,7 @@ def _receive_openclaw() -> int:
     _INBOX.mkdir(parents=True, exist_ok=True)
     processed_dir = _OC_INBOUND / "processed"
     processed_dir.mkdir(exist_ok=True)
-    ingested = skipped = 0
+    ingested = skipped = rejected = 0
     quarantine_dir = _OC_INBOUND / "quarantine"
     damaged = 0
     for rf in sorted(_OC_INBOUND.glob("*.json")):

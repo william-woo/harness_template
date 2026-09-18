@@ -57,8 +57,16 @@ python3 .claude/bin/consortium.py self                         # host/transport 
   "stage": "design", "msg": "...", "status": "queued", "ts": "..."
 }
 ```
-필수: `from_team / to_team / role / cycle_id / msg`. `stage` ∈ {plan,design,develop,verify,deploy}.
-→ 게이트웨이는 이 JSON 을 그대로 실어 보내고, 수신도 같은 스키마로 inbox 에 적재하면 된다 (플랫폼 무관).
+필수: `from_team / to_team / role / cycle_id / msg` (전부 **비어 있지 않은 문자열**).
+`stage` ∈ {plan,design,develop,verify,deploy}. 계약 검증은 **발신·수신 양쪽**에 걸린다
+(ADR-012 결정 3) — 값을 정하는 쪽은 수신에선 원격이기 때문이다.
+
+→ 게이트웨이는 이 JSON 을 그대로 실어 보내고, **수신분은 `openclaw-inbound/` 에 드롭**한다.
+`gateway <platform> --receive` 가 **단일 수신 경계**에서 계약 검증·파일명 위생·유일성을 처리한다.
+
+> ⚠️ **`inbox/` 에 직접 쓰지 말 것.** 경계를 건너뛰면 원격이 정한 값이 그대로 파일명·경로·
+> 라우팅 키가 된다. 이 변형이 리뷰 3라운드에 걸쳐 닫은 결함(경로 탈출·큐 영구 정지·메시지
+> 소멸)이 전부 그 지점에서 나왔다.
 
 ## 컨소시엄 흐름 (멀티팀 product-cycle)
 

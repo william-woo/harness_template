@@ -366,6 +366,16 @@ class PoisonPillTest(unittest.TestCase):
                                 "role": "", "cycle_id": "C1", "msg": "x"},
             "stage 값 오류": {"from_team": "team-a", "to_team": "team-b", "role": "developer",
                           "cycle_id": "C1", "msg": "x", "stage": "배포해줘"},
+            # 비문자열은 `str(m.get(f,""))` 비교에서 전부 "존재" 로 통과했다 —
+            # str(None)="None", str([])="[]", str(False)="False".
+            # send 는 argparse 가 문자열만 주므로 **수신 전용** 구멍이었고,
+            # 하필 ADR-012 정정문이 "계약 검증이 지킨다" 고 적은 라우팅 키였다.
+            "role=null": {"from_team": "team-a", "to_team": "team-b", "role": None,
+                          "cycle_id": "C1", "msg": "x"},
+            "role=[]": {"from_team": "team-a", "to_team": "team-b", "role": [],
+                        "cycle_id": "C1", "msg": "x"},
+            "cycle_id=false": {"from_team": "team-a", "to_team": "team-b", "role": "developer",
+                               "cycle_id": False, "msg": "x"},
         }
         for label, contract in violations.items():
             with self.subTest(violation=label):
