@@ -454,6 +454,34 @@ class MessageDurabilityTest(unittest.TestCase):
         self.assertEqual(rc, 1, "형식 위반 team-id 가 통과했다")
         self.assertEqual(list((root / ".claude/state/consortium/outbox").glob("*.json")), [])
 
+    def test_같은_초에_보낸_메시지가_openclaw_큐에서도_모두_남는다(self):
+        """QA 가 잡은 결함 — `_write_unique` 가 outbox·inbox 에만 적용됐었다.
+
+        courier 가 비동기로 가져가는 `openclaw-outbound/` 도 큐인데 `write_text` +
+        `Path.rename` 이라 같은 이름이 조용히 교체됐다. 실측: `--send` 3회 →
+        outbound 1건·sent 1건, **2건이 rc=0 인 채 소멸**.
+
+        3차 MUST-B 의 수정이 "갈 곳에 다 가지 않은" 네 번째 사례다. 그래서 이
+        테스트는 발신 경로를 **send 쪽과 별도로** 건다 — 한쪽만 고쳐도 통과하면
+        같은 일이 또 난다.
+        """
+        root = Path(self.tmp.name) / "oc-send-node"
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, "init", "team-a")
+        for idx in (1, 2, 3):
+            self._run(mod, "send", "--to", "team-b", "--role", "developer",
+                      "--cycle", f"C{idx}", "--msg", f"MSG-{idx}")
+            self.assertEqual(mod._send_openclaw("teams"), 0)
+
+        state = root / ".claude/state/consortium"
+        outbound = sorted(json.loads(f.read_text(encoding="utf-8"))["consortium_msg"]["msg"]
+                          for f in (state / "openclaw-outbound").glob("*.json"))
+        sent = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"]
+                      for f in (state / "outbox" / "sent").glob("*.json"))
+        self.assertEqual(outbound, ["MSG-1", "MSG-2", "MSG-3"], f"큐에서 소멸: {outbound}")
+        self.assertEqual(sent, ["MSG-1", "MSG-2", "MSG-3"], f"발신 기록 소멸: {sent}")
+
     def test_동일한_ts_와_from_team_드롭이_겹쳐도_둘_다_남는다(self):
         root = Path(self.tmp.name) / "recv-node"
         root.mkdir(parents=True, exist_ok=True)

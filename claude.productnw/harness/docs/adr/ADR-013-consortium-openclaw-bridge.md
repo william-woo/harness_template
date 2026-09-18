@@ -45,8 +45,14 @@ agent_type > 기본 claude-code)에 따라 선택한다:
 > 클래스를 닫으려던 수정조차 인스턴스만 닫은 것이다.
 >
 > **따라서 수신은 단일 경계 + host 별 fetch 로 한다**: `_ingest_record()` 하나가
-> 예외 격리·계약 검증·파일명 위생·유일성을 소유하고, `_receive_*` 는 "후보 레코드를
-> 가져온다" + 성공 후 장부(seen 기록 vs 파일 이동)만 남긴다.
+> 계약 검증·파일명 위생·유일성을 소유하고, `_receive_*` 는 "후보 레코드를 가져온다" +
+> 성공 후 장부(seen 기록 vs 파일 이동)만 남긴다.
+>
+> **예외 격리는 호출자에 둔다** — `_ingest_record` 가 아니라 두 `_receive_*` 의
+> per-item `except Exception` 이다. 격리 **동작**(quarantine 이동 vs seen 기록 후 건너뜀)이
+> transport 마다 다르기 때문이다. 경계 함수는 `RejectedRecord` 를 올리고, 무엇을 할지는
+> 장부를 소유한 쪽이 정한다. 두 호출자가 **같은 형태**(`except Exception`)를 쓰는지는
+> `ReceiveBoundaryParityTest` 가 같은 악성 입력을 양쪽에 태워 잠근다.
 > 같은 연산의 사본이 2개가 되는 순간이 Simplicity First 의 "2곳 이상이면 추출"
 > 발동 시점이다 — 추측 추상화가 아니라 **사후 추출**이라 원칙에 어긋나지 않는다.
 

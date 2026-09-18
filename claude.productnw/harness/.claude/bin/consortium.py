@@ -152,6 +152,29 @@ def _write_unique(path: Path, text: str) -> Path:
     raise OSError(f"파일명 충돌 1000회 초과: {path.name}")
 
 
+def _move_unique(src: Path, dest_dir: Path) -> Path:
+    """파일을 옮기되 같은 이름이 있으면 `-1`, `-2` … 를 붙인다 — **덮어쓰지 않는다**.
+
+    `Path.rename` 은 POSIX 에서 기존 파일을 **조용히 교체**한다. 큐 파일 이름은 초 단위
+    ts + 팀 id 라 유일하지 않으므로, 같은 초의 두 메시지가 큐에서 사라진다 (실측: openclaw
+    `--send` 3회 → outbound 1건·sent 1건, 2건이 rc=0 인 채 소멸).
+
+    `_write_unique` 와 짝이다. 그쪽이 "새로 쓰는" 경로를, 이쪽이 "옮기는" 경로를 맡는다 —
+    큐의 최소 계약("넣은 메시지가 사라지지 않는다")은 두 경로 모두에서 지켜져야 한다.
+    `os.link` 는 대상이 있으면 실패하므로 확률이 아니라 파일시스템이 유일성을 보장한다.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for n in range(1000):
+        candidate = dest_dir / (src.name if n == 0 else f"{src.stem}-{n}{src.suffix}")
+        try:
+            os.link(src, candidate)   # 배타 — 이미 있으면 FileExistsError
+        except FileExistsError:
+            continue
+        src.unlink()                  # 하드링크 하나를 떼는 것 — 내용은 candidate 에 남는다
+        return candidate
+    raise OSError(f"파일명 충돌 1000회 초과: {src.name}")
+
+
 class RejectedRecord(Exception):
     """수신 경계가 레코드를 거부했다 (거부 사유를 메시지로 싣는다)."""
 
@@ -409,7 +432,7 @@ def _send_teams() -> int:
         tag = "✅" if ok else "❌"
         print(f"  {tag} {m.get('from_team','?')}→{m.get('to_team','?')} cycle={m.get('cycle_id','?')} — {detail}")
         if ok:
-            mf.rename(sent_dir / mf.name)
+            _move_unique(mf, sent_dir)
             ok_count += 1
     print(f"[consortium] Teams 발신 완료: {ok_count}/{len(pending)} (성공분 → outbox/sent/)")
     return 0 if ok_count == len(pending) else 1
@@ -550,9 +573,10 @@ def _send_openclaw(platform: str) -> int:
             "text": card["text"],                        # 봉투 포함 본문
             "consortium_msg": m,                         # 원본 계약 (courier 편의)
         }
-        out = _OC_OUTBOUND / mf.name
-        out.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        mf.rename(sent_dir / mf.name)
+        # courier 가 비동기로 가져가는 **큐**다 — outbox·inbox 와 같은 계약이 걸린다.
+        _write_unique(_OC_OUTBOUND / mf.name,
+                      json.dumps(record, ensure_ascii=False, indent=2))
+        _move_unique(mf, sent_dir)
         print(f"  ↪ {m.get('from_team','?')}→{m.get('to_team','?')} [{m.get('role','?')}] "
               f"cycle={m.get('cycle_id','?')} → openclaw-outbound/ ({platform})")
     print(f"[consortium] OpenClaw outbound 적재: {len(pending)}건 "
@@ -589,7 +613,7 @@ def _receive_openclaw() -> int:
                 # 답장 스레드 복귀용 — 드롭 레코드에만 있는 로컬 메타
                 extra={"conversation_ref": record["conversation_ref"]}
                 if isinstance(record, dict) and record.get("conversation_ref") else None)
-            rf.rename(processed_dir / rf.name)
+            _move_unique(rf, processed_dir)
             if contract is None:
                 skipped += 1
             else:
@@ -601,7 +625,7 @@ def _receive_openclaw() -> int:
             # coding-standards "에러 처리는 경계에서만" 의 바로 그 경계가 여기다.
             quarantine_dir.mkdir(exist_ok=True)
             if rf.exists():  # rename 이후 실패면 이미 processed/ 로 옮겨진 상태
-                rf.rename(quarantine_dir / rf.name)
+                _move_unique(rf, quarantine_dir)
             print(f"  ⚠️ 처리 불가 드롭 격리: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
             damaged += 1
             continue
