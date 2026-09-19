@@ -16,6 +16,10 @@
 """
 import importlib.util
 import sys
+import io
+import os
+import tempfile
+import contextlib
 import unittest
 from pathlib import Path
 
@@ -69,6 +73,54 @@ class SafeComponentTest(unittest.TestCase):
         got = _mod._safe_component("../../evil", "unknown")
         self.assertNotIn("/", got)
         self.assertNotIn("..", got)
+
+
+class CliSmokeTest(unittest.TestCase):
+    """모든 CLI 하위명령이 **적어도 실행은 되는지** (리뷰 MUST-1).
+
+    `roster` 가 `NameError` 로 죽은 채 커밋됐다. 원인은 문서 문구를 고치려고 돌린
+    정규식이 소스의 `len(teams)` 까지 친 것인데, **`roster` 에 테스트가 0건이라**
+    아무도 잡지 못했다. 정교한 단언보다 "죽지 않는다" 를 거는 것이 먼저다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.root)
+
+    def tearDown(self):
+        os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        self.tmp.cleanup()
+
+    def _run(self, *argv) -> int:
+        spec = importlib.util.spec_from_file_location("consortium_cli", _BIN)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["consortium_cli"] = mod
+        spec.loader.exec_module(mod)
+        old = sys.argv
+        sys.argv = ["consortium.py", *argv]
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                mod.main()
+            return 0
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        finally:
+            sys.argv = old
+
+    def test_모든_하위명령이_예외없이_실행된다(self):
+        self.assertEqual(self._run("init", "team-a", "--agents", "developer"), 0)
+        for argv in (["roster"],
+                     ["send", "--to", "team-b", "--role", "developer",
+                      "--cycle", "C1", "--msg", "스모크"],
+                     ["inbox"],
+                     ["self"],
+                     ["gateway", "slack"],
+                     ["gateway", "teams"],
+                     ["gateway", "telegram"]):
+            with self.subTest(cmd=" ".join(argv)):
+                self.assertEqual(self._run(*argv), 0, f"`{' '.join(argv)}` 가 실패했다")
 
 
 if __name__ == "__main__":
