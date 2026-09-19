@@ -40,6 +40,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,9 +82,9 @@ def _detect_host() -> str:
 
 # 게이트웨이 어댑터 — telegram ★권장(발신+수신 실구현) / teams 대안(발신+수신 실구현) / slack stub.
 _GATEWAYS = {
-    "telegram": "Telegram ★권장 (Bot API — BotFather 토큰 1개로 발신+수신)",
+    "slack": "Slack ★권장 (chat.postMessage 발신 + conversations.history 폴링 수신)",
     "teams": "MS Teams (Incoming Webhook 발신 + Graph 폴링 수신 — 앱 등록·관리자 동의 필요)",
-    "slack": "Slack (stub — 수신에 공개 엔드포인트/Socket Mode SDK 가 필요해 stdlib 범위 밖)",
+    "telegram": "Telegram (발신 + **사람이 보낸 메시지** 수신 — 봇↔봇 불가, 아래 주석)",
 }
 
 # Teams 발신 어댑터: 웹훅 URL 은 자격증명(autonomous #3-A) — 셸 노출 금지, 환경변수로만 주입.
@@ -103,6 +104,8 @@ _ENVELOPE_PREFIX = "[[consortium-msg]]"
 _ENVELOPE_RE = re.compile(re.escape(_ENVELOPE_PREFIX) + r"([A-Za-z0-9+/=]+)")
 
 _TEAM_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# 오류 문자열에서 봇 토큰을 지우는 패턴 (_safe_err 참조)
+_TOKEN_RE = re.compile(r"/bot[^/\s]+/")
 # 파일명 한 성분에 허용할 문자 + 그 길이 상한 (_safe_component 참조)
 _SAFE_RE = re.compile(r"[^A-Za-z0-9T+]")
 _MAX_COMPONENT = 64
@@ -146,6 +149,7 @@ def _write_unique(path: Path, text: str) -> Path:
     접미사를 늘려 확률을 낮추는 대신 **파일시스템의 배타 생성**에 유일성을 맡긴다 —
     확률적 회피는 언젠가 실패하고, 실패가 조용하다.
     """
+    path.parent.mkdir(parents=True, exist_ok=True)  # 호출자에게 맡기면 반드시 빠뜨린다
     for n in range(1000):
         candidate = path if n == 0 else path.with_name(f"{path.stem}-{n}{path.suffix}")
         try:
@@ -326,7 +330,7 @@ def cmd_roster(args) -> int:
     if not teams:
         print("[consortium] 등록된 팀 없음 — `consortium.py init <team-id>` 로 등록")
         return 0
-    print(f"[consortium] 컨소시엄 로스터 — {len(teams)}개 팀\n")
+    print(f"[consortium] 컨소시엄 로스터 — {len(slack|teams|telegram)}개 팀\n")
     for tid, t in sorted(teams.items()):
         print(f"  ● {tid}  (gateway: {t.get('gateway', '?')})")
         print(f"      agents: {', '.join(t.get('agents', []))}")
@@ -365,7 +369,7 @@ def cmd_send(args) -> int:
                              json.dumps(msg, ensure_ascii=False, indent=2))
     print(f"[consortium] outbox 기록: {out_file.relative_to(_ROOT)}")
     print(f"  {msg['from_team']} → {msg['to_team']} [{args.role}] cycle={args.cycle}")
-    print("  → 실제 전송은 `gateway <platform>` (현재 stub — 다운스트림 봇 연동 필요)")
+    print("  → 실제 전송은 `gateway <platform>` (발신은 `gateway <slack|teams|telegram> --send`)")
     return 0
 
 
@@ -388,6 +392,32 @@ def cmd_inbox(args) -> int:
               f"[{m.get('role','?')}] cycle={m.get('cycle_id','?')} stage={m.get('stage','-')}")
         print(f"      {m.get('msg','')}")
     return 0
+
+
+def _safe_err(exc: BaseException) -> str:
+    """예외를 사람이 읽을 문자열로 바꾸되 **자격증명을 흘리지 않는다**.
+
+    Bot API URL 은 경로에 토큰이 박힌다(`/bot<TOKEN>/method`). `urllib` 은 잘못된
+    URL 을 통째로 예외 메시지에 실으므로, 그대로 출력하면 토큰이 로그에 남는다.
+    """
+    text = str(exc)
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            text = exc.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — 오류 보고 중의 오류는 삼킨다
+            text = f"HTTP {exc.code}"
+    return _TOKEN_RE.sub("/bot<REDACTED>/", text)
+
+
+def _net_boundary_note() -> None:
+    """네트워크 응답은 **신뢰 불가 입력**이다 — 예외를 열거하지 않는다.
+
+    실측으로 열거형 except 를 뚫은 것들: `http.client.IncompleteRead`(Content-Length
+    불일치 — OSError 아님), 프록시가 돌려준 Latin-1 본문의 `UnicodeDecodeError`,
+    최상위가 배열인 JSON 의 `AttributeError`. 셋 다 `--poll` 데몬을 traceback 으로
+    죽였다. 이 파일이 레코드 경계에서 세 라운드에 걸쳐 배운 것이 네트워크 경계에도
+    그대로 적용된다 — 그래서 `_graph_get` 과 `_telegram_api` **양쪽**을 함께 고쳤다.
+    """
 
 
 def _build_teams_card(m: dict) -> dict:
@@ -473,23 +503,206 @@ def _graph_get(url: str, token: str) -> tuple[bool, dict | str]:
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
-            return True, json.loads(resp.read().decode("utf-8"))
+            body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code} {exc.read().decode('utf-8', 'replace')[:300]}"
-    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-        return False, f"요청 실패: {exc}"
+        return False, f"HTTP {exc.code} {_safe_err(exc)[:300]}"
+    except Exception as exc:  # noqa: BLE001 — 네트워크 경계 (아래 _net_boundary 주석 참조)
+        return False, f"요청 실패: {_safe_err(exc)}"
+    if not isinstance(body, dict):
+        return False, f"응답이 객체가 아님: {type(body).__name__}"
+    return True, body
+
+
+# ---------------------------------------------------------------------------
+# Slack 게이트웨이 — **권장 transport** (발신·수신 모두 실구현, stdlib only)
+# ---------------------------------------------------------------------------
+# 왜 Slack 인가 (ADR-013 결정 5, 2026-09-19 정정):
+#   컨소시엄은 **에이전트↔에이전트** 통신이다. 그래서 "봇이 다른 봇의 글을 볼 수
+#   있는가" 가 플랫폼 선택의 첫 질문이고, 이게 Telegram 을 탈락시킨다 —
+#   Bot FAQ: "bots will not be able to see messages from other bots **regardless
+#   of mode**". privacy mode 를 꺼도 안 된다 (봇 루프 방지 정책).
+#
+#   Slack 은 `conversations.history` 가 채널의 **메시지 로그를 읽는** API 라
+#   다른 앱/봇이 남긴 글(`bot_id`·`subtype: bot_message`)이 그대로 들어온다.
+#   Events API(공개 엔드포인트)나 Socket Mode(SDK)가 필요하다는 것은 **푸시**
+#   수신 얘기였고, 폴링 경로는 평범한 HTTPS 라 stdlib 로 완결된다.
+#   Teams 의 Graph 폴링과 같은 모양이면서 자격증명이 토큰 1개 + 채널 id 로 적다.
+_SLACK_TOKEN_ENV = "CONSORTIUM_SLACK_TOKEN"      # xoxb- 봇 토큰 (chat:write, channels:history)
+_SLACK_CHANNEL_ENV = "CONSORTIUM_SLACK_CHANNEL"  # 채널 id (C...) — 이름 아님
+# 테스트 주입 전용 (mock 서버). 운영에서는 건드리지 않는다.
+_SLACK_BASE = os.environ.get("CONSORTIUM_SLACK_BASE", "https://slack.com/api")
+
+
+def _slack_api(token: str, method: str, payload: dict, get: bool = False) -> tuple[bool, dict | str]:
+    """Slack Web API 호출. (성공여부, 응답|오류문자열). 네트워크=경계 방어."""
+    url = f"{_SLACK_BASE}/{method}"
+    headers = {"Authorization": f"Bearer {token}"}
+    if get:
+        url = f"{url}?{urllib.parse.urlencode(payload)}"
+        req = urllib.request.Request(url, headers=headers)
+    else:
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code} {_safe_err(exc)[:300]}"
+    except Exception as exc:  # noqa: BLE001 — 네트워크 경계
+        return False, f"요청 실패: {_safe_err(exc)}"
+    if not isinstance(body, dict):
+        return False, f"응답이 객체가 아님: {type(body).__name__}"
+    if not body.get("ok"):
+        # Slack 은 실패도 HTTP 200 으로 준다 — ok 플래그를 봐야 한다.
+        return False, f"API 거부: {str(body.get('error'))[:200]}"
+    return True, body
+
+
+def _send_slack() -> int:
+    """outbox 의 미발신 메시지를 Slack 채널로 발신하고 성공분을 outbox/sent/ 로 옮긴다."""
+    token = os.environ.get(_SLACK_TOKEN_ENV, "").strip()
+    channel = os.environ.get(_SLACK_CHANNEL_ENV, "").strip()
+    if not token or not channel:
+        print("[consortium] ❌ Slack 자격증명 미설정 — 환경변수로만 주입 (셸 노출 금지):")
+        print(f"  {_SLACK_TOKEN_ENV} (xoxb- 봇 토큰 — chat:write, channels:history)")
+        print(f"  {_SLACK_CHANNEL_ENV} (채널 id, C 로 시작 — 채널 '이름' 이 아니다)")
+        print("  발급 절차: docs/consortium-gateway-setup.md §2 (Slack — 권장)")
+        return 1
+    if not _OUTBOX.exists():
+        print("[consortium] outbox 없음 — `init`/`send` 먼저 실행")
+        return 0
+    pending = sorted(_OUTBOX.glob("*.json"))
+    if not pending:
+        print("[consortium] 발신할 outbox 메시지 없음")
+        return 0
+    sent_dir = _OUTBOX / "sent"
+    sent_dir.mkdir(exist_ok=True)
+    ok_count = 0
+    for mf in pending:
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 — 찢어진 outbox 파일 하나가 발신 전체를 막지 않는다
+            print(f"  ❌ {mf.name} — 읽기 실패: {type(exc).__name__}: {str(exc)[:80]}")
+            continue
+        ok, detail = _slack_api(token, "chat.postMessage",
+                                {"channel": channel, "text": _build_slack_text(m),
+                                 "unfurl_links": False})
+        tag = "✅" if ok else "❌"
+        info = f"ts={detail.get('ts')}" if ok and isinstance(detail, dict) else detail
+        print(f"  {tag} {m.get('from_team','?')}→{m.get('to_team','?')} "
+              f"cycle={m.get('cycle_id','?')} — {info}")
+        if ok:
+            _move_unique(mf, sent_dir)
+            ok_count += 1
+    print(f"[consortium] Slack 발신 완료: {ok_count}/{len(pending)} (성공분 → outbox/sent/)")
+    return 0 if ok_count == len(pending) else 1
+
+
+def _build_slack_text(m: dict) -> str:
+    """사람이 읽는 줄 + 기계가 무손실 복원할 봉투를 한 메시지에 담는다."""
+    envelope = _ENVELOPE_PREFIX + base64.b64encode(
+        json.dumps(m, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    head = (f"[consortium] {m.get('from_team','?')} → {m.get('to_team','?')} "
+            f"[{m.get('role','?')}] cycle={m.get('cycle_id','?')}")
+    stage = f"\nstage: {m['stage']}" if m.get("stage") else ""
+    return f"{head}{stage}\n{m.get('msg','')}\n\n{envelope}"
+
+
+def _receive_slack() -> int:
+    """conversations.history 로 채널 로그를 읽어 **단일 수신 경계**에 넘긴다."""
+    token = os.environ.get(_SLACK_TOKEN_ENV, "").strip()
+    channel = os.environ.get(_SLACK_CHANNEL_ENV, "").strip()
+    if not token or not channel:
+        print("[consortium] ❌ Slack 자격증명 미설정 — 토큰과 채널 id 를 모두 주입한다.")
+        print("  채널 id 를 요구하는 이유: 수신 범위를 그 채널로 **못 박기** 위해서다.")
+        print("  발급 절차: docs/consortium-gateway-setup.md §2 (Slack — 권장)")
+        return 1
+    me = _self_team()
+    if not me:
+        print("[consortium] ❌ 로스터에 팀 없음 — `init <team>` 먼저 실행")
+        return 1
+
+    _INBOX.mkdir(parents=True, exist_ok=True)
+    cursor_file = _STATE / "slack-cursor.json"
+    oldest = "0"
+    if cursor_file.exists():
+        try:
+            oldest = str(json.loads(cursor_file.read_text(encoding="utf-8"))["oldest"])
+        except Exception as exc:  # noqa: BLE001 — 멱등 힌트일 뿐, 깨져도 수신은 계속된다
+            print(f"  ⚠️ cursor 기록 손상 — 처음부터 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+
+    ok, body = _slack_api(token, "conversations.history",
+                          {"channel": channel, "oldest": oldest, "limit": 200,
+                           "inclusive": "false"}, get=True)
+    if not ok:
+        print(f"[consortium] ❌ Slack 폴링 실패 — {body}")
+        return 1
+    messages = body.get("messages") if isinstance(body, dict) else None
+    if not isinstance(messages, list):
+        print("[consortium] ❌ Slack 응답에 messages 배열이 없다")
+        return 1
+    # history 는 최신순이다 — 오래된 것부터 처리해야 cursor 전진이 단조롭다.
+    messages = list(reversed(messages))
+
+    ingested = skipped = rejected = failed = 0
+    quarantine_dir = _STATE / "slack-quarantine"
+    # cursor 는 **보존 또는 처리된 접두**까지만 전진시킨다. 한 건이라도 보존에
+    # 실패하면 거기서 멈춘다 — 전진시켜 버리면 다음 폴링이 그 메시지를 건너뛰고
+    # 원본은 어디에도 남지 않는다 (큐의 최소 계약 위반).
+    advanced = oldest
+    frozen = False   # 보존 실패 지점 이후로는 cursor 를 전진시키지 않는다
+    for msg in messages:
+        ts = str(msg.get("ts", "")) if isinstance(msg, dict) else ""
+        try:
+            if _ingest_record(msg, me, _safe_component(ts, "x"),
+                              extra={"slack_ts": ts, "slack_channel": channel}) is None:
+                skipped += 1
+            else:
+                ingested += 1
+        except RejectedRecord as exc:
+            print(f"  ⚠️ 계약 위반(거부): ts={ts} — {str(exc)[:80]}")
+            rejected += 1
+        except Exception as exc:  # noqa: BLE001 — 신뢰 불가 원격 입력의 경계
+            print(f"  ⚠️ 메시지 처리 실패: ts={ts} — {type(exc).__name__}: {str(exc)[:80]}")
+            failed += 1
+            try:
+                _write_unique(quarantine_dir / f"{_safe_component(ts, 'x')}.json",
+                              json.dumps(msg, ensure_ascii=False, indent=2))
+            except Exception as keep_exc:  # noqa: BLE001
+                # cursor 만 동결한다. 여기서 루프를 끊으면 **뒤의 정상 메시지가 막혀**
+                # 이 파일이 다섯 번 고친 wedge 가 그대로 재발한다 (parity 테스트가 잡음).
+                print(f"     ↳ 원본 보존 실패 — cursor 를 여기서 동결한다: "
+                      f"{type(keep_exc).__name__}: {str(keep_exc)[:60]}")
+                frozen = True
+        if ts and not frozen:
+            advanced = ts
+
+    if advanced != oldest:
+        tmp = cursor_file.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"oldest": advanced}), encoding="utf-8")
+        os.replace(tmp, cursor_file)
+
+    tail = ((f", 거부 {rejected}건" if rejected else "")
+            + (f", 실패 {failed}건 slack-quarantine/ 보존" if failed else "")
+            + (", ⚠️ 더 있음(다음 폴링)" if body.get("has_more") else ""))
+    print(f"[consortium] Slack 수신 완료: {ingested}건 inbox 적재 "
+          f"(미적재 {skipped}건 — 타팀행·비consortium, cursor={advanced}{tail})")
+    return 0
 
 
 # ---------------------------------------------------------------------------
 # Telegram 게이트웨이 — **권장 transport** (발신·수신 모두 실구현, stdlib only)
 # ---------------------------------------------------------------------------
-# 왜 Telegram 인가 (ADR-013 결정 5):
-#   Teams 수신은 Azure AD 앱 등록 + `ChannelMessage.Read.All` **관리자 동의** + 자격증명
-#   4개(webhook·token·team_id·channel_id)가 필요하다. Slack 수신은 공개 HTTPS 엔드포인트
-#   (Events API)나 Socket Mode SDK 가 필요해 "stdlib only" 를 벗어난다.
-#   Telegram 은 BotFather 대화 두 줄로 받은 **토큰 하나**로 발신(`sendMessage`)과
-#   수신(`getUpdates`)이 모두 되고, 둘 다 평범한 HTTPS 요청이다. 앱 등록도 관리자
-#   승인도 없다 — 컨소시엄 흐름을 실제 메신저로 처음 검증하기에 가장 싼 경로다.
+# ⚠️ **컨소시엄(에이전트↔에이전트)에는 쓸 수 없다** (2026-09-19 정정, ADR-013 결정 5).
+#   Telegram Bot FAQ: "bots will not be able to see messages from other bots
+#   **regardless of mode**" — privacy mode 를 꺼도 봇은 다른 봇의 글을 못 본다
+#   (봇 루프 방지 정책). 봇은 자기가 보낸 것도 `getUpdates` 로 되받지 못한다.
+#   따라서 "팀마다 봇을 만들어 같은 그룹에 넣는" 토폴로지는 성립하지 않는다.
+#
+#   남는 용도는 **사람이 끼는 흐름**이다: 컨소시엄 메시지를 사람에게 알리고(발신),
+#   사람이 그룹에 쓴 지시를 받는다(수신). 그게 필요하면 쓰고, 팀 노드끼리 자동
+#   왕복하려면 `slack` 을 쓴다.
 _TELEGRAM_TOKEN_ENV = "CONSORTIUM_TELEGRAM_TOKEN"    # BotFather 발급 봇 토큰
 _TELEGRAM_CHAT_ENV = "CONSORTIUM_TELEGRAM_CHAT_ID"   # 그룹/채널 chat id (음수면 그룹)
 # 테스트 주입 전용 (mock 서버). 운영에서는 건드리지 않는다 — _GRAPH_BASE 와 같은 이유.
@@ -515,11 +728,13 @@ def _telegram_api(token: str, method: str, payload: dict) -> tuple[bool, dict | 
         headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
+            body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code} {exc.read().decode('utf-8', 'replace')[:300]}"
-    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-        return False, f"요청 실패: {exc}"
+        return False, f"HTTP {exc.code} {_safe_err(exc)[:300]}"
+    except Exception as exc:  # noqa: BLE001 — 네트워크 경계
+        return False, f"요청 실패: {_safe_err(exc)}"
+    if not isinstance(body, dict):
+        return False, f"응답이 객체가 아님: {type(body).__name__}"
     if not body.get("ok"):
         # Bot API 는 실패도 HTTP 200 으로 주는 경우가 있다 — ok 플래그를 봐야 한다.
         return False, f"API 거부: {str(body.get('description'))[:200]}"
@@ -572,9 +787,13 @@ def _send_telegram() -> int:
 def _receive_telegram() -> int:
     """getUpdates 로 새 메시지를 받아 **단일 수신 경계**(`_ingest_record`)에 넘긴다."""
     token = os.environ.get(_TELEGRAM_TOKEN_ENV, "").strip()
-    if not token:
-        print(f"[consortium] ❌ {_TELEGRAM_TOKEN_ENV} 미설정 — 환경변수로 주입 (셸 노출 금지)")
-        print("  발급 절차: docs/consortium-gateway-setup.md §2 (Telegram — 권장)")
+    chat_id = os.environ.get(_TELEGRAM_CHAT_ENV, "").strip()
+    if not token or not chat_id:
+        print("[consortium] ❌ Telegram 자격증명 미설정 — 토큰과 chat id 를 **모두** 주입한다.")
+        print("  chat id 를 수신에도 요구하는 이유: 봇은 **누구에게나 DM 을 받을 수 있고**")
+        print("  `getUpdates` 는 봇이 속한 모든 채팅의 update 를 준다. 낯선 사용자가 DM 으로")
+        print("  봉투를 보내면 계약 검증을 통과해 inbox·라우팅 키로 흘러간다 (실측).")
+        print("  발급 절차: docs/consortium-gateway-setup.md §11 (Telegram — 사람 연동)")
         return 1
     me = _self_team()
     if not me:
@@ -599,8 +818,19 @@ def _receive_telegram() -> int:
 
     ingested = skipped = rejected = failed = 0
     highest = offset
+    quarantine_dir = _STATE / "telegram-quarantine"
+    frozen = False   # 보존 실패 지점 이후로는 offset 을 전진시키지 않는다
     for upd in updates:
         uid = upd.get("update_id") if isinstance(upd, dict) else None
+        # 수신 범위를 설정된 chat 으로 **못 박는다**. 이게 없으면 봇 DM 이 주입구가 된다.
+        holder = next((upd.get(k) for k in ("message", "edited_message", "channel_post")
+                       if isinstance(upd, dict) and isinstance(upd.get(k), dict)), None)
+        origin = str((holder or {}).get("chat", {}).get("id", ""))
+        if origin != chat_id:
+            skipped += 1
+            if isinstance(uid, int) and uid >= highest:
+                highest = uid + 1
+            continue
         # 채널에 글을 쓸 수 있는 누구나 보내는 입력이다 — 건별로 격리하고 계속한다.
         # 예외를 열거하지 않는다 (이 파일이 3라운드에 걸쳐 배운 것).
         try:
@@ -612,10 +842,21 @@ def _receive_telegram() -> int:
             print(f"  ⚠️ 계약 위반(거부): update_id={uid} — {str(exc)[:80]}")
             rejected += 1
         except Exception as exc:  # noqa: BLE001 — 신뢰 불가 원격 입력의 경계
-            print(f"  ⚠️ 메시지 처리 실패(건너뜀): update_id={uid} — "
+            print(f"  ⚠️ 메시지 처리 실패: update_id={uid} — "
                   f"{type(exc).__name__}: {str(exc)[:80]}")
             failed += 1
-        if isinstance(uid, int) and uid >= highest:
+            # offset 전진은 Telegram 에 **확인(ack)** 이라 서버가 그 update 를 지운다.
+            # 처리에 실패한 것을 그냥 전진시키면 원본이 어디에도 남지 않는다 (실측 소실).
+            # 원본을 먼저 보존하고, 보존까지 실패하면 **거기서 offset 을 멈춘다**.
+            try:
+                _write_unique(quarantine_dir / f"{_safe_component(str(uid), 'x')}.json",
+                              json.dumps(upd, ensure_ascii=False, indent=2))
+            except Exception as keep_exc:  # noqa: BLE001
+                # offset 만 동결한다 — 루프를 끊으면 뒤의 정상분이 막힌다.
+                print(f"     ↳ 원본 보존 실패 — offset 을 여기서 동결한다: "
+                      f"{type(keep_exc).__name__}: {str(keep_exc)[:60]}")
+                frozen = True
+        if isinstance(uid, int) and uid >= highest and not frozen:
             highest = uid + 1
 
     # offset 은 **처리 후에만** 전진시킨다. Telegram 은 offset 을 확인으로 받아 그
@@ -628,7 +869,7 @@ def _receive_telegram() -> int:
         os.replace(tmp, offset_file)
 
     tail = ((f", 거부 {rejected}건" if rejected else "")
-            + (f", 실패 {failed}건 건너뜀" if failed else ""))
+            + (f", 실패 {failed}건 telegram-quarantine/ 보존" if failed else ""))
     print(f"[consortium] Telegram 수신 완료: {ingested}건 inbox 적재 "
           f"(미적재 {skipped}건 — 타팀행·비consortium, offset={highest}{tail})")
     return 0
@@ -848,9 +1089,10 @@ def cmd_gateway(args) -> int:
             return 0
 
     # claude-code/codex host → 플랫폼 직접 transport.
-    # telegram = 권장(토큰 1개로 발신·수신), teams = 대안(자격증명 4개 + 관리자 동의).
-    _DIRECT = {"telegram": (_send_telegram, _receive_telegram),
-               "teams": (_send_teams, _receive_teams)}
+    # slack = 권장(봇↔봇 가시), teams = 대안(관리자 동의), telegram = 사람이 끼는 흐름 전용.
+    _DIRECT = {"slack": (_send_slack, _receive_slack),
+               "teams": (_send_teams, _receive_teams),
+               "telegram": (_send_telegram, _receive_telegram)}
     if platform in _DIRECT and (do_send or do_recv):
         send_fn, recv_fn = _DIRECT[platform]
         if do_send:
@@ -874,21 +1116,25 @@ def cmd_gateway(args) -> int:
         print("     OpenClaw 에이전트(courier)가 네이티브 채널과 핸드오프 사이를 잇는다.")
         print("     설치: docs/consortium-gateway-setup.md §10 (OpenClaw host)")
         return 0
+    if platform == "slack":
+        print("  ✅ 실구현 (권장) — 봇 토큰 1개 + 채널 id 로 발신·수신이 모두 됩니다.")
+        print("    - 발신: `gateway slack --send`        (outbox → chat.postMessage)")
+        print("    - 수신: `gateway slack --receive [--poll N]` (conversations.history → inbox)")
+        print(f"      자격증명 → {_SLACK_TOKEN_ENV} / {_SLACK_CHANNEL_ENV} (셸 노출 금지)")
+        print("      발급 절차: docs/consortium-gateway-setup.md §2")
+        return 0
     if platform == "telegram":
-        print("  ✅ 실구현 (권장) — BotFather 토큰 **하나**로 발신·수신이 모두 됩니다.")
-        print("    - 발신: `gateway telegram --send`        (outbox → sendMessage)")
-        print("    - 수신: `gateway telegram --receive [--poll N]` (getUpdates → inbox)")
-        print(f"      자격증명 → {_TELEGRAM_TOKEN_ENV} / {_TELEGRAM_CHAT_ENV} (셸 노출 금지)")
-        print("      발급 절차: docs/consortium-gateway-setup.md §2 — 앱 등록·관리자 승인 없음")
+        print("  ⚠️ 발신 + **사람이 보낸 메시지** 수신만 실구현 — 봇↔봇은 플랫폼이 막는다.")
+        print("     Bot FAQ: bots cannot see messages from other bots *regardless of mode*.")
+        print("     팀 노드끼리 자동 왕복하려면 `slack` 을 쓰십시오.")
+        print("    - 발신: `gateway telegram --send`  / 수신: `--receive [--poll N]`")
+        print(f"      자격증명 → {_TELEGRAM_TOKEN_ENV} / {_TELEGRAM_CHAT_ENV} (둘 다 필수)")
+        print("      발급 절차: docs/consortium-gateway-setup.md §11 (Telegram — 사람 연동)")
         return 0
     print("  ⚠️ STUB: 이 하네스는 메시지 계약·로스터·로컬 큐(inbox/outbox)만 stdlib 로 제공합니다.")
     print("  실제 전송(outbox→플랫폼, 플랫폼→inbox)은 자격증명(#3-A)·외부 SDK·웹훅이 필요해")
     print("  **다운스트림이 봇을 붙입니다**. 권장 연동:")
-    if platform == "slack":
-        print("    - 발신은 Incoming Webhook 으로 쉽지만, **수신**이 공개 HTTPS 엔드포인트")
-        print("      (Events API) 또는 Socket Mode SDK 를 요구해 stdlib only 를 벗어납니다.")
-        print("      → 간단한 왕복이 목적이면 `telegram` 을 쓰십시오 (토큰 1개, 앱 등록 없음).")
-    elif platform == "teams":
+    if platform == "teams":
         print("    - ✅ 발신: `gateway teams --send` (outbox→채널 POST)")
         print(f"      웹훅 URL → `export {_TEAMS_WEBHOOK_ENV}=...` (셸 노출 금지)")
         print("    - ✅ 수신: `gateway teams --receive [--poll N]` (Graph 폴링 채널→inbox)")
@@ -928,11 +1174,12 @@ def cmd_self(args) -> int:
         send_ok = "✓" if os.environ.get(_TEAMS_WEBHOOK_ENV, "").strip() else "✗"
         recv_ok = "✓" if all(os.environ.get(e, "").strip()
                              for e in (_TEAMS_TOKEN_ENV, _TEAMS_TEAM_ENV, _TEAMS_CHANNEL_ENV)) else "✗"
-        print(f"  host: {host} → transport=Teams webhook+Graph")
-        tg_ok = "OK" if os.environ.get(_TELEGRAM_TOKEN_ENV) else "미설정"
-        tg_chat = "OK" if os.environ.get(_TELEGRAM_CHAT_ENV) else "미설정"
-        print(f"    게이트웨이: telegram★=토큰[{tg_ok}]+chat[{tg_chat}] / "
-              f"teams=발신[{send_ok}]+수신[{recv_ok}] / slack=stub")
+        print(f"  host: {host} → transport=Slack history 폴링 / Teams webhook+Graph")
+        def _flag(env: str) -> str:
+            return "✓" if os.environ.get(env, "").strip() else "✗"
+        print(f"    게이트웨이: slack★=토큰[{_flag(_SLACK_TOKEN_ENV)}]+채널[{_flag(_SLACK_CHANNEL_ENV)}]"
+              f" / teams=발신[{send_ok}]+수신[{recv_ok}]"
+              f" / telegram=토큰[{_flag(_TELEGRAM_TOKEN_ENV)}]+chat[{_flag(_TELEGRAM_CHAT_ENV)}] (사람 연동 전용)")
         print("    (✓=자격증명 준비됨 / ✗=환경변수 미설정 — 기능은 구현됨)")
     return 0
 
@@ -960,13 +1207,13 @@ def main() -> None:
     p_inbox = sub.add_parser("inbox", help="수신 메시지 목록/표시")
     p_inbox.add_argument("--team", help="특정 수신 팀만 필터")
 
-    p_gw = sub.add_parser("gateway", help="메시징 게이트웨이 (teams=발신 실구현 / 그외 stub)")
+    p_gw = sub.add_parser("gateway", help="메시징 게이트웨이 (slack★·teams=발신+수신 실구현 / telegram=사람 연동 전용)")
     p_gw.add_argument("platform", choices=list(_GATEWAYS), help="slack|teams|telegram")
     p_gw.add_argument("action", nargs="?", default="status", choices=["status", "setup"])
     p_gw.add_argument("--send", action="store_true",
-                      help=f"(teams) outbox 메시지를 실제 발신 — 웹훅은 {_TEAMS_WEBHOOK_ENV} 환경변수")
+                      help=f"(slack|teams|telegram) outbox 메시지를 실제 발신 — 웹훅은 {_TEAMS_WEBHOOK_ENV} 환경변수")
     p_gw.add_argument("--receive", action="store_true",
-                      help=f"(teams) Graph 폴링으로 채널→inbox 수신 — {_TEAMS_TOKEN_ENV}/TEAM_ID/CHANNEL_ID 환경변수")
+                      help=f"(slack|teams|telegram) Graph 폴링으로 채널→inbox 수신 — {_TEAMS_TOKEN_ENV}/TEAM_ID/CHANNEL_ID 환경변수")
     p_gw.add_argument("--poll", type=int, default=0, metavar="SEC",
                       help="(teams --receive) 주기 폴링 간격(초). 0=1회만")
 

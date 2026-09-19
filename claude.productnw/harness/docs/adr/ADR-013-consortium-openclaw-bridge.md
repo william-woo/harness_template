@@ -91,7 +91,7 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 
 ## 결과
 - 신규: `_detect_host()` + `_send_openclaw()`/`_receive_openclaw()` (consortium.py),
-  핸드오프 디렉토리 2종, 이 ADR, 설치 가이드 §9.
+  핸드오프 디렉토리 2종, 이 ADR, 설치 가이드 §10.
 - 변경: `gateway teams --send/--receive` 가 host 에 따라 transport 분기. self-check 에 host/transport 표시.
 - 미구현(다운스트림): OpenClaw courier 의 실제 채널 I/O 바인딩 (ACP/Gateway 도구).
   브리지 왕복(outbox → openclaw-outbound → courier → openclaw-inbound → inbox)은
@@ -100,40 +100,70 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 
 ---
 
-## 결정 5 — 권장 transport 를 Telegram 으로 (2026-09-19 추가)
+## 결정 5 — 권장 transport 를 Slack 으로 (2026-09-19)
+
+> **정정 이력**: 이 결정은 처음 Telegram 을 권장으로 적었다가 **같은 날 뒤집었다**.
+> 무엇을 틀렸는지 남긴다 — 틀린 이유가 다음 사람에게 더 쓸모 있다.
 
 **맥락**: F019 는 Teams 를 먼저 구현했다(사내 표준). 그런데 "컨소시엄을 실제 메신저로
 한번 돌려 보자" 는 사람에게 Teams 는 비싼 첫 관문이다 — Azure AD 앱 등록,
-`ChannelMessage.Read.All` **관리자 동의**, 자격증명 4개(webhook·token·team·channel).
-승인 대기만으로 며칠이 갈 수 있다.
+`ChannelMessage.Read.All` **관리자 동의**, 자격증명 4개.
 
-**결정**: `telegram` 을 **권장 transport** 로 삼고 발신·수신을 실구현한다.
+**첫 판단(틀림)**: 설정이 가장 싼 Telegram 을 골랐다. 근거는 "토큰 하나로 발신·수신이
+모두 된다" 였다. **두 가지를 확인하지 않았다.**
 
-| | Telegram | Teams | Slack |
+1. **Telegram 봇은 다른 봇의 글을 보지 못한다.** Bot FAQ: *"Bots talking to each
+   other could potentially get stuck in unwelcome loops. To avoid this, we decided
+   that bots will not be able to see messages from other bots **regardless of
+   mode**."* `/setprivacy` 를 꺼도 안 된다. 봇은 자기가 보낸 것도 되받지 못한다.
+   → "팀마다 봇을 만들어 같은 그룹에 넣는" 토폴로지가 **성립하지 않는다**.
+   컨소시엄은 에이전트↔에이전트인데, Telegram 은 그 한 가지를 못 한다.
+2. **Slack 을 잘못 배제했다.** "수신에 공개 엔드포인트나 Socket Mode SDK 가 필요"
+   하다고 적었는데 그건 **푸시**(Events API) 얘기다. `conversations.history` **폴링**은
+   평범한 HTTPS GET 이고, 채널 **로그를 읽는** API 라 `bot_id` 가 붙은 다른 봇의
+   메시지가 그대로 들어온다. Teams 의 Graph 폴링과 같은 모양이다.
+
+**어떻게 놓쳤나**: mock 이 가렸다. `_MockTelegram.getUpdates` 가 **작성자와 무관하게**
+모든 update 를 돌려줘, 실제 Telegram 이 금지하는 동작을 흉내 냈다. 왕복 테스트 5건이
+전부 통과했고 그래서 "권장" 주장의 근거처럼 보였다. 이 파일이 이미 배운 교훈
+("통과하는 테스트가 결함 부재의 증거는 아니다")의 **플랫폼 버전**이다.
+지금 mock 은 규칙을 강제하고, `test_봇이_보낸_메시지는_다른_봇이_받지_못한다` 가 그 전제를 잠근다.
+
+**결정**: `slack` 을 **권장 transport** 로 삼고 발신(`chat.postMessage`) + 수신
+(`conversations.history` 폴링)을 실구현한다.
+
+| | Slack ★ | Teams | Telegram |
 |---|---|---|---|
-| 자격증명 | **봇 토큰 1개** + chat id | 4개 | 2~3개 |
-| 앱 등록 | **없음** | Azure AD | Slack 앱 |
-| 관리자 승인 | **없음** | 테넌트 관리자 | 워크스페이스 관리자 |
-| 수신 방식 | `getUpdates` (HTTPS GET) | Graph 폴링 (OAuth) | 공개 엔드포인트 / Socket Mode SDK |
-| stdlib only | ✅ | ✅ | ❌ |
+| **봇↔봇 가시** | ✅ | ✅ | ❌ 플랫폼 금지 |
+| 자격증명 | 토큰 1개 + 채널 id | 4개 | 토큰 1개 + chat id |
+| 승인 | 워크스페이스 관리자 | 테넌트 관리자 동의 | 없음 |
+| stdlib only | ✅ | ✅ | ✅ |
+| 컨소시엄 적합 | ✅ | ✅ | ❌ |
 
-**수신이 결정적이다.** 발신은 세 플랫폼 모두 HTTP POST 한 번이라 차이가 없다.
-Telegram 은 발신과 **같은 토큰**으로 `getUpdates` 를 부르면 끝이고, Slack 은 이벤트
-푸시 모델이라 공개 HTTPS 엔드포인트(서버 운영)나 `slack_sdk` 웹소켓(외부 패키지)이
-필요해 이 변형의 "외부 의존성 0" 계약을 깬다.
+**Telegram·Teams 를 제거하지 않는다**: Teams 는 사내 표준인 조직에 필요하고 5라운드
+리뷰로 굳혔다. Telegram 은 **사람이 끼는 흐름**(에이전트가 사람에게 알리고, 사람이
+지시를 준다)에는 여전히 유효하므로 그 범위로 좁혀 남겼다 — 할 수 없는 것을 할 수
+있다고 적지 않는 것이 이 파일의 규율이다.
 
-**Teams 를 제거하지 않는다**: 사내 표준이 Teams 인 조직에는 그대로 필요하고, 5라운드
-리뷰로 굳힌 코드·테스트를 버릴 이유가 없다. 기능은 동등하고 **비용만 다르다**.
+**세 transport 는 같은 수신 경계를 쓴다** — `_ingest_record` (결정 1 정정).
+`ReceiveBoundaryParityTest` 가 **같은 악성 입력 5종을 세 transport 에** 태워 잠근다.
+transport 별 사본 테스트를 만들면 테스트가 같은 병에 걸린다 — 실제로 Slack 을 이
+parity 에 등재하자마자 사본 테스트가 놓쳤을 결함(보존 실패 시 `break` 로 뒤의 정상분이
+막힘)이 즉시 잡혔다.
 
-**두 transport 는 같은 수신 경계를 쓴다** — `_ingest_record` (결정 1 정정). 플랫폼이
-늘어도 계약 검증·파일명 위생·유일성은 한 곳에만 있다. Slack 을 붙이는 다운스트림도
-반드시 이 경계를 통과시킨다. 경계 밖에서 `inbox/` 에 직접 쓰면 이 변형이 3라운드에
-걸쳐 닫은 결함이 그대로 재생산된다.
+**수신 범위를 자격증명으로 못 박는다**: Slack 은 `conversations.history` 가 채널 id 를
+요구하므로 구조적으로 그 채널만 읽는다. Telegram 은 `getUpdates` 가 봇이 속한 **모든**
+채팅을 주므로 `--receive` 에도 chat id 를 **필수**로 요구해 필터한다 — 없으면 낯선
+사용자의 DM 이 계약 검증을 통과해 라우팅 키로 흘러간다(실측).
 
-**검증 범위**: mock Bot API 로 발신→그룹→수신 왕복 5건 실측
-(`tests/test_consortium_gateway.py::TelegramGatewayRoundTripTest`) — 무손실·offset 멱등·
-수신자 필터·악성 업데이트 생존·본문 상한 거부. **실제 BotFather 봇 연동은 미검증**
-(자격증명은 사용자 소유 — d-3 경계). 설치 절차는 `docs/consortium-gateway-setup.md §2`.
+**cursor/offset 은 "보존 또는 처리된 접두" 까지만 전진한다**: Telegram 의 offset 전진은
+서버에 **확인(ack)** 이라 그 update 가 지워진다. 처리에 실패한 것을 그냥 전진시키면
+원본이 어디에도 남지 않는다(실측 소실). 실패분 원본을 `*-quarantine/` 에 보존하고,
+보존까지 실패하면 그 지점부터 cursor 를 **동결**한다 — 루프는 계속 돌려 뒤의 정상분을
+막지 않는다.
 
-**본문 상한 4096자**: 넘으면 잘라 보내지 않고 **거부**하고 outbox 에 남긴다. 봉투가
-잘리면 수신측이 복원하지 못한다 — 조용한 손상보다 시끄러운 거부를 택한다.
+**검증 범위**: mock Web API 로 Slack 왕복 4건 + parity 5종 실측. **실제 Slack 앱 연동은
+미검증** (자격증명은 사용자 소유 — d-3 경계). 설치 절차는 `docs/consortium-gateway-setup.md §2`.
+
+**본문 상한**: Telegram 은 4096자를 넘으면 **거부**하고 outbox 에 남긴다. 봉투가 잘리면
+수신측이 복원하지 못한다 — 조용한 손상보다 시끄러운 거부를 택한다.

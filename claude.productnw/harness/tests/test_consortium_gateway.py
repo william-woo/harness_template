@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -565,6 +566,34 @@ class ReceiveBoundaryParityTest(unittest.TestCase):
                 self.assertIn("정상 메시지", arrived, f"{label} 뒤의 정상분이 막혔다: {arrived}")
                 self.assertEqual(list(inbound.glob("*.json")), [], "큐가 비워지지 않았다")
 
+    def test_slack_경계가_같은_악성입력을_견딘다(self):
+        """transport 가 늘 때마다 여기 등재한다 — 사본 테스트를 만들면 같은 병에 걸린다."""
+        good = base64.b64encode(json.dumps({
+            "from_team": "team-a", "to_team": "team-b", "role": "developer",
+            "cycle_id": "C1", "msg": "정상", "ts": "2026-09-19T00:00:00+00:00",
+        }, ensure_ascii=False).encode()).decode()
+
+        for label, payload in self.POISONS.items():
+            with self.subTest(transport="slack", poison=label):
+                mod, root = self._node(f"sl-{abs(hash(label))}")
+                raw = "[" * 100000 if payload is None else json.dumps(payload, ensure_ascii=False)
+                evil = base64.b64encode(raw.encode()).decode()
+                mod._slack_api = lambda tok, m, pl, get=False, _e=evil, _g=good: (True, {
+                    "ok": True, "has_more": False, "messages": [
+                        {"ts": "1700000002.000100", "text": mod._ENVELOPE_PREFIX + _g},
+                        {"ts": "1700000001.000100", "text": mod._ENVELOPE_PREFIX + _e},
+                    ]})
+                os.environ.update({"CONSORTIUM_SLACK_TOKEN": "xoxb-x",
+                                   "CONSORTIUM_SLACK_CHANNEL": "C0X"})
+                try:
+                    self.assertEqual(mod._receive_slack(), 0, f"{label} 으로 폴링이 죽었다")
+                finally:
+                    for key in ("CONSORTIUM_SLACK_TOKEN", "CONSORTIUM_SLACK_CHANNEL"):
+                        os.environ.pop(key, None)
+                arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                           for f in (root / ".claude/state/consortium/inbox").glob("*.json")]
+                self.assertIn("정상", arrived, f"{label} 뒤의 정상분이 막혔다: {arrived}")
+
     def test_teams_경계가_같은_악성입력을_견딘다(self):
         good = base64.b64encode(json.dumps({
             "from_team": "team-a", "to_team": "team-b", "role": "developer",
@@ -747,21 +776,36 @@ class SeenPersistenceTest(unittest.TestCase):
 
 
 class _MockTelegram(BaseHTTPRequestHandler):
-    """Bot API 흉내 — sendMessage 는 채널에 적재, getUpdates 는 offset 이후를 돌려준다."""
+    """Bot API 흉내 — **플랫폼 규칙을 강제한다**.
+
+    이전 mock 은 작성자와 무관하게 모든 update 를 돌려줬다. 그래서 "팀마다 봇을 만들어
+    같은 그룹에 넣으면 서로의 메시지를 본다" 는 **틀린 전제**가 5건의 왕복 테스트를
+    통과했다 — Telegram Bot FAQ 는 정반대를 말한다:
+
+        "bots will not be able to see messages from other bots regardless of mode"
+
+    봇은 자기가 보낸 것도 `getUpdates` 로 되받지 못한다. 그래서 이 mock 은 **봇이
+    작성한 메시지를 getUpdates 결과에서 제외**한다. 그 규칙을 넣자마자 옛 왕복
+    테스트는 성립하지 않게 되고, 그것이 정확한 신호다.
+    """
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
         method = self.path.rsplit("/", 1)[-1]
         if method == "sendMessage":
             _TG_CHANNEL.append({"update_id": len(_TG_CHANNEL) + 1,
+                                "by_bot": True,          # ← 봇이 쓴 글
                                 "message": {"message_id": len(_TG_CHANNEL) + 1,
+                                            "from": {"is_bot": True},
                                             "chat": {"id": body["chat_id"]},
                                             "text": body["text"]}})
             payload = {"ok": True, "result": {"message_id": len(_TG_CHANNEL)}}
         elif method == "getUpdates":
             off = int(body.get("offset") or 0)
             payload = {"ok": True,
-                       "result": [u for u in _TG_CHANNEL if u["update_id"] >= off]}
+                       "result": [{k: v for k, v in u.items() if k != "by_bot"}
+                                  for u in _TG_CHANNEL
+                                  if u["update_id"] >= off and not u.get("by_bot")]}
         else:
             payload = {"ok": False, "description": f"unknown method {method}"}
         raw = json.dumps(payload).encode()
@@ -776,14 +820,26 @@ class _MockTelegram(BaseHTTPRequestHandler):
 
 
 _TG_CHANNEL: list[dict] = []
+_TG_CHAT = "-1001234567890"
 
 
-class TelegramGatewayRoundTripTest(unittest.TestCase):
-    """Telegram 완전 왕복 — 권장 transport 의 근거 (ADR-013 결정 5).
+def _tg_human_post(contract: dict, chat_id: str = _TG_CHAT) -> None:
+    """사람이 그룹에 봉투를 붙여 넣은 상황 (봇이 아니므로 getUpdates 에 잡힌다)."""
+    envelope = "[[consortium-msg]]" + base64.b64encode(
+        json.dumps(contract, ensure_ascii=False).encode()).decode()
+    _TG_CHANNEL.append({"update_id": len(_TG_CHANNEL) + 1,
+                        "message": {"message_id": len(_TG_CHANNEL) + 1,
+                                    "from": {"is_bot": False},
+                                    "chat": {"id": chat_id},
+                                    "text": f"확인 바랍니다\n\n{envelope}"}})
 
-    Teams 와 달리 앱 등록·관리자 동의가 없고 토큰 하나로 발신·수신이 모두 된다.
-    그 주장이 사실이려면 **한 토큰으로 두 방향이 실제로 도는지** 보여야 한다.
-    네트워크만 mock 이고 봉투 포장·복원·offset 멱등·수신자 필터는 실코드다.
+
+class TelegramHumanLoopTest(unittest.TestCase):
+    """Telegram 은 **사람이 끼는 흐름** 전용이다 (ADR-013 결정 5 정정).
+
+    봇↔봇은 플랫폼이 막으므로 컨소시엄 팀 노드끼리의 자동 왕복에는 쓸 수 없다.
+    남는 용도는 "에이전트가 사람에게 알리고, 사람이 지시를 준다" 이고,
+    이 클래스가 그 범위만 검증한다 — 할 수 없는 것을 할 수 있다고 적지 않는다.
     """
 
     @classmethod
@@ -804,7 +860,7 @@ class TelegramGatewayRoundTripTest(unittest.TestCase):
             "CONSORTIUM_TELEGRAM_BASE", "CONSORTIUM_TELEGRAM_TOKEN", "CONSORTIUM_TELEGRAM_CHAT_ID")}
         os.environ["CONSORTIUM_TELEGRAM_BASE"] = f"http://127.0.0.1:{self.port}"
         os.environ["CONSORTIUM_TELEGRAM_TOKEN"] = "123:mock-token"
-        os.environ["CONSORTIUM_TELEGRAM_CHAT_ID"] = "-1001234567890"
+        os.environ["CONSORTIUM_TELEGRAM_CHAT_ID"] = _TG_CHAT
 
     def tearDown(self):
         for key, val in self._env_backup.items():
@@ -832,70 +888,207 @@ class TelegramGatewayRoundTripTest(unittest.TestCase):
         self._run(mod, ["init", team, "--agents", "developer"])
         return mod, root
 
-    def test_토큰_하나로_발신부터_수신까지_무손실_도착한다(self):
+    def test_봇이_보낸_메시지는_다른_봇이_받지_못한다(self):
+        """**이 테스트가 없어서 틀린 전제가 5건을 통과했다** (리뷰 MUST-1).
+
+        Bot FAQ 의 규칙을 mock 이 강제하므로, 봇↔봇 왕복을 주장하는 코드·문서가
+        생기면 여기서 걸린다.
+        """
         send_mod, _ = self._node("tg-a", "team-a")
         self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
-                             "--cycle", "TG1", "--msg", "텔레그램 왕복 — 한글도"])
-        self.assertEqual(send_mod._send_telegram(), 0, "발신 실패")
+                             "--cycle", "TG1", "--msg", "봇이 보낸 것"])
+        self.assertEqual(send_mod._send_telegram(), 0, "발신 자체는 된다")
         self.assertEqual(len(_TG_CHANNEL), 1, "채널에 적재되지 않았다")
 
         recv_mod, recv_root = self._node("tg-b", "team-b")
-        self.assertEqual(recv_mod._receive_telegram(), 0, "수신 실패")
+        self.assertEqual(recv_mod._receive_telegram(), 0)
+        self.assertEqual(list((recv_root / ".claude/state/consortium/inbox").glob("*.json")), [],
+                         "봇이 쓴 글이 다른 봇에게 전달됐다 — 플랫폼 규칙 위반 모델")
+
+    def test_사람이_보낸_봉투는_수신된다(self):
+        recv_mod, recv_root = self._node("tg-b", "team-b")
+        _tg_human_post({"from_team": "team-a", "to_team": "team-b", "role": "developer",
+                        "cycle_id": "TG2", "msg": "사람이 준 지시", "ts": "2026-09-19T00:00:00+00:00"})
+        self.assertEqual(recv_mod._receive_telegram(), 0)
+        inbox = list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))
+        self.assertEqual(len(inbox), 1, "사람이 쓴 봉투가 적재되지 않았다")
+        self.assertEqual(json.loads(inbox[0].read_text(encoding="utf-8"))["msg"], "사람이 준 지시")
+
+    def test_다른_채팅에서_온_봉투는_거부된다(self):
+        """봇은 **누구에게나 DM 을 받는다** — chat 필터가 없으면 주입구가 된다 (MUST-2)."""
+        recv_mod, recv_root = self._node("tg-b", "team-b")
+        _tg_human_post({"from_team": "team-a", "to_team": "team-b", "role": "developer",
+                        "cycle_id": "EVIL", "msg": "낯선 사람의 DM", "ts": "2026-09-19T00:00:00+00:00"},
+                       chat_id="55555")          # 설정된 그룹이 아닌 DM
+        self.assertEqual(recv_mod._receive_telegram(), 0)
+        self.assertEqual(list((recv_root / ".claude/state/consortium/inbox").glob("*.json")), [],
+                         "설정되지 않은 채팅에서 온 메시지가 적재됐다")
+
+    def test_재폴링해도_중복_적재되지_않는다(self):
+        recv_mod, recv_root = self._node("tg-b", "team-b")
+        _tg_human_post({"from_team": "team-a", "to_team": "team-b", "role": "qa",
+                        "cycle_id": "TG3", "msg": "검증 요청", "ts": "2026-09-19T00:00:00+00:00"})
+        recv_mod._receive_telegram()
+        recv_mod._receive_telegram()
+        self.assertEqual(len(list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))), 1)
+
+    def test_본문이_상한을_넘으면_잘라_보내지_않고_거부한다(self):
+        send_mod, send_root = self._node("tg-a", "team-a")
+        self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                             "--cycle", "TG4", "--msg", "가" * 4000])
+        self.assertEqual(send_mod._send_telegram(), 1, "상한 초과인데 성공으로 보고했다")
+        self.assertEqual(len(_TG_CHANNEL), 0, "잘린 메시지가 전송됐다")
+        self.assertEqual(
+            len(list((send_root / ".claude/state/consortium/outbox").glob("*.json"))), 1,
+            "거부된 메시지가 outbox 에서 사라졌다")
+
+
+class _MockSlack(BaseHTTPRequestHandler):
+    """Slack Web API 흉내 — `conversations.history` 는 **봇 글도 돌려준다**.
+
+    이것이 Telegram 과 갈리는 지점이자 Slack 을 권장하는 이유다. history 는
+    이벤트 구독이 아니라 **채널 로그 읽기**라 `bot_id` 가 붙은 메시지가 그대로 들어온다.
+    """
+
+    def _reply(self, payload: dict):
+        raw = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+        if self.path.rsplit("/", 1)[-1] == "chat.postMessage":
+            ts = f"{1700000000 + len(_SL_CHANNEL)}.000100"
+            _SL_CHANNEL.append({"type": "message", "bot_id": "B01", "subtype": "bot_message",
+                                "ts": ts, "channel": body["channel"], "text": body["text"]})
+            return self._reply({"ok": True, "ts": ts})
+        self._reply({"ok": False, "error": "unknown_method"})
+
+    def do_GET(self):
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        oldest = qs.get("oldest", ["0"])[0]
+        msgs = [m for m in _SL_CHANNEL if float(m["ts"]) > float(oldest or 0)]
+        self._reply({"ok": True, "messages": list(reversed(msgs)), "has_more": False})
+
+    def log_message(self, *a):
+        """테스트 출력을 더럽히지 않는다."""
+
+
+_SL_CHANNEL: list[dict] = []
+
+
+class SlackGatewayRoundTripTest(unittest.TestCase):
+    """Slack 완전 왕복 — **권장 transport** 의 근거 (ADR-013 결정 5).
+
+    Telegram 이 탈락한 이유(봇↔봇 비가시)가 여기서는 성립하지 않는다는 것을
+    보이는 것이 이 클래스의 목적이다. 네트워크만 mock 이고 봉투 포장·복원·
+    cursor 멱등·수신자 필터는 실코드다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), _MockSlack)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def setUp(self):
+        _SL_CHANNEL.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self._env_backup = {k: os.environ.get(k) for k in (
+            "CONSORTIUM_SLACK_BASE", "CONSORTIUM_SLACK_TOKEN", "CONSORTIUM_SLACK_CHANNEL")}
+        os.environ["CONSORTIUM_SLACK_BASE"] = f"http://127.0.0.1:{self.port}"
+        os.environ["CONSORTIUM_SLACK_TOKEN"] = "xoxb-mock"
+        os.environ["CONSORTIUM_SLACK_CHANNEL"] = "C0CONSORTIUM"
+
+    def tearDown(self):
+        for key, val in self._env_backup.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.tmp.cleanup()
+
+    def _run(self, mod, argv):
+        old = sys.argv
+        sys.argv = ["consortium.py", *argv]
+        try:
+            mod.main()
+            return 0
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        finally:
+            sys.argv = old
+
+    def _node(self, name: str, team: str):
+        root = Path(self.tmp.name) / name
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        self._run(mod, ["init", team, "--agents", "developer"])
+        return mod, root
+
+    def test_봇이_보낸_메시지를_다른_팀_노드가_받는다(self):
+        """Telegram 과 갈리는 지점 — 이게 되기 때문에 Slack 이 권장이다."""
+        send_mod, _ = self._node("sl-a", "team-a")
+        self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                             "--cycle", "SL1", "--msg", "슬랙 왕복 — 한글도"])
+        self.assertEqual(send_mod._send_slack(), 0, "발신 실패")
+        self.assertEqual(len(_SL_CHANNEL), 1, "채널에 적재되지 않았다")
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        self.assertEqual(recv_mod._receive_slack(), 0, "수신 실패")
         inbox = list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))
         self.assertEqual(len(inbox), 1, f"inbox 적재 실패: {inbox}")
         got = json.loads(inbox[0].read_text(encoding="utf-8"))
         self.assertEqual(got["from_team"], "team-a")
-        self.assertEqual(got["cycle_id"], "TG1")
-        self.assertEqual(got["msg"], "텔레그램 왕복 — 한글도")
+        self.assertEqual(got["cycle_id"], "SL1")
+        self.assertEqual(got["msg"], "슬랙 왕복 — 한글도")
         self.assertEqual(got["status"], "received")
 
     def test_재폴링해도_중복_적재되지_않는다(self):
-        """offset 멱등 — 깨지면 폴링마다 inbox 가 불어난다."""
-        send_mod, _ = self._node("tg-a", "team-a")
+        send_mod, _ = self._node("sl-a", "team-a")
         self._run(send_mod, ["send", "--to", "team-b", "--role", "qa",
-                             "--cycle", "TG2", "--msg", "검증 요청"])
-        send_mod._send_telegram()
-        recv_mod, recv_root = self._node("tg-b", "team-b")
-        recv_mod._receive_telegram()
-        recv_mod._receive_telegram()
-        inbox = list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))
-        self.assertEqual(len(inbox), 1, f"재폴링에 중복 적재됨: {inbox}")
+                             "--cycle", "SL2", "--msg", "검증 요청"])
+        send_mod._send_slack()
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        recv_mod._receive_slack()
+        recv_mod._receive_slack()
+        self.assertEqual(len(list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))), 1)
 
     def test_남의_메시지는_받지_않는다(self):
-        send_mod, _ = self._node("tg-a", "team-a")
+        send_mod, _ = self._node("sl-a", "team-a")
         self._run(send_mod, ["send", "--to", "team-z", "--role", "developer",
-                             "--cycle", "TG3", "--msg", "제3자 앞"])
-        send_mod._send_telegram()
-        recv_mod, recv_root = self._node("tg-b", "team-b")
-        recv_mod._receive_telegram()
+                             "--cycle", "SL3", "--msg", "제3자 앞"])
+        send_mod._send_slack()
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        recv_mod._receive_slack()
         self.assertEqual(list((recv_root / ".claude/state/consortium/inbox").glob("*.json")), [])
 
-    def test_악성_업데이트가_수신을_멈추지_않는다(self):
-        """같은 경계(`_ingest_record`)를 쓰므로 Teams·openclaw 와 동일하게 견뎌야 한다."""
-        send_mod, _ = self._node("tg-a", "team-a")
+    def test_처리_실패분은_원본을_보존하고_cursor_를_멈춘다(self):
+        """cursor 전진은 '보존 또는 처리된 접두' 까지만 — 안 그러면 소실된다 (MUST-3)."""
+        send_mod, _ = self._node("sl-a", "team-a")
         self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
-                             "--cycle", "TG4", "--msg", "정상"])
-        send_mod._send_telegram()
-        # 채널 맨 앞에 악성 업데이트를 끼워 넣는다 (누구나 채널에 쓸 수 있다)
-        _TG_CHANNEL.insert(0, {"update_id": 0, "message": {
-            "text": "[[consortium-msg]]" + base64.b64encode(("[" * 100000).encode()).decode()}})
-        recv_mod, recv_root = self._node("tg-b", "team-b")
-        self.assertEqual(recv_mod._receive_telegram(), 0, "악성 업데이트로 수신이 죽었다")
-        arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
-                   for f in (recv_root / ".claude/state/consortium/inbox").glob("*.json")]
-        self.assertIn("정상", arrived, f"정상분이 막혔다: {arrived}")
+                             "--cycle", "SL4", "--msg", "보존 대상"])
+        send_mod._send_slack()
 
-    def test_본문이_상한을_넘으면_잘라_보내지_않고_거부한다(self):
-        """봉투가 잘리면 수신측이 복원에 실패한다 — 조용한 손상보다 시끄러운 거부."""
-        send_mod, send_root = self._node("tg-a", "team-a")
-        self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
-                             "--cycle", "TG5", "--msg", "가" * 4000])
-        rc = send_mod._send_telegram()
-        self.assertEqual(rc, 1, "상한 초과인데 성공으로 보고했다")
-        self.assertEqual(len(_TG_CHANNEL), 0, "잘린 메시지가 전송됐다")
-        remaining = list((send_root / ".claude/state/consortium/outbox").glob("*.json"))
-        self.assertEqual(len(remaining), 1, "거부된 메시지가 outbox 에서 사라졌다")
-
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        real = recv_mod._write_unique
+        recv_mod._write_unique = lambda p, t: (_ for _ in ()).throw(OSError(28, "No space left"))
+        try:
+            self.assertEqual(recv_mod._receive_slack(), 0, "실패가 루프를 죽였다")
+        finally:
+            recv_mod._write_unique = real
+        state = recv_root / ".claude/state/consortium"
+        # 보존도 실패했으므로 cursor 가 전진하면 안 된다 (다음 폴링이 다시 받아야 한다)
+        self.assertFalse((state / "slack-cursor.json").exists(),
+                         "보존 실패인데 cursor 가 전진했다 — 다음 폴링이 건너뛴다")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

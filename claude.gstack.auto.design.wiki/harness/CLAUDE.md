@@ -670,8 +670,9 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 한 팀 내 실행 라우팅 → `/project:orchestrate`
 
 **정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
-Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 SDK·웹훅이 필요해 **다운스트림이 봇
-연동**(codex/openclaw stub 와 동일 패턴). 같은 머신/공유 볼륨이면 로컬 큐로 컨소시엄 흐름을 검증 가능.
+**Slack★/Teams 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이고, Telegram 은 봇↔봇을
+플랫폼이 막아 **사람 연동 전용**이다. 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
+자격증명 없이도 로컬 큐로 컨소시엄 흐름을 검증할 수 있다 (graceful degrade).
 팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
 
 **claude.productnw 변형 전용**: 다른 변형엔 consortium.py / consortium.md 가 없어 미인식.
@@ -705,8 +706,8 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 > **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
 > 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
 > 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
-> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, Teams/Slack/Telegram 게이트웨이는
-> **stub**(codex/openclaw 처럼 안내+graceful degrade — 실제 봇 transport 는 다운스트림 책임). 팀 내부는
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack★/Teams 게이트웨이는
+> 발신·수신 모두 실구현**(polling — ADR-013 결정 5), Telegram 은 봇↔봇 불가라 사람 연동 전용. 팀 내부는
 > single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
 
 > **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
