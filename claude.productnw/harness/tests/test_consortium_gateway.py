@@ -594,6 +594,109 @@ class ReceiveBoundaryParityTest(unittest.TestCase):
                 self.assertIn("정상", arrived, f"{label} 뒤의 정상분이 막혔다: {arrived}")
 
 
+class MoveResilienceTest(unittest.TestCase):
+    """큐 파일 **이동**이 실패해도 큐가 멈추지 않는지 (QA 2차 FAIL).
+
+    유일성을 `os.link` 배타 생성에 맡겼더니 `rename` 이 되던 것을 못 하게 됐다:
+    디렉토리에 걸리지 않고, `fs.protected_hardlinks=1`(Ubuntu 기본)에서 타 계정 소유
+    파일은 EPERM 이다. 게다가 격리 이동이 `except` 핸들러 **안**이라 거기서 터지면
+    잡는 곳이 없었다 — 그 핸들러가 막으려던 wedge 가 핸들러 자신에서 났다.
+
+    이 테스트는 "이동이 실패하는 두 환경"을 만들어 **정상분이 도착하는지**를 본다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _node(self, name: str):
+        root = Path(self.tmp.name) / name
+        root.mkdir(parents=True, exist_ok=True)
+        mod = _load_consortium(root)
+        old = sys.argv
+        sys.argv = ["consortium.py", "init", "team-b", "--agents", "developer"]
+        try:
+            mod.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old
+        return mod, root
+
+    def test_디렉토리_드롭이_큐를_멈추지_않는다(self):
+        """`os.link` 는 디렉토리에 걸리지 않는다 — `rename` 폴백이 받아야 한다."""
+        mod, root = self._node("dir-drop")
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "0000-dir.json").mkdir()
+        (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+        for run in (1, 2):
+            with self.subTest(run=run):
+                self.assertEqual(mod._receive_openclaw(), 0, f"{run}회차에 수신이 죽었다")
+        arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                   for f in (root / ".claude/state/consortium/inbox").glob("*.json")]
+        self.assertEqual(arrived, ["정상 메시지"], f"정상분이 막히거나 중복됐다: {arrived}")
+
+    def test_os_link_이_EPERM_인_환경에서도_수신이_계속된다(self):
+        """courier 가 별도 계정이면 모든 드롭이 이 경로를 탄다."""
+        mod, root = self._node("eperm")
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "00-bad.json").write_text("{ 손상", encoding="utf-8")
+        (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+        real_link = os.link
+        os.link = lambda *a, **k: (_ for _ in ()).throw(
+            PermissionError(1, "Operation not permitted"))
+        try:
+            for run in (1, 2):
+                with self.subTest(run=run):
+                    self.assertEqual(mod._receive_openclaw(), 0, f"{run}회차에 수신이 죽었다")
+        finally:
+            os.link = real_link
+
+        arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                   for f in (root / ".claude/state/consortium/inbox").glob("*.json")]
+        self.assertEqual(arrived, ["정상 메시지"],
+                         f"정상분이 막히거나 중복 적재됐다: {arrived}")
+        self.assertEqual(list(inbound.glob("*.json")), [], "큐가 비워지지 않았다")
+
+    def test_이동_불가여도_다른_메시지는_흐른다(self):
+        """이동이 **모두** 실패하는 최악에서도 정상분 처리가 막히지 않아야 한다."""
+        mod, root = self._node("immovable")
+        inbound = root / ".claude/state/consortium/openclaw-inbound"
+        inbound.mkdir(parents=True, exist_ok=True)
+        (inbound / "00-bad.json").write_text("{ 손상", encoding="utf-8")
+        (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+        boom = lambda *a, **k: (_ for _ in ()).throw(OSError(5, "I/O error"))
+        real_link, real_rename = os.link, os.rename
+        os.link, os.rename = boom, boom
+        try:
+            self.assertEqual(mod._receive_openclaw(), 0, "이동 실패가 루프를 죽였다")
+        finally:
+            os.link, os.rename = real_link, real_rename
+        # 이동이 전부 실패했으니 inbox 적재도 못 하지만, **예외 없이 rc=0** 이어야 한다.
+        # 그것이 "한 항목이 다른 항목을 막지 않는다" 의 최소 형태다.
+
+    def test_선재_이름_충돌이_있어도_기존_파일을_보존한다(self):
+        mod, root = self._node("collide")
+        state = root / ".claude/state/consortium"
+        inbound = state / "openclaw-inbound"
+        (inbound / "processed").mkdir(parents=True, exist_ok=True)
+        (inbound / "processed" / "01-good.json").write_text("먼저 있던 것", encoding="utf-8")
+        (inbound / "01-good.json").write_text(_GOOD_DROP, encoding="utf-8")
+
+        self.assertEqual(mod._receive_openclaw(), 0)
+        processed = sorted(p.name for p in (inbound / "processed").glob("*.json"))
+        self.assertEqual(len(processed), 2, f"선재 파일이 덮어써졌다: {processed}")
+        self.assertEqual((inbound / "processed" / "01-good.json").read_text(encoding="utf-8"),
+                         "먼저 있던 것", "선재 파일 내용이 바뀌었다")
+
+
 class SeenPersistenceTest(unittest.TestCase):
     """`received-seen.json` 이 깨져도 Teams 수신이 계속되는지 (재리뷰 신규 MUST).
 

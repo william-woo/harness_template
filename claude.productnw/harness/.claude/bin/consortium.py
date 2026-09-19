@@ -161,18 +161,37 @@ def _move_unique(src: Path, dest_dir: Path) -> Path:
 
     `_write_unique` 와 짝이다. 그쪽이 "새로 쓰는" 경로를, 이쪽이 "옮기는" 경로를 맡는다 —
     큐의 최소 계약("넣은 메시지가 사라지지 않는다")은 두 경로 모두에서 지켜져야 한다.
-    `os.link` 는 대상이 있으면 실패하므로 확률이 아니라 파일시스템이 유일성을 보장한다.
+
+    **`os.link` 만 쓰면 안 된다** (QA 실측). 배타 생성은 경쟁까지 막아 주지만 `rename`
+    이 되던 것을 못 한다:
+      · 디렉토리 — `link` 는 디렉토리에 걸리지 않는다 (courier 가 잘못 만든 드롭)
+      · `fs.protected_hardlinks=1` (Ubuntu 기본) 에서 **타 계정 소유 파일은 EPERM** —
+        courier 가 별도 계정이면 모든 드롭이 이 경로를 탄다
+      · 크로스 디바이스(EXDEV)
+    그래서 `link` 가 EEXIST **외의** 이유로 실패하면 `rename` 으로 내려간다. 이름이 비어
+    있음은 위에서 확인했으므로 잃는 것은 "경쟁까지 막는 보장" 하나뿐이고, 얻는 것은
+    **wedge 가 나지 않는다**는 성질이다. 그 교환이 옳다 — 메시지 소멸과 큐 정지 중
+    어느 것도 이름 충돌 확률보다 싸지 않다.
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
     for n in range(1000):
         candidate = dest_dir / (src.name if n == 0 else f"{src.stem}-{n}{src.suffix}")
+        if candidate.exists():
+            continue                  # 이름 충돌 — 다음 후보
         try:
-            os.link(src, candidate)   # 배타 — 이미 있으면 FileExistsError
+            os.link(src, candidate)   # 배타 — 경쟁까지 막는다
         except FileExistsError:
-            continue
-        src.unlink()                  # 하드링크 하나를 떼는 것 — 내용은 candidate 에 남는다
-        return candidate
-    raise OSError(f"파일명 충돌 1000회 초과: {src.name}")
+            continue                  # 경쟁에서 짐 — 다음 후보
+        except OSError:
+            try:
+                os.rename(src, candidate)  # 디렉토리·EPERM·EXDEV 폴백
+                return candidate
+            except OSError:
+                continue              # 이 후보가 안 되면 다음 이름으로
+        else:
+            src.unlink()              # 하드링크 하나를 떼는 것 — 내용은 candidate 에 남는다
+            return candidate
+    raise OSError(f"이동 실패(후보 1000개 소진): {src.name}")
 
 
 class RejectedRecord(Exception):
@@ -599,7 +618,7 @@ def _receive_openclaw() -> int:
     processed_dir.mkdir(exist_ok=True)
     ingested = skipped = rejected = 0
     quarantine_dir = _OC_INBOUND / "quarantine"
-    damaged = 0
+    damaged = stuck = 0
     for rf in sorted(_OC_INBOUND.glob("*.json")):
         # courier 가 드롭하는 파일은 **신뢰할 수 없는 입력**이다 — 전송 중 잘리거나
         # 다른 도구가 쓰다 만 것이 섞인다. 항목 하나의 실패가 큐 전체를 멈추면
@@ -623,13 +642,24 @@ def _receive_openclaw() -> int:
             # 열거형 튜플을 뚫고 큐를 영구 정지시켰다 — "어떤 필드가 무슨 예외를 낼지
             # 미리 셀 수 없다" 와 열거형 except 는 모순이었다.
             # coding-standards "에러 처리는 경계에서만" 의 바로 그 경계가 여기다.
-            quarantine_dir.mkdir(exist_ok=True)
-            if rf.exists():  # rename 이후 실패면 이미 processed/ 로 옮겨진 상태
-                _move_unique(rf, quarantine_dir)
-            print(f"  ⚠️ 처리 불가 드롭 격리: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
-            damaged += 1
+            # 격리는 **최후 수단**이다. 여기서 던지면 잡는 곳이 없어 루프가 죽고,
+            # 그게 바로 이 핸들러가 막으려던 wedge 다 (QA 실측: 디렉토리 드롭 →
+            # 격리 이동이 PermissionError → rc=1, 뒤의 정상분 영구 미처리).
+            # 이동에 실패하면 그 항목만 큐에 남기고 **다음 항목으로 넘어간다** —
+            # 재시도는 되지만 다른 메시지를 막지는 않는다.
+            print(f"  ⚠️ 처리 불가 드롭: {rf.name} — {type(exc).__name__}: {str(exc)[:80]}")
+            try:
+                quarantine_dir.mkdir(exist_ok=True)
+                if rf.exists():  # 이동 이후 실패면 이미 processed/ 로 옮겨진 상태
+                    _move_unique(rf, quarantine_dir)
+                    damaged += 1
+            except Exception as move_exc:  # noqa: BLE001 — 최후 수단도 실패할 수 있다
+                print(f"     ↳ 격리 이동 실패 — 큐에 남긴다(다음 실행 재시도): "
+                      f"{type(move_exc).__name__}: {str(move_exc)[:60]}")
+                stuck += 1
             continue
-    tail = f", 손상 {damaged}건 quarantine/ 격리" if damaged else ""
+    tail = (f", 손상 {damaged}건 quarantine/ 격리" if damaged else "") + \
+           (f", ⚠️ 이동 불가 {stuck}건 큐 잔존" if stuck else "")
     print(f"[consortium] OpenClaw 수신 완료: {ingested}건 inbox 적재 "
           f"(미적재 {skipped}건 — 타팀행·비consortium, openclaw-inbound/processed/ 로 이동{tail})")
     return 0
