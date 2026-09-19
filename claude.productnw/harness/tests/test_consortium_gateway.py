@@ -1148,6 +1148,72 @@ class SlackGatewayRoundTripTest(unittest.TestCase):
         self.assertFalse((recv_root / ".claude/state/consortium/slack-cursor.json").exists(),
                          "페이지를 다 못 받았는데 cursor 가 전진했다 — 오래된 구간이 소실된다")
 
+    def test_수집이_계속_끊겨도_inbox_가_불어나지_않는다(self):
+        """cursor 만 동결하고 **처리는 하면** 매 폴링 재적재된다 (리뷰 MUST).
+
+        직전 수정은 "수집분은 처리하되 cursor 동결" 이었는데, Slack 경로엔 Teams 의
+        `seen` 같은 dedup 이 없어 다음 폴링이 같은 창을 다시 적재했다 —
+        실측 inbox 2→4→6. 소실을 막으려다 복제를 연 것이다.
+
+        기존 테스트는 cursor 파일 부재만 봤기 때문에 이 경로를 못 봤다.
+        **inbox 건수**를 보는 것이 이 결함의 관측 지점이다.
+        """
+        global _SL_PAGE_CAP
+        send_mod, _ = self._node("sl-a", "team-a")
+        for i in range(5):
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", f"TR{i}", "--msg", f"MSG-{i}"])
+            send_mod._send_slack()
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        real = recv_mod._slack_api
+        calls = {"n": 0}
+
+        def flaky(tok, method, payload, get=False):
+            calls["n"] += 1
+            if calls["n"] % 2 == 0:            # 두 번째 페이지마다 실패 — 항상 truncated
+                return False, "요청 실패: mock outage"
+            return real(tok, method, payload, get=get)
+
+        recv_mod._slack_api = flaky
+        _SL_PAGE_CAP = 2
+        counts = []
+        try:
+            for _ in range(3):
+                self.assertEqual(recv_mod._receive_slack(), 0)
+                counts.append(len(list(
+                    (recv_root / ".claude/state/consortium/inbox").glob("*.json"))))
+        finally:
+            _SL_PAGE_CAP = 200
+            recv_mod._slack_api = real
+        self.assertEqual(len(set(counts)), 1,
+                         f"폴링마다 inbox 가 불어난다(재적재): {counts}")
+
+    def test_창이_여러_개여도_재폴링에_재적재되지_않는다(self):
+        """첫 폴링은 `oldest=0` 이라 채널 전체 이력을 훑는다 — 창이 여러 개다."""
+        global _SL_PAGE_CAP
+        send_mod, _ = self._node("sl-a", "team-a")
+        for i in range(4):
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", f"CAP{i}", "--msg", f"MSG-{i}"])
+            send_mod._send_slack()
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        inbox = recv_root / ".claude/state/consortium/inbox"
+        _SL_PAGE_CAP = 1                       # 창 1건 → 4페이지
+        try:
+            self.assertEqual(recv_mod._receive_slack(), 0)
+            first = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"]
+                           for f in inbox.glob("*.json"))
+            self.assertEqual(recv_mod._receive_slack(), 0)
+            second = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"]
+                            for f in inbox.glob("*.json"))
+        finally:
+            _SL_PAGE_CAP = 200
+        self.assertEqual(first, sorted(f"MSG-{i}" for i in range(4)),
+                         f"여러 창에 걸친 메시지가 소실됐다: {first}")
+        self.assertEqual(first, second, f"재폴링에 재적재됐다: {first} → {second}")
+
     def test_처리_실패분은_원본을_보존하고_cursor_를_멈춘다(self):
         """cursor 전진은 '보존 또는 처리된 접두' 까지만 — 안 그러면 소실된다 (MUST-3)."""
         send_mod, _ = self._node("sl-a", "team-a")

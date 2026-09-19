@@ -80,7 +80,7 @@ def _detect_host() -> str:
             pass
     return "claude-code"
 
-# 게이트웨이 어댑터 — telegram ★권장(발신+수신 실구현) / teams 대안(발신+수신 실구현) / slack stub.
+# 게이트웨이 어댑터 — slack ★권장 / teams 대안 (둘 다 발신+수신 실구현) / telegram 사람 연동 전용.
 _GATEWAYS = {
     "slack": "Slack ★권장 (chat.postMessage 발신 + conversations.history 폴링 수신)",
     "teams": "MS Teams (Incoming Webhook 발신 + Graph 폴링 수신 — 앱 등록·관리자 동의 필요)",
@@ -407,8 +407,12 @@ def _safe_err(exc: BaseException, secret: str = "") -> str:
         except Exception:  # noqa: BLE001 — 오류 보고 중의 오류는 삼킨다
             text = f"HTTP {exc.code}"
     text = _TOKEN_RE.sub("/bot<REDACTED>/", text)
-    if secret and secret in text:
-        text = text.replace(secret, "<REDACTED>")
+    if secret:
+        # 전체 URL 비교만으로는 샌다 — `InvalidURL` 은 **경로만** 싣는다 (실측).
+        parts = urllib.parse.urlsplit(secret)
+        for chunk in (secret, parts.path, parts.query, f"{parts.path}?{parts.query}"):
+            if chunk and len(chunk) > 8 and chunk in text:
+                text = text.replace(chunk, "<REDACTED>")
     return text
 
 
@@ -509,8 +513,8 @@ def _self_team() -> str:
 
 def _graph_get(url: str, token: str) -> tuple[bool, dict | str]:
     """Graph API GET (Bearer). (성공여부, JSON|오류문자열). 네트워크=경계 방어."""
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, timeout=20) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
@@ -546,14 +550,14 @@ def _slack_api(token: str, method: str, payload: dict, get: bool = False) -> tup
     """Slack Web API 호출. (성공여부, 응답|오류문자열). 네트워크=경계 방어."""
     url = f"{_SLACK_BASE}/{method}"
     headers = {"Authorization": f"Bearer {token}"}
-    if get:
-        url = f"{url}?{urllib.parse.urlencode(payload)}"
-        req = urllib.request.Request(url, headers=headers)
-    else:
-        headers["Content-Type"] = "application/json; charset=utf-8"
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
-                                     headers=headers, method="POST")
     try:
+        if get:
+            url = f"{url}?{urllib.parse.urlencode(payload)}"
+            req = urllib.request.Request(url, headers=headers)
+        else:
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                         headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
@@ -667,12 +671,27 @@ def _receive_slack() -> int:
             print("[consortium] ❌ Slack 응답에 messages 배열이 없다")
             return 1
         pages.extend(chunk)
+        prev_cursor = next_cursor
         next_cursor = ((body.get("response_metadata") or {}).get("next_cursor") or "")
-        if not body.get("has_more") or not next_cursor:
-            break
+        if not body.get("has_more") or not next_cursor or next_cursor == prev_cursor:
+            break   # 같은 커서를 반복 주는 비정상 서버에서 무한 루프를 막는다
     else:
         truncated = True
         print("  ⚠️ 페이지 상한(50) 도달 — cursor 를 전진시키지 않는다")
+
+    # **전부 받지 못했으면 이번 폴링은 아무것도 처리하지 않는다** (all-or-nothing).
+    #
+    # 앞선 수정은 "수집분은 처리하되 cursor 만 동결" 이었는데, Slack 경로엔 Teams 의
+    # `seen` 같은 dedup 이 없어 **다음 폴링이 같은 창을 다시 적재**했다 (실측:
+    # 폴링 3회에 inbox 2→4→6, `-1`,`-2`… 로 복제). 소실을 막으려다 복제를 연 것이다.
+    # 불변식은 "cursor 도 **처리도** 접두만" 이어야 한다. 진행이 멈추면 그 사실이
+    # 로그로 드러나는 편이, 조용히 불어나는 inbox 보다 낫다.
+    if truncated:
+        print("[consortium] ⚠️ Slack 폴링 중단 — 페이지를 전부 받지 못해 **이번 회차는 "
+              "처리하지 않는다**(재적재 방지). 다음 폴링에서 같은 지점부터 다시 시도한다.")
+        print("     계속 반복되면: 채널 이력이 너무 길거나(첫 폴링은 전체 이력) rate limit 이다 —")
+        print("     docs/consortium-gateway-setup.md §2-6 참조.")
+        return 0
 
     # 정렬 순서를 API 에 의존하지 않는다 — 문서가 순서를 명시하지 않으므로
     # 관측에 기대면 조용히 어긋난다. ts 로 직접 오름차순 정렬한다.
@@ -681,7 +700,15 @@ def _receive_slack() -> int:
             return float(m.get("ts", 0)) if isinstance(m, dict) else 0.0
         except (TypeError, ValueError):
             return 0.0
-    messages = sorted(pages, key=_ts_key)
+    # 페이지가 겹쳐 들어와도 같은 ts 는 한 번만 처리한다.
+    seen_ts: set[str] = set()
+    messages = []
+    for msg in sorted(pages, key=_ts_key):
+        key = str(msg.get("ts", "")) if isinstance(msg, dict) else ""
+        if key and key in seen_ts:
+            continue
+        seen_ts.add(key)
+        messages.append(msg)
 
     ingested = skipped = rejected = failed = 0
     quarantine_dir = _STATE / "slack-quarantine"
@@ -689,8 +716,7 @@ def _receive_slack() -> int:
     # 실패하면 거기서 멈춘다 — 전진시켜 버리면 다음 폴링이 그 메시지를 건너뛰고
     # 원본은 어디에도 남지 않는다 (큐의 최소 계약 위반).
     advanced = oldest
-    # 페이지를 다 못 받았으면 처음부터 동결 — 못 받은 구간이 더 오래된 쪽에 있다.
-    frozen = truncated
+    frozen = False
     for msg in messages:
         ts = str(msg.get("ts", "")) if isinstance(msg, dict) else ""
         try:
@@ -715,7 +741,11 @@ def _receive_slack() -> int:
                       f"{type(keep_exc).__name__}: {str(keep_exc)[:60]}")
                 frozen = True
         if ts and not frozen:
-            advanced = ts
+            try:
+                float(ts)          # 파싱 불가 ts 를 cursor 에 넣으면 이후 폴링이 전부 실패한다
+                advanced = ts
+            except (TypeError, ValueError):
+                print(f"  ⚠️ ts 형식 이상 — cursor 를 올리지 않는다: {ts[:40]!r}")
 
     if advanced != oldest:
         tmp = cursor_file.with_suffix(".json.tmp")
@@ -724,7 +754,7 @@ def _receive_slack() -> int:
 
     tail = ((f", 거부 {rejected}건" if rejected else "")
             + (f", 실패 {failed}건 slack-quarantine/ 보존" if failed else "")
-            + (", ⚠️ 일부 페이지 미수집 — cursor 동결(다음 폴링 재시도)" if truncated else ""))
+            )
     print(f"[consortium] Slack 수신 완료: {ingested}건 inbox 적재 "
           f"(미적재 {skipped}건 — 타팀행·비consortium, cursor={advanced}{tail})")
     return 0
@@ -762,10 +792,12 @@ def _build_telegram_text(m: dict) -> str:
 def _telegram_api(token: str, method: str, payload: dict) -> tuple[bool, dict | str]:
     """Bot API 호출. (성공여부, result|오류문자열). 네트워크=경계 방어."""
     url = f"{_TELEGRAM_BASE}/bot{token}/{method}"
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
     try:
+        # `Request()` 도 try 안이어야 한다 — 스킴이 없으면 여기서 ValueError 가 나고
+        # 그 메시지에 **토큰이 박힌 URL** 이 통째로 실린다 (실측 uncaught).
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
@@ -1199,10 +1231,10 @@ def cmd_gateway(args) -> int:
     # 예전 문구는 "수신은 같은 스키마로 inbox/ 에 적재하면 됨" 이었다. 그건 다운스트림에게
     # **수신 경계를 우회하라고 초대**하는 말이었다 — 검증·위생·유일성이 전부 그 경계에 있다.
     # 경계 바깥에서 inbox 에 직접 쓰면 이 변형이 3라운드에 걸쳐 고친 결함이 그대로 재생산된다.
-    print("  계약: outbox/*.json 을 그대로 실어 보내고, **수신분은 openclaw-inbound/ 에 드롭**한다.")
-    print("    → `gateway <platform> --receive` 가 단일 수신 경계에서 계약 검증·위생·유일성을 처리.")
-    print("    ⚠️ inbox/ 에 직접 쓰지 말 것 — 경계를 건너뛰면 원격 값이 그대로 파일명·라우팅 키가 된다.")
-    print("  → graceful degrade: 봇 미연동이어도 로컬 큐로 협업 흐름은 검증 가능.")
+    print("  수신은 `gateway <platform> --receive` 가 **단일 수신 경계**에서 계약 검증·위생·")
+    print("  유일성을 처리한다. ⚠️ inbox/ 에 직접 쓰지 말 것 — 경계를 건너뛰면 원격이 정한")
+    print("  값이 그대로 파일명·경로·라우팅 키가 된다.")
+    print("  → graceful degrade: 자격증명 미설정이어도 로컬 큐로 협업 흐름은 검증 가능.")
     return 0
 
 
@@ -1268,7 +1300,7 @@ def main() -> None:
     p_gw.add_argument("--receive", action="store_true",
                       help="채널→inbox 폴링 수신 (자격증명은 플랫폼별 환경변수)")
     p_gw.add_argument("--poll", type=int, default=0, metavar="SEC",
-                      help="(teams --receive) 주기 폴링 간격(초). 0=1회만")
+                      help="주기 폴링 간격(초) — --receive 와 함께. 0=1회만")
 
     sub.add_parser("self", help="환경·의존성 점검")
 
