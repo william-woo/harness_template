@@ -418,101 +418,99 @@ OpenClaw 채널 설정(Azure Bot·`~/.openclaw/openclaw.json`·터널)은 OpenCl
 ### 11-1. 봇 만들기 (BotFather)
 
 1. Telegram 에서 **@BotFather** 와 대화 시작
-2. `/newbot` → 봇 이름 입력 → 사용자명 입력 (`_bot` 으로 끝나야 함)
-3. 받은 **토큰**을 복사 — 형태: `123456789:AAH...` (이게 자격증명 전부다)
+2. `/newbot` → 봇 이름 → 사용자명(`_bot` 으로 끝나야 함)
+3. 받은 **토큰** 복사 — 형태: `123456789:AAH...`
 
-### 11-2. 그룹 만들고 봇 초대 + chat id 확보
+### 11-2. 그룹 만들고 봇 초대 + chat id
 
-컨소시엄은 팀들이 **한 채널**을 공유한다. 그룹을 하나 만들고 봇을 넣는다.
+에이전트가 알림을 보낼 **사람들의 그룹**을 만든다 (팀 노드끼리의 채널이 아니다).
 
-1. Telegram 에서 그룹 생성 → 위에서 만든 봇을 **멤버로 추가**
-2. **중요** — BotFather 에서 `/setprivacy` → 봇 선택 → **Disable**
+1. 그룹 생성 → 봇을 멤버로 추가
+2. BotFather `/setprivacy` → 봇 선택 → **Disable**
    (privacy mode 가 켜져 있으면 봇이 **사람이 쓴** 일반 메시지를 못 본다.
    변경 후 봇을 그룹에서 뺐다가 다시 넣어야 적용된다. 이걸 꺼도 **다른 봇의**
    글은 여전히 못 본다 — 그건 privacy mode 와 무관한 플랫폼 정책이다)
-3. 그룹에 아무 메시지나 한 줄 쓴다 (그래야 `getUpdates` 에 잡힌다)
-4. chat id 확인:
+3. BotFather `/setjoingroups` → 필요 없으면 **Disable** (봇이 임의 그룹에 끌려가는 표면 축소)
+4. 그룹에 사람이 아무 메시지나 한 줄 쓴다 (그래야 `getUpdates` 에 잡힌다)
+5. chat id 확인 — **음수**로 나오는 것이 그룹 id 다:
 
 ```bash
 TOKEN="$(< ~/.config/consortium/telegram_token.txt)"
 curl -s "https://api.telegram.org/bot${TOKEN}/getUpdates" | python3 -m json.tool | grep -A3 '"chat"'
 ```
 
-`"id": -1001234567890` 처럼 **음수**로 나오는 것이 그룹 chat id 다.
+> 일반 그룹은 `-123456789`, 슈퍼그룹은 `-100...` 형태다. 그룹이 슈퍼그룹으로
+> 승격되면 **id 가 바뀌어** 발신이 깨진다 — 그때 다시 확인한다.
 
 ### 11-3. 자격증명 안전 보관 (autonomous #3-A)
 
-**리포 안에 두지 않는다.** 홈 디렉토리에 600 권한으로 둔다:
-
 ```bash
 mkdir -p ~/.config/consortium && chmod 700 ~/.config/consortium
-printf '%s\n' 'PASTE_BOT_TOKEN_HERE'  > ~/.config/consortium/telegram_token.txt
-printf '%s\n' '-1001234567890'        > ~/.config/consortium/telegram_chat_id.txt
+printf '%s\n' 'PASTE_BOT_TOKEN_HERE' > ~/.config/consortium/telegram_token.txt
+printf '%s\n' '-1001234567890'       > ~/.config/consortium/telegram_chat_id.txt
 chmod 600 ~/.config/consortium/telegram_*.txt
 ```
 
-> 토큰을 **명령줄 인자로 주지 않는다** — 셸 히스토리와 `ps` 출력에 남는다.
-> 아래처럼 파일에서 읽어 환경변수로만 주입한다.
-
-### 11-4. 왕복 테스트
+### 11-4. 발신 — 에이전트 → 사람
 
 ```bash
-# (1) 이 노드를 팀으로 등록
-python3 .claude/bin/consortium.py init team-alpha --agents developer,reviewer --gateway telegram
-
-# (2) 팀 간 메시지를 outbox 에 만든다 (계약 검증이 여기서 걸린다)
+python3 .claude/bin/consortium.py init team-alpha --gateway telegram
 python3 .claude/bin/consortium.py send --to team-beta --role developer \
   --cycle PCYC-01 --stage develop --msg "설계 완료, 구현 요청"
 
-# (3) 발신 — 자격증명은 파일에서 읽어 환경변수로만
 CONSORTIUM_TELEGRAM_TOKEN="$(< ~/.config/consortium/telegram_token.txt)" \
 CONSORTIUM_TELEGRAM_CHAT_ID="$(< ~/.config/consortium/telegram_chat_id.txt)" \
   python3 .claude/bin/consortium.py gateway telegram --send
+```
 
-# (4) 수신 — 상대 팀 노드에서 (같은 그룹, 다른 team-id 로 init 된 상태)
-CONSORTIUM_TELEGRAM_TOKEN="$(< ~/.config/consortium/telegram_token.txt)" \
-  python3 .claude/bin/consortium.py gateway telegram --receive
+그룹에 사람이 읽을 카드 + 기계가 복원할 봉투가 함께 올라간다.
 
-# (5) 상시 폴링 (에이전트 자동 왕복)
+### 11-5. 수신 — 사람 → 에이전트
+
+**토큰과 chat id 를 둘 다** 넘긴다. chat id 는 수신 범위를 그 그룹으로 못 박는 장치다 —
+봇은 **누구에게나 DM 을 받을 수 있고** `getUpdates` 는 봇이 속한 모든 채팅을 주므로,
+필터가 없으면 낯선 사용자의 DM 이 계약 검증을 통과해 라우팅 키로 흘러간다(실측).
+
+```bash
 CONSORTIUM_TELEGRAM_TOKEN="$(< ~/.config/consortium/telegram_token.txt)" \
+CONSORTIUM_TELEGRAM_CHAT_ID="$(< ~/.config/consortium/telegram_chat_id.txt)" \
   python3 .claude/bin/consortium.py gateway telegram --receive --poll 20
 ```
 
-### 기대 출력
+**사람이 무엇을 써야 하는가**: 에이전트가 읽으려면 계약 봉투가 필요하다.
+발신 노드의 `outbox/*.json`(또는 같은 스키마의 JSON)을 base64 로 인코딩해
+`[[consortium-msg]]<base64>` 한 줄을 그룹에 붙여 넣는다:
 
+```bash
+python3 - <<'EOF'
+import base64, json
+msg = {"from_team": "team-human", "to_team": "team-alpha", "role": "developer",
+       "cycle_id": "PCYC-01", "msg": "승인합니다. 배포 진행하세요."}
+print("[[consortium-msg]]" + base64.b64encode(
+    json.dumps(msg, ensure_ascii=False).encode()).decode())
+EOF
 ```
-[consortium] outbox 기록: .claude/state/consortium/outbox/2026...__to-team-beta.json
-  ✅ team-alpha→team-beta cycle=PCYC-01 — message_id=42
-[consortium] Telegram 발신 완료: 1/1 (성공분 → outbox/sent/)
 
-  ⬇ team-alpha → team-beta [developer] cycle=PCYC-01: 설계 완료, 구현 요청
-[consortium] Telegram 수신 완료: 1건 inbox 적재 (미적재 0건 …, offset=43)
-```
+> 봉투 없이 쓴 글은 consortium 메시지가 아니므로 조용히 무시된다(정상 동작).
 
-`python3 .claude/bin/consortium.py inbox` 로 적재된 계약을 확인한다.
+### 11-6. 동작 규칙
 
-### 11-5. 동작 규칙
+- **멱등**: `offset` 을 `telegram-offset.json` 에 기록하고 **처리 후에만** 전진한다.
+  Telegram 은 offset 을 확인(ack)으로 받아 그 이전 update 를 **서버에서 지우므로**,
+  먼저 올리면 처리 못 한 메시지가 사라진다. 실패분은 `telegram-quarantine/` 에
+  원본을 보존하고, 보존까지 실패하면 그 지점부터 offset 을 **동결**한다.
+- **중복 허용**: 중단 시 같은 update 를 다시 받는다(at-least-once). 중복은 파일명에
+  `-1` 이 붙어 흡수되므로 소비측은 `telegram_update_id` 로 dedupe 한다.
+- **본문 상한 4096자**: 넘으면 **거부**하고 outbox 에 남긴다. 잘라 보내면 봉투가
+  깨져 복원이 불가능하다 — 조용한 손상보다 시끄러운 거부.
 
-- **멱등**: `offset` 을 `.claude/state/consortium/telegram-offset.json` 에 기록한다.
-  offset 은 **처리 후에만** 전진한다 — Telegram 은 offset 을 확인으로 받아 그 이전
-  update 를 서버에서 지우므로, 먼저 올리면 처리 못 한 메시지가 사라진다.
-  도중 중단되면 같은 update 를 다시 받는다(at-least-once). 중복은 파일명에 `-1` 이
-  붙어 흡수되고, 소실보다 중복을 택한 결과다.
-- **지목 필터**: 그룹은 공유되므로 `to_team` 이 내가 아니거나 `from_team` 이 나면 무시한다.
-- **본문 상한**: Telegram 은 4096자다. 넘으면 **거부**하고 outbox 에 남긴다 —
-  잘라 보내면 봉투가 깨져 수신측이 복원하지 못하기 때문이다(조용한 손상 금지).
-- **계약 검증은 양방향**: 수신분도 `_validate_message` 를 통과해야 적재된다 (ADR-012 결정 3).
-
-### 11-6. 트러블슈팅
+### 11-7. 트러블슈팅
 
 | 증상 | 확인 |
 |---|---|
-| `자격증명 미설정` | `CONSORTIUM_TELEGRAM_TOKEN` / `CONSORTIUM_TELEGRAM_CHAT_ID` 주입 확인 |
-| `API 거부: Unauthorized` | 토큰 오타 — BotFather 에서 `/mybots` → API Token 재확인 |
-| `API 거부: chat not found` | chat id 오류. 그룹이면 **음수**다. 봇이 그룹 멤버인지 확인 |
-| 발신은 되는데 수신이 0건 | ① `/setprivacy` → Disable 했는지 ② 봇 자신이 보낸 메시지는 `getUpdates` 에 안 잡힌다 — **다른 팀 노드**(다른 봇/다른 team-id)에서 보낸 것을 받아야 한다 |
-| 같은 메시지가 반복 적재 | `telegram-offset.json` 이 손상됐거나 삭제됨 — 경고가 출력되며 0 에서 재시작한다 |
-| `본문이 상한 초과` | `--msg` 를 줄인다. 큰 산출물은 리포에 커밋하고 메시지엔 경로만 싣는다 |
-
-
----
+| `자격증명 미설정` | `--receive` 도 **chat id 가 필수**다 (주입 누락) |
+| `API 거부: Unauthorized` | 토큰 오타 — BotFather `/mybots` → API Token |
+| `API 거부: chat not found` | chat id 오류. 그룹은 **음수**. 봇이 멤버인지 확인 |
+| `API 거부: Conflict` | 봇에 webhook 이 걸려 있다 — `deleteWebhook` 후 재시도 |
+| 사람이 썼는데 수신 0건 | ① `/setprivacy` Disable 후 **재초대** 했는지 ② 봉투(`[[consortium-msg]]…`)를 붙였는지 ③ chat id 가 그 그룹인지 |
+| 봇이 보낸 건 왜 안 오나 | **정상이다.** 봇은 자기 글도, 다른 봇의 글도 받지 못한다 (§11 머리말) |

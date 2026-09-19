@@ -968,16 +968,36 @@ class _MockSlack(BaseHTTPRequestHandler):
         self._reply({"ok": False, "error": "unknown_method"})
 
     def do_GET(self):
+        """`conversations.history` 의 **페이지네이션 계약을 실제로 흉내 낸다**.
+
+        이전 mock 은 `limit`·`cursor` 를 무시하고 `has_more: False` 를 고정해,
+        "창 하나만 처리하고 cursor 를 올려 오래된 미처리분이 소실되는" 결함을
+        가렸다. mock 이 실물보다 관대하면 그 차이만큼 테스트가 거짓말을 한다.
+
+        실제 API 처럼 **최신 쪽 limit 건의 창**을 주고 나머지는 `next_cursor` 로 넘긴다.
+        """
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        oldest = qs.get("oldest", ["0"])[0]
-        msgs = [m for m in _SL_CHANNEL if float(m["ts"]) > float(oldest or 0)]
-        self._reply({"ok": True, "messages": list(reversed(msgs)), "has_more": False})
+        oldest = float(qs.get("oldest", ["0"])[0] or 0)
+        limit = int(qs.get("limit", ["200"])[0])
+        limit = min(limit, _SL_PAGE_CAP)
+        pool = sorted((m for m in _SL_CHANNEL if float(m["ts"]) > oldest),
+                      key=lambda m: float(m["ts"]))
+        end = len(pool)
+        cur = qs.get("cursor", [""])[0]
+        if cur:
+            end = int(cur)                       # cursor = 이 인덱스 **이전**까지
+        start = max(0, end - limit)
+        window = list(reversed(pool[start:end]))  # 최신순으로 돌려준다
+        has_more = start > 0
+        self._reply({"ok": True, "messages": window, "has_more": has_more,
+                     "response_metadata": {"next_cursor": str(start) if has_more else ""}})
 
     def log_message(self, *a):
         """테스트 출력을 더럽히지 않는다."""
 
 
 _SL_CHANNEL: list[dict] = []
+_SL_PAGE_CAP = 200   # 테스트가 낮춰 페이지네이션을 강제한다
 
 
 class SlackGatewayRoundTripTest(unittest.TestCase):
@@ -1070,6 +1090,63 @@ class SlackGatewayRoundTripTest(unittest.TestCase):
         recv_mod, recv_root = self._node("sl-b", "team-b")
         recv_mod._receive_slack()
         self.assertEqual(list((recv_root / ".claude/state/consortium/inbox").glob("*.json")), [])
+
+    def test_한_페이지를_넘는_백로그가_소실되지_않는다(self):
+        """cursor 전진의 불변식은 "처리된 **접두**" 다 (리뷰 MUST-2).
+
+        history 는 `oldest` 이후 구간의 **최신 쪽 창**을 준다. 창만 처리하고 cursor 를
+        그 창의 최신 ts 로 올리면 창보다 오래된 미처리분이 영원히 조회되지 않는다 —
+        처리 집합이 접두가 아니라 접미가 되기 때문이다.
+        실측으로 250건/limit 200 에서 50건이 소실됐다.
+        """
+        global _SL_PAGE_CAP
+        send_mod, _ = self._node("sl-a", "team-a")
+        total = 7
+        for i in range(total):
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", f"BULK{i}", "--msg", f"MSG-{i}"])
+            self.assertEqual(send_mod._send_slack(), 0)
+        self.assertEqual(len(_SL_CHANNEL), total)
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        _SL_PAGE_CAP = 2                      # 창 하나에 2건 → 4페이지
+        try:
+            self.assertEqual(recv_mod._receive_slack(), 0)
+        finally:
+            _SL_PAGE_CAP = 200
+        arrived = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"]
+                         for f in (recv_root / ".claude/state/consortium/inbox").glob("*.json"))
+        self.assertEqual(arrived, sorted(f"MSG-{i}" for i in range(total)),
+                         f"백로그가 소실됐다: {arrived}")
+
+    def test_페이지_수집이_끊기면_cursor_를_전진시키지_않는다(self):
+        """못 받은 구간이 **더 오래된 쪽**에 있으므로 전진하면 건너뛴다."""
+        send_mod, _ = self._node("sl-a", "team-a")
+        for i in range(5):
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", f"T{i}", "--msg", f"MSG-{i}"])
+            send_mod._send_slack()
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        real = recv_mod._slack_api
+        calls = {"n": 0}
+
+        def flaky(tok, method, payload, get=False):
+            calls["n"] += 1
+            if calls["n"] >= 2:                # 두 번째 페이지부터 네트워크 실패
+                return False, "요청 실패: mock outage"
+            return real(tok, method, payload, get=get)
+
+        global _SL_PAGE_CAP
+        recv_mod._slack_api = flaky
+        _SL_PAGE_CAP = 2
+        try:
+            self.assertEqual(recv_mod._receive_slack(), 0, "부분 수집이 루프를 죽였다")
+        finally:
+            _SL_PAGE_CAP = 200
+            recv_mod._slack_api = real
+        self.assertFalse((recv_root / ".claude/state/consortium/slack-cursor.json").exists(),
+                         "페이지를 다 못 받았는데 cursor 가 전진했다 — 오래된 구간이 소실된다")
 
     def test_처리_실패분은_원본을_보존하고_cursor_를_멈춘다(self):
         """cursor 전진은 '보존 또는 처리된 접두' 까지만 — 안 그러면 소실된다 (MUST-3)."""
