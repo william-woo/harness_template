@@ -97,3 +97,43 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
   브리지 왕복(outbox → openclaw-outbound → courier → openclaw-inbound → inbox)은
   `tests/test_consortium_gateway.py::OpenClawBridgeRoundTripTest` 가 실제로 태운다 —
   courier 자리만 파일 이동으로 대체하고 나머지는 실제 코드다.
+
+---
+
+## 결정 5 — 권장 transport 를 Telegram 으로 (2026-09-19 추가)
+
+**맥락**: F019 는 Teams 를 먼저 구현했다(사내 표준). 그런데 "컨소시엄을 실제 메신저로
+한번 돌려 보자" 는 사람에게 Teams 는 비싼 첫 관문이다 — Azure AD 앱 등록,
+`ChannelMessage.Read.All` **관리자 동의**, 자격증명 4개(webhook·token·team·channel).
+승인 대기만으로 며칠이 갈 수 있다.
+
+**결정**: `telegram` 을 **권장 transport** 로 삼고 발신·수신을 실구현한다.
+
+| | Telegram | Teams | Slack |
+|---|---|---|---|
+| 자격증명 | **봇 토큰 1개** + chat id | 4개 | 2~3개 |
+| 앱 등록 | **없음** | Azure AD | Slack 앱 |
+| 관리자 승인 | **없음** | 테넌트 관리자 | 워크스페이스 관리자 |
+| 수신 방식 | `getUpdates` (HTTPS GET) | Graph 폴링 (OAuth) | 공개 엔드포인트 / Socket Mode SDK |
+| stdlib only | ✅ | ✅ | ❌ |
+
+**수신이 결정적이다.** 발신은 세 플랫폼 모두 HTTP POST 한 번이라 차이가 없다.
+Telegram 은 발신과 **같은 토큰**으로 `getUpdates` 를 부르면 끝이고, Slack 은 이벤트
+푸시 모델이라 공개 HTTPS 엔드포인트(서버 운영)나 `slack_sdk` 웹소켓(외부 패키지)이
+필요해 이 변형의 "외부 의존성 0" 계약을 깬다.
+
+**Teams 를 제거하지 않는다**: 사내 표준이 Teams 인 조직에는 그대로 필요하고, 5라운드
+리뷰로 굳힌 코드·테스트를 버릴 이유가 없다. 기능은 동등하고 **비용만 다르다**.
+
+**두 transport 는 같은 수신 경계를 쓴다** — `_ingest_record` (결정 1 정정). 플랫폼이
+늘어도 계약 검증·파일명 위생·유일성은 한 곳에만 있다. Slack 을 붙이는 다운스트림도
+반드시 이 경계를 통과시킨다. 경계 밖에서 `inbox/` 에 직접 쓰면 이 변형이 3라운드에
+걸쳐 닫은 결함이 그대로 재생산된다.
+
+**검증 범위**: mock Bot API 로 발신→그룹→수신 왕복 5건 실측
+(`tests/test_consortium_gateway.py::TelegramGatewayRoundTripTest`) — 무손실·offset 멱등·
+수신자 필터·악성 업데이트 생존·본문 상한 거부. **실제 BotFather 봇 연동은 미검증**
+(자격증명은 사용자 소유 — d-3 경계). 설치 절차는 `docs/consortium-gateway-setup.md §2`.
+
+**본문 상한 4096자**: 넘으면 잘라 보내지 않고 **거부**하고 outbox 에 남긴다. 봉투가
+잘리면 수신측이 복원하지 못한다 — 조용한 손상보다 시끄러운 거부를 택한다.
