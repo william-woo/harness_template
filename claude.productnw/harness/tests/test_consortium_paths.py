@@ -123,5 +123,82 @@ class CliSmokeTest(unittest.TestCase):
                 self.assertEqual(self._run(*argv), 0, f"`{' '.join(argv)}` 가 실패했다")
 
 
+class OutboxPoisonTest(unittest.TestCase):
+    """찢어지거나 타입이 다른 outbox 파일 1건이 **발신 큐를 멈추지 않는지**.
+
+    QA 가 `_send_openclaw` 만 방어가 빠진 것을 잡았다(형제 3경로엔 있었다).
+    고치고 보니 네 경로 **전부** 같은 구멍이 더 있었다 — `json.loads` 는 성공해도
+    `[1,2]` 같은 비객체면 바로 뒤의 `.get()` 이 try **밖**에서 터진다.
+    "읽기를 감쌌다" 와 "한 건이 큐를 멈추지 않는다" 는 다르다.
+
+    그래서 이 테스트는 발신 경로를 **한 목록으로 묶어** 돈다 — 경로별 사본을
+    만들면 하나에만 케이스를 추가하고 끝난다 (이 파일이 여섯 번 겪은 일이다).
+    """
+
+    POISONS = ("{ torn", "[1, 2]", '"just a string"', "null", "123")
+
+    # 자격증명이 없으면 각 발신기가 루프 **전에** 반환하므로, 읽기 경계에 닿지 않는다.
+    _CREDS = {
+        "CONSORTIUM_TEAMS_WEBHOOK": "https://example.invalid/webhook",
+        "CONSORTIUM_SLACK_TOKEN": "xoxb-x", "CONSORTIUM_SLACK_CHANNEL": "C0",
+        "CONSORTIUM_TELEGRAM_TOKEN": "1:x", "CONSORTIUM_TELEGRAM_CHAT_ID": "-100",
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._env = {k: os.environ.get(k) for k in
+                     ("CLAUDE_PROJECT_DIR", *self._CREDS)}
+        os.environ["CLAUDE_PROJECT_DIR"] = str(Path(self.tmp.name))
+        os.environ.update(self._CREDS)
+
+    def tearDown(self):
+        for key, val in self._env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.tmp.cleanup()
+
+    def _fresh(self, poison: str):
+        """팀 등록 + 정상 메시지 1건 + 오염 파일 1건을 둔 모듈을 만든다."""
+        spec = importlib.util.spec_from_file_location("consortium_poison", _BIN)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["consortium_poison"] = mod
+        spec.loader.exec_module(mod)
+        old = sys.argv
+        for argv in (["consortium.py", "init", "team-c", "--agents", "qa"],
+                     ["consortium.py", "send", "--to", "team-d", "--role", "qa",
+                      "--cycle", "GOOD", "--msg", "정상"]):
+            sys.argv = argv
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    mod.main()
+            except SystemExit:
+                pass
+        sys.argv = old
+        (mod._OUTBOX / "0000-bad.json").write_text(poison, encoding="utf-8")
+        # 네트워크는 태우지 않는다 — 이 테스트가 보는 것은 **읽기 경계**다.
+        mod._post_teams = lambda *a, **k: (False, "mock: 전송 안 함")
+        mod._slack_api = lambda *a, **k: (False, "mock: 전송 안 함")
+        mod._telegram_api = lambda *a, **k: (False, "mock: 전송 안 함")
+        return mod
+
+    def test_발신_경로가_오염된_outbox_파일에_멈추지_않는다(self):
+        senders = ("_send_openclaw", "_send_teams", "_send_slack", "_send_telegram")
+        for poison in self.POISONS:
+            for name in senders:
+                with self.subTest(poison=poison, sender=name):
+                    mod = self._fresh(poison)
+                    fn = getattr(mod, name)
+                    buf = io.StringIO()
+                    try:
+                        with contextlib.redirect_stdout(buf):
+                            fn("teams") if name == "_send_openclaw" else fn()
+                    except Exception as exc:  # noqa: BLE001
+                        self.fail(f"{name} 이 {poison!r} 에 죽었다: {type(exc).__name__}: {exc}")
+                    self.assertIn("읽기 실패", buf.getvalue(),
+                                  f"{name} 이 {poison!r} 를 건너뛰었다고 보고하지 않았다")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

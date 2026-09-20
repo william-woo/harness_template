@@ -124,8 +124,10 @@ CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
 # (5) 상시 폴링 (에이전트 자동 왕복)
 CONSORTIUM_SLACK_TOKEN="$(< ~/.config/consortium/slack_token.txt)" \
 CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
-  python3 .claude/bin/consortium.py gateway slack --receive --poll 20
+  python3 .claude/bin/consortium.py gateway slack --receive --poll 60
 ```
+
+> `--poll` 은 **60초 이상**을 권한다 — Marketplace 미등재 앱의 history 제한이 분당 1회다.
 
 ### 기대 출력
 
@@ -159,9 +161,11 @@ CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
 - **첫 폴링은 채널 전체 이력**을 훑는다(`oldest=0`). 이미 길게 쓰던 채널에 합류하면
   여러 회차에 걸쳐 따라잡는다. 건너뛰려면 시작점을 지정한다:
   `CONSORTIUM_SLACK_OLDEST="$(date +%s).000000"`
-- **rate limit**: 앱을 Slack Marketplace 에 배포하지 말고 **워크스페이스 내부 앱**으로
-  두십시오. 비-Marketplace 앱은 `conversations.history` 가 **분당 1회·15건**으로
-  제한되어(2025-05 변경) 백로그를 따라잡는 데 오래 걸립니다.
+- **rate limit**: Slack 은 2025-05 부터 **Marketplace 미등재 앱**의
+  `conversations.history` 를 **분당 1회·15건**으로 제한한다. §2-1 의 "From scratch" 로
+  만든 내부 앱이 여기 해당하므로, 백로그를 따라잡는 데 시간이 걸린다.
+  → `--poll` 간격을 **60초 이상**으로 두고, 긴 이력은 `CONSORTIUM_SLACK_OLDEST` 로 건너뛴다.
+  (이 제한은 문서 기준이며 **실제 워크스페이스에서 미검증**이다 — d-3 경계.)
 
 ### 2-6. 트러블슈팅
 
@@ -408,7 +412,7 @@ OpenClaw 채널 설정(Azure Bot·`~/.openclaw/openclaw.json`·터널)은 OpenCl
 - 핸드오프 레코드를 **실제 OpenClaw 채널로 싣고 내리는 courier**(OpenClaw 에이전트의 채널 도구
   호출, 또는 Gateway 플로/ACP)는 OpenClaw 런타임에 바인딩 — §3~9 Teams stub→real 과 같은 seam.
 - courier 를 모킹한 **완전 왕복이 테스트로 실재**한다 —
-  `tests/test_consortium_gateway.py` (Slack·Teams·OpenClaw 왕복 + 경계 parity 30건, openclaw 브리지 포함).
+  `tests/test_consortium_gateway.py` (Slack·Teams·OpenClaw·Telegram 왕복 + 경계 parity 43건, openclaw 브리지 포함).
   실 OpenClaw·실 Teams 채널 연결은 다운스트림 몫.
 
 ---

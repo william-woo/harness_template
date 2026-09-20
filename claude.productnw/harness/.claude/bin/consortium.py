@@ -16,7 +16,7 @@ consortium.py — 분산 멀티팀 에이전트 컨소시엄 (d-3, claude.produc
   · `telegram` — 발신 + **사람이 쓴 메시지** 수신만. 봇은 다른 봇의 글을 보지 못해
     (Bot FAQ, privacy mode 무관) 팀 노드끼리의 자동 왕복에는 쓸 수 없다.
 
-→ 두 실구현 transport 는 **같은 수신 경계**(`_ingest_record`)를 지난다. 계약 검증·파일명
+→ 네 수신 경로(teams·slack·telegram·openclaw)가 **같은 경계**(`_ingest_record`)를 지난다. 계약 검증·파일명
   위생·유일성이 플랫폼과 무관하게 한 곳에 걸린다 (ADR-013 결정 1 정정).
 
 사용법:
@@ -378,16 +378,27 @@ def cmd_inbox(args) -> int:
     if not _INBOX.exists():
         print("[consortium] inbox 없음 — `init` 먼저 실행")
         return 0
-    msgs = sorted(_INBOX.glob("*.json"))
+    # 파일 하나가 찢어져도 목록 전체가 죽지 않게 한 번만 읽고 거른다 (QA 실측:
+    # torn inbox 파일 1건에 `inbox`·`inbox --team` 둘 다 traceback).
+    loaded, broken = [], 0
+    for mf in sorted(_INBOX.glob("*.json")):
+        try:
+            loaded.append((mf, json.loads(mf.read_text(encoding="utf-8"))))
+        except Exception:  # noqa: BLE001 — 목록 조회는 최대한 보여 주는 쪽이 낫다
+            broken += 1
     if args.team:
-        msgs = [m for m in msgs
-                if json.loads(m.read_text(encoding="utf-8")).get("to_team") == args.team]
-    if not msgs:
+        loaded = [(mf, m) for mf, m in loaded
+                  if isinstance(m, dict) and m.get("to_team") == args.team]
+    if broken:
+        print(f"[consortium] ⚠️ 읽을 수 없는 inbox 파일 {broken}건 건너뜀")
+    if not loaded:
         print("[consortium] inbox 비어있음")
         return 0
-    print(f"[consortium] inbox — {len(msgs)}건\n")
-    for mf in msgs:
-        m = json.loads(mf.read_text(encoding="utf-8"))
+    print(f"[consortium] inbox — {len(loaded)}건\n")
+    for mf, m in loaded:
+        if not isinstance(m, dict):
+            print(f"  ⚠️ {mf.name} — 계약이 객체가 아님(건너뜀)")
+            continue
         print(f"  ● [{m.get('ts','?')}] {m.get('from_team','?')} → {m.get('to_team','?')} "
               f"[{m.get('role','?')}] cycle={m.get('cycle_id','?')} stage={m.get('stage','-')}")
         print(f"      {m.get('msg','')}")
@@ -492,6 +503,10 @@ def _send_teams() -> int:
     for mf in pending:
         try:
             m = json.loads(mf.read_text(encoding="utf-8"))
+            if not isinstance(m, dict):
+                # 파싱은 성공해도 타입이 다르면 바로 뒤의 `.get()` 이 try **밖**에서
+                # 터진다 — 유효한 JSON `[1,2]` 하나로 발신 큐가 영구 정지했다(실측).
+                raise TypeError(f"계약이 객체가 아님: {type(m).__name__}")
         except Exception as exc:  # noqa: BLE001 — 찢어진 파일 하나가 발신 전체를 막지 않는다
             print(f"  ❌ {mf.name} — 읽기 실패: {type(exc).__name__}: {str(exc)[:80]}")
             continue
@@ -597,6 +612,10 @@ def _send_slack() -> int:
     for mf in pending:
         try:
             m = json.loads(mf.read_text(encoding="utf-8"))
+            if not isinstance(m, dict):
+                # 파싱은 성공해도 타입이 다르면 바로 뒤의 `.get()` 이 try **밖**에서
+                # 터진다 — 유효한 JSON `[1,2]` 하나로 발신 큐가 영구 정지했다(실측).
+                raise TypeError(f"계약이 객체가 아님: {type(m).__name__}")
         except Exception as exc:  # noqa: BLE001 — 찢어진 outbox 파일 하나가 발신 전체를 막지 않는다
             print(f"  ❌ {mf.name} — 읽기 실패: {type(exc).__name__}: {str(exc)[:80]}")
             continue
@@ -642,12 +661,25 @@ def _receive_slack() -> int:
     cursor_file = _STATE / "slack-cursor.json"
     # 첫 폴링은 기본적으로 **채널 전체 이력**을 훑는다. 긴 채널에 합류하는 노드는
     # 이 값을 주어 시작점을 옮긴다 (`date +%s` 또는 메시지 ts).
-    oldest = os.environ.get("CONSORTIUM_SLACK_OLDEST", "").strip() or "0"
+    oldest = "0"
     if cursor_file.exists():
         try:
             oldest = str(json.loads(cursor_file.read_text(encoding="utf-8"))["oldest"])
+            float(oldest)   # 의미 검증 — "garbage" 가 들어가면 이후 폴링이 전부 rc=1 이다
         except Exception as exc:  # noqa: BLE001 — 멱등 힌트일 뿐, 깨져도 수신은 계속된다
             print(f"  ⚠️ cursor 기록 손상 — 처음부터 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+            oldest = "0"
+    # 환경변수는 **cursor 가 있어도** 우선한다. 파일 부재 시에만 적용되면, 백로그에
+    # 막힌 운영 중 노드에서 문서가 처방한 탈출구가 동작하지 않는다 (QA 실측).
+    forced = os.environ.get("CONSORTIUM_SLACK_OLDEST", "").strip()
+    if forced:
+        try:
+            if float(forced) > float(oldest or 0):
+                print(f"  ℹ️ CONSORTIUM_SLACK_OLDEST={forced} — 시작점을 앞당긴다 "
+                      f"(이전 cursor={oldest}, 그 사이 미수신분은 건너뛴다)")
+                oldest = forced
+        except (TypeError, ValueError):
+            print(f"  ⚠️ CONSORTIUM_SLACK_OLDEST 형식 오류(무시): {forced[:40]!r}")
 
     # `conversations.history` 는 `oldest` 이후 구간에서 **최신 쪽 limit 건의 창**만 주고
     # 나머지는 `has_more` + `next_cursor` 로 넘긴다. 창만 처리하고 cursor 를 그 창의
@@ -869,6 +901,10 @@ def _send_telegram() -> int:
     for mf in pending:
         try:
             m = json.loads(mf.read_text(encoding="utf-8"))
+            if not isinstance(m, dict):
+                # 파싱은 성공해도 타입이 다르면 바로 뒤의 `.get()` 이 try **밖**에서
+                # 터진다 — 유효한 JSON `[1,2]` 하나로 발신 큐가 영구 정지했다(실측).
+                raise TypeError(f"계약이 객체가 아님: {type(m).__name__}")
         except Exception as exc:  # noqa: BLE001 — 찢어진 파일 하나가 발신 전체를 막지 않는다
             print(f"  ❌ {mf.name} — 읽기 실패: {type(exc).__name__}: {str(exc)[:80]}")
             continue
@@ -932,9 +968,13 @@ def _receive_telegram() -> int:
     for upd in updates:
         uid = upd.get("update_id") if isinstance(upd, dict) else None
         # 수신 범위를 설정된 chat 으로 **못 박는다**. 이게 없으면 봇 DM 이 주입구가 된다.
+        # 이 추출도 per-item try **밖**이므로 타입을 직접 눌러야 한다 — `chat` 이
+        # 문자열/배열이면 AttributeError 가 루프를 탈출해 offset 이 멈추고, 매 폴링
+        # 같은 update 에서 죽는다 (Teams 의 gid 추출과 같은 자리).
         holder = next((upd.get(k) for k in ("message", "edited_message", "channel_post")
                        if isinstance(upd, dict) and isinstance(upd.get(k), dict)), None)
-        origin = str((holder or {}).get("chat", {}).get("id", ""))
+        chat = (holder or {}).get("chat")
+        origin = str(chat.get("id", "")) if isinstance(chat, dict) else ""
         if origin != chat_id:
             skipped += 1
             if isinstance(uid, int) and uid >= highest:
@@ -1093,7 +1133,15 @@ def _send_openclaw(platform: str) -> int:
     sent_dir = _OUTBOX / "sent"
     sent_dir.mkdir(exist_ok=True)
     for mf in pending:
-        m = json.loads(mf.read_text(encoding="utf-8"))
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+            if not isinstance(m, dict):
+                # 파싱은 성공해도 타입이 다르면 바로 뒤의 `.get()` 이 try **밖**에서
+                # 터진다 — 유효한 JSON `[1,2]` 하나로 발신 큐가 영구 정지했다(실측).
+                raise TypeError(f"계약이 객체가 아님: {type(m).__name__}")
+        except Exception as exc:  # noqa: BLE001 — 찢어진 파일 하나가 발신 전체를 막지 않는다
+            print(f"  ❌ {mf.name} — 읽기 실패: {type(exc).__name__}: {str(exc)[:80]}")
+            continue
         card = _build_teams_card(m)  # 사람용 text + base64 계약 봉투 재사용 (무손실)
         record = {
             "channel": platform,                         # msteams/slack/telegram …

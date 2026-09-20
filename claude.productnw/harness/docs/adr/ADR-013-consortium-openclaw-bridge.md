@@ -48,7 +48,7 @@ agent_type > 기본 claude-code)에 따라 선택한다:
 > 계약 검증·파일명 위생·유일성을 소유하고, `_receive_*` 는 "후보 레코드를 가져온다" +
 > 성공 후 장부(seen 기록 vs 파일 이동)만 남긴다.
 >
-> **예외 격리는 호출자에 둔다** — `_ingest_record` 가 아니라 두 `_receive_*` 의
+> **예외 격리는 호출자에 둔다** — `_ingest_record` 가 아니라 각 `_receive_*` 의
 > per-item `except Exception` 이다. 격리 **동작**(quarantine 이동 vs seen 기록 후 건너뜀)이
 > transport 마다 다르기 때문이다. 경계 함수는 `RejectedRecord` 를 올리고, 무엇을 할지는
 > 장부를 소유한 쪽이 정한다. 두 호출자가 **같은 형태**(`except Exception`)를 쓰는지는
@@ -145,8 +145,11 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 지시를 준다)에는 여전히 유효하므로 그 범위로 좁혀 남겼다 — 할 수 없는 것을 할 수
 있다고 적지 않는 것이 이 파일의 규율이다.
 
-**세 transport 는 같은 수신 경계를 쓴다** — `_ingest_record` (결정 1 정정).
-`ReceiveBoundaryParityTest` 가 **같은 악성 입력 5종을 세 transport 에** 태워 잠근다.
+**네 수신 경로가 같은 경계를 쓴다** — `_ingest_record` (결정 1 정정):
+teams(Graph) · slack(history) · telegram(getUpdates) · openclaw(드롭).
+`ReceiveBoundaryParityTest` 는 같은 악성 입력 5종을 **openclaw·slack·teams 셋에**
+태운다. Telegram 은 `TelegramHumanLoopTest` 가 따로 덮는다 — parity 에 넣으려면
+사람 작성자 모델이 필요해서다(봇 글은 애초에 전달되지 않는다).
 transport 별 사본 테스트를 만들면 테스트가 같은 병에 걸린다 — 실제로 Slack 을 이
 parity 에 등재하자마자 사본 테스트가 놓쳤을 결함(보존 실패 시 `break` 로 뒤의 정상분이
 막힘)이 즉시 잡혔다.
@@ -162,7 +165,7 @@ parity 에 등재하자마자 사본 테스트가 놓쳤을 결함(보존 실패
 보존까지 실패하면 그 지점부터 cursor 를 **동결**한다 — 루프는 계속 돌려 뒤의 정상분을
 막지 않는다.
 
-**검증 범위**: mock Web API 로 Slack 왕복 4건 + parity 5종 실측. **실제 Slack 앱 연동은
+**검증 범위**: mock Web API 로 Slack 왕복 9건 + parity 5종×3 transport 실측. **실제 Slack 앱 연동은
 미검증** (자격증명은 사용자 소유 — d-3 경계). 설치 절차는 `docs/consortium-gateway-setup.md §2`.
 
 **본문 상한**: Telegram 은 4096자를 넘으면 **거부**하고 outbox 에 남긴다. 봉투가 잘리면

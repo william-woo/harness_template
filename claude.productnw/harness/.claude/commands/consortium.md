@@ -45,7 +45,7 @@ CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
   python3 .claude/bin/consortium.py gateway slack --send       # outbox→채널 발신
 CONSORTIUM_SLACK_TOKEN="$(< ~/.config/consortium/slack_token.txt)" \
 CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
-  python3 .claude/bin/consortium.py gateway slack --receive --poll 20   # 채널→inbox
+  python3 .claude/bin/consortium.py gateway slack --receive --poll 60   # 채널→inbox
 # 대안: Teams (사내 표준이 Teams 인 조직)
 CONSORTIUM_TEAMS_WEBHOOK="$(< ~/.config/consortium/teams_webhook.txt)" \
   python3 .claude/bin/consortium.py gateway teams --send
