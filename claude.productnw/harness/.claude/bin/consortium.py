@@ -561,9 +561,11 @@ def _slack_api(token: str, method: str, payload: dict, get: bool = False) -> tup
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code} {_safe_err(exc)[:300]}"
+        return False, f"HTTP {exc.code} {_safe_err(exc, url)[:300]}"
     except Exception as exc:  # noqa: BLE001 — 네트워크 경계
-        return False, f"요청 실패: {_safe_err(exc)}"
+        # `url` 을 secret 으로 넘긴다 — 경로에 토큰이 박혀 있고, 토큰에 공백이
+        # 있으면 `_TOKEN_RE`(`[^/\s]+`)가 거기서 끊겨 매치에 실패한다 (실측 노출).
+        return False, f"요청 실패: {_safe_err(exc, url)}"
     if not isinstance(body, dict):
         return False, f"응답이 객체가 아님: {type(body).__name__}"
     if not body.get("ok"):
@@ -638,7 +640,9 @@ def _receive_slack() -> int:
 
     _INBOX.mkdir(parents=True, exist_ok=True)
     cursor_file = _STATE / "slack-cursor.json"
-    oldest = "0"
+    # 첫 폴링은 기본적으로 **채널 전체 이력**을 훑는다. 긴 채널에 합류하는 노드는
+    # 이 값을 주어 시작점을 옮긴다 (`date +%s` 또는 메시지 ts).
+    oldest = os.environ.get("CONSORTIUM_SLACK_OLDEST", "").strip() or "0"
     if cursor_file.exists():
         try:
             oldest = str(json.loads(cursor_file.read_text(encoding="utf-8"))["oldest"])
@@ -679,19 +683,16 @@ def _receive_slack() -> int:
         truncated = True
         print("  ⚠️ 페이지 상한(50) 도달 — cursor 를 전진시키지 않는다")
 
-    # **전부 받지 못했으면 이번 폴링은 아무것도 처리하지 않는다** (all-or-nothing).
+    # 수집이 불완전해도 **받은 것은 처리한다**. 두 번의 오답을 거쳐 여기 왔다:
+    #   ① 창 하나만 처리하고 cursor 를 올림 → 더 오래된 미처리분 **소실**
+    #   ② 전부 못 받으면 아무것도 처리 안 함(all-or-nothing) → **기아**.
+    #      실측: 51페이지 백로그(상한 50)에서 폴링 3회 모두 0건, 그 사이 발신한
+    #      **신규 메시지조차 영원히 도착하지 않는다**. rc=0 이라 cron 은 성공으로 본다.
     #
-    # 앞선 수정은 "수집분은 처리하되 cursor 만 동결" 이었는데, Slack 경로엔 Teams 의
-    # `seen` 같은 dedup 이 없어 **다음 폴링이 같은 창을 다시 적재**했다 (실측:
-    # 폴링 3회에 inbox 2→4→6, `-1`,`-2`… 로 복제). 소실을 막으려다 복제를 연 것이다.
-    # 불변식은 "cursor 도 **처리도** 접두만" 이어야 한다. 진행이 멈추면 그 사실이
-    # 로그로 드러나는 편이, 조용히 불어나는 inbox 보다 낫다.
-    if truncated:
-        print("[consortium] ⚠️ Slack 폴링 중단 — 페이지를 전부 받지 못해 **이번 회차는 "
-              "처리하지 않는다**(재적재 방지). 다음 폴링에서 같은 지점부터 다시 시도한다.")
-        print("     계속 반복되면: 채널 이력이 너무 길거나(첫 폴링은 전체 이력) rate limit 이다 —")
-        print("     docs/consortium-gateway-setup.md §2-6 참조.")
-        return 0
+    # ①의 진짜 원인은 부분 처리가 아니라 **dedup 부재**였다. Teams 의 `received-seen.json`
+    # 과 대칭으로 `slack-seen.json` 을 두면 부분 처리해도 재적재되지 않는다.
+    # → 최신 창은 매 폴링 흐르고(기아 없음), 오래된 구간은 한산할 때 따라잡는다.
+    #   cursor 는 여전히 **완전 수집한 회차에만** 전진한다(소실 없음).
 
     # 정렬 순서를 API 에 의존하지 않는다 — 문서가 순서를 명시하지 않으므로
     # 관측에 기대면 조용히 어긋난다. ts 로 직접 오름차순 정렬한다.
@@ -715,10 +716,24 @@ def _receive_slack() -> int:
     # cursor 는 **보존 또는 처리된 접두**까지만 전진시킨다. 한 건이라도 보존에
     # 실패하면 거기서 멈춘다 — 전진시켜 버리면 다음 폴링이 그 메시지를 건너뛰고
     # 원본은 어디에도 남지 않는다 (큐의 최소 계약 위반).
+    # `seen` 은 부분 처리의 멱등 장치다 — cursor 가 동결돼도 재적재를 막는다.
+    seen_file = _STATE / "slack-seen.json"
+    seen: set[str] = set()
+    if seen_file.exists():
+        try:
+            seen = set(json.loads(seen_file.read_text(encoding="utf-8")))
+        except Exception as exc:  # noqa: BLE001 — 멱등 힌트일 뿐, 깨져도 수신은 계속된다
+            print(f"  ⚠️ seen 기록 손상 — 빈 상태로 재시작(중복 적재 가능): "
+                  f"{type(exc).__name__}: {str(exc)[:60]}")
+
     advanced = oldest
-    frozen = False
+    frozen = truncated   # 다 못 받았으면 cursor 는 멈춘다 (더 오래된 쪽이 미수집)
     for msg in messages:
         ts = str(msg.get("ts", "")) if isinstance(msg, dict) else ""
+        if ts and ts in seen:
+            continue                      # 이미 처리한 것 (부분 처리 회차의 잔상)
+        if ts:
+            seen.add(ts)
         try:
             if _ingest_record(msg, me, _safe_component(ts, "x"),
                               extra={"slack_ts": ts, "slack_channel": channel}) is None:
@@ -751,12 +766,29 @@ def _receive_slack() -> int:
         tmp = cursor_file.with_suffix(".json.tmp")
         tmp.write_text(json.dumps({"oldest": advanced}), encoding="utf-8")
         os.replace(tmp, cursor_file)
+        # cursor 이하는 다시 조회되지 않으므로 seen 에서 덜어낸다 (무한 증가 방지).
+        try:
+            bound = float(advanced)
+            seen = {t for t in seen if float(t) > bound}
+        except (TypeError, ValueError):
+            pass
+    tmp_seen = seen_file.with_suffix(".json.tmp")
+    tmp_seen.write_text(json.dumps(sorted(seen)), encoding="utf-8")
+    os.replace(tmp_seen, seen_file)
 
     tail = ((f", 거부 {rejected}건" if rejected else "")
             + (f", 실패 {failed}건 slack-quarantine/ 보존" if failed else "")
             )
+    if truncated:
+        tail += ", ⚠️ 페이지 미완 — cursor 동결(오래된 구간은 다음 폴링)"
     print(f"[consortium] Slack 수신 완료: {ingested}건 inbox 적재 "
           f"(미적재 {skipped}건 — 타팀행·비consortium, cursor={advanced}{tail})")
+    if truncated:
+        # rc 를 구분한다 — `--poll` 루프는 rc 를 안 보므로 데몬은 영향 없고,
+        # 1회 실행·cron 은 "받긴 받았지만 뒤가 남았다" 를 알아챈다.
+        print("     계속 반복되면 채널 이력이 너무 길거나 rate limit 이다 — "
+              "docs/consortium-gateway-setup.md §2-6 참조.")
+        return 2
     return 0
 
 
@@ -801,9 +833,11 @@ def _telegram_api(token: str, method: str, payload: dict) -> tuple[bool, dict | 
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
-        return False, f"HTTP {exc.code} {_safe_err(exc)[:300]}"
+        return False, f"HTTP {exc.code} {_safe_err(exc, url)[:300]}"
     except Exception as exc:  # noqa: BLE001 — 네트워크 경계
-        return False, f"요청 실패: {_safe_err(exc)}"
+        # `url` 을 secret 으로 넘긴다 — 경로에 토큰이 박혀 있고, 토큰에 공백이
+        # 있으면 `_TOKEN_RE`(`[^/\s]+`)가 거기서 끊겨 매치에 실패한다 (실측 노출).
+        return False, f"요청 실패: {_safe_err(exc, url)}"
     if not isinstance(body, dict):
         return False, f"응답이 객체가 아님: {type(body).__name__}"
     if not body.get("ok"):

@@ -105,7 +105,7 @@ consortium.py 는 stdlib only(json/argparse/urllib/pathlib). 게이트웨이도 
   (single-host 의 암묵 공유 불가). 명시 전달만이 표준.
 - **인증 경계**: 게이트웨이 = 외부 메시징 = #3-A. 토큰·봇 등록은 사용자 승인·다운스트림 책임.
 - **결과적 일관성**: 비동기 큐 — 즉시성·순서 보장 없음. cycle_id 로 추적.
-- **검증 범위**: 로컬 큐 + Slack★/Teams/OpenClaw **mock 왕복** E2E 검증 완료(39건).
+- **검증 범위**: 로컬 큐 + Slack★/Teams/OpenClaw **mock 왕복** E2E 검증 완료(42건).
   **실제 워크스페이스 연동은 미검증** — 자격증명이 사용자 소유라 우리가 돌려 볼 수 없다
   (d-2 의 localllm 이 32B 환경을 다운스트림에 위임한 것과 같은 정직한 경계).
 

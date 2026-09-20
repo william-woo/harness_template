@@ -1141,12 +1141,16 @@ class SlackGatewayRoundTripTest(unittest.TestCase):
         recv_mod._slack_api = flaky
         _SL_PAGE_CAP = 2
         try:
-            self.assertEqual(recv_mod._receive_slack(), 0, "부분 수집이 루프를 죽였다")
+            self.assertEqual(recv_mod._receive_slack(), 2, "truncated 인데 rc 로 구분되지 않는다")
         finally:
             _SL_PAGE_CAP = 200
             recv_mod._slack_api = real
         self.assertFalse((recv_root / ".claude/state/consortium/slack-cursor.json").exists(),
                          "페이지를 다 못 받았는데 cursor 가 전진했다 — 오래된 구간이 소실된다")
+        # cursor 는 멈추되 **받은 것은 처리**한다 — 멈추기만 하면 기아다.
+        self.assertGreater(
+            len(list((recv_root / ".claude/state/consortium/inbox").glob("*.json"))), 0,
+            "부분 수집분이 처리되지 않았다")
 
     def test_수집이_계속_끊겨도_inbox_가_불어나지_않는다(self):
         """cursor 만 동결하고 **처리는 하면** 매 폴링 재적재된다 (리뷰 MUST).
@@ -1177,17 +1181,28 @@ class SlackGatewayRoundTripTest(unittest.TestCase):
 
         recv_mod._slack_api = flaky
         _SL_PAGE_CAP = 2
+        inbox = recv_root / ".claude/state/consortium/inbox"
         counts = []
         try:
             for _ in range(3):
-                self.assertEqual(recv_mod._receive_slack(), 0)
-                counts.append(len(list(
-                    (recv_root / ".claude/state/consortium/inbox").glob("*.json"))))
+                # truncated 는 rc=2 — "받긴 받았지만 뒤가 남았다"
+                self.assertEqual(recv_mod._receive_slack(), 2)
+                counts.append(len(list(inbox.glob("*.json"))))
         finally:
             _SL_PAGE_CAP = 200
             recv_mod._slack_api = real
         self.assertEqual(len(set(counts)), 1,
                          f"폴링마다 inbox 가 불어난다(재적재): {counts}")
+        # **0건이면 이 단언이 공허하게 통과한다** — 기아를 "정상" 으로 잠그는 것이
+        # 직전 라운드의 실수였다. 부분 처리가 실제로 일어났는지 함께 본다.
+        self.assertGreater(counts[0], 0, "부분 수집분이 처리되지 않았다 — 기아")
+
+        # 수집이 정상화되면 나머지가 따라온다 (복구 경로)
+        self.assertEqual(recv_mod._receive_slack(), 0, "정상 수집인데 rc≠0")
+        arrived = sorted(json.loads(f.read_text(encoding="utf-8"))["msg"]
+                         for f in inbox.glob("*.json"))
+        self.assertEqual(arrived, sorted(f"MSG-{i}" for i in range(5)),
+                         f"복구 후에도 누락/중복: {arrived}")
 
     def test_창이_여러_개여도_재폴링에_재적재되지_않는다(self):
         """첫 폴링은 `oldest=0` 이라 채널 전체 이력을 훑는다 — 창이 여러 개다."""
@@ -1213,6 +1228,54 @@ class SlackGatewayRoundTripTest(unittest.TestCase):
         self.assertEqual(first, sorted(f"MSG-{i}" for i in range(4)),
                          f"여러 창에 걸친 메시지가 소실됐다: {first}")
         self.assertEqual(first, second, f"재폴링에 재적재됐다: {first} → {second}")
+
+    def test_백로그가_상한을_넘어도_신규_메시지는_도착한다(self):
+        """all-or-nothing 이 만든 **기아** (리뷰 MUST).
+
+        "전부 못 받으면 아무것도 처리 안 함" 으로 하자, 51페이지 백로그(상한 50)에서
+        폴링 3회 모두 0건이고 **그 사이 발신한 신규 메시지조차 영원히 도착하지
+        않았다**. rc=0 이라 cron 은 성공으로 본다.
+
+        부분 처리 + `slack-seen.json` dedup 이 정답이다 — 최신 창은 매 폴링 흐르고
+        오래된 구간은 한산할 때 따라잡는다.
+        """
+        global _SL_PAGE_CAP
+        send_mod, _ = self._node("sl-a", "team-a")
+        for i in range(4):
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", f"BL{i}", "--msg", f"OLD-{i}"])
+            send_mod._send_slack()
+
+        recv_mod, recv_root = self._node("sl-b", "team-b")
+        inbox = recv_root / ".claude/state/consortium/inbox"
+        real = recv_mod._slack_api
+        calls = {"n": 0}
+
+        def flaky(tok, method, payload, get=False):
+            calls["n"] += 1
+            if calls["n"] % 3 == 0:            # 3요청마다 실패 → 상시 truncated
+                return False, "요청 실패: mock outage"
+            return real(tok, method, payload, get=get)
+
+        recv_mod._slack_api = flaky
+        _SL_PAGE_CAP = 1
+        try:
+            recv_mod._receive_slack()
+            # 백로그가 남은 상태에서 **신규** 메시지가 온다
+            self._run(send_mod, ["send", "--to", "team-b", "--role", "developer",
+                                 "--cycle", "NEW", "--msg", "NEW-MSG"])
+            send_mod._send_slack()
+            recv_mod._receive_slack()
+            recv_mod._receive_slack()
+        finally:
+            _SL_PAGE_CAP = 200
+            recv_mod._slack_api = real
+
+        arrived = [json.loads(f.read_text(encoding="utf-8"))["msg"]
+                   for f in inbox.glob("*.json")]
+        self.assertIn("NEW-MSG", arrived,
+                      f"백로그에 막혀 신규 메시지가 도착하지 않았다(기아): {sorted(arrived)}")
+        self.assertEqual(len(arrived), len(set(arrived)), f"중복 적재: {sorted(arrived)}")
 
     def test_처리_실패분은_원본을_보존하고_cursor_를_멈춘다(self):
         """cursor 전진은 '보존 또는 처리된 접두' 까지만 — 안 그러면 소실된다 (MUST-3)."""

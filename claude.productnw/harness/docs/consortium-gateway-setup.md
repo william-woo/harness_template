@@ -151,7 +151,17 @@ CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
   다른 채널·DM 이 주입구가 되지 않는다.
 - **지목 필터**: 채널은 공유되므로 `to_team` 이 내가 아니거나 `from_team` 이 나면 무시한다.
 - **계약 검증은 양방향**: 수신분도 `_validate_message` 를 통과해야 적재된다 (ADR-012 결정 3).
-- **한 번에 200건**: 더 있으면 `⚠️ 더 있음(다음 폴링)` 이 뜬다. `--poll` 이면 자동으로 따라잡는다.
+- **페이지네이션**: 한 폴링이 `next_cursor` 로 페이지를 **전부 모은 뒤** 처리한다.
+  다 받지 못하면(네트워크 실패·페이지 50개 상한) 받은 것은 **처리하되**
+  cursor 를 **동결**하고 `rc=2` 로 끝낸다 — 오래된 미수집 구간을 건너뛰지 않기 위해서다.
+  재적재는 `slack-seen.json` 이 막는다. 최신 창은 매 폴링 흐르므로 백로그가 길어도
+  **신규 메시지는 막히지 않는다**.
+- **첫 폴링은 채널 전체 이력**을 훑는다(`oldest=0`). 이미 길게 쓰던 채널에 합류하면
+  여러 회차에 걸쳐 따라잡는다. 건너뛰려면 시작점을 지정한다:
+  `CONSORTIUM_SLACK_OLDEST="$(date +%s).000000"`
+- **rate limit**: 앱을 Slack Marketplace 에 배포하지 말고 **워크스페이스 내부 앱**으로
+  두십시오. 비-Marketplace 앱은 `conversations.history` 가 **분당 1회·15건**으로
+  제한되어(2025-05 변경) 백로그를 따라잡는 데 오래 걸립니다.
 
 ### 2-6. 트러블슈팅
 
@@ -163,7 +173,10 @@ CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
 | `API 거부: missing_scope` | `channels:history`(또는 `groups:history`) 누락 → 추가 후 **재설치** |
 | `API 거부: channel_not_found` | 채널 **이름**을 넣었다. `C` 로 시작하는 id 를 쓴다 |
 | 발신은 되는데 수신 0건 | 상대 팀 노드가 **다른 `team-id`** 로 init 됐는지. `to_team` 이 내 팀이어야 적재된다 |
-| 같은 메시지가 반복 적재 | `slack-cursor.json` 손상/삭제 — 경고가 뜨고 처음부터 재시작한다 |
+| 같은 메시지가 반복 적재 | `slack-cursor.json`·`slack-seen.json` 손상/삭제 — 경고가 뜨고 처음부터 재시작한다 |
+| `rc=2` / `⚠️ 페이지 미완` | 정상 동작이다 — 받은 것은 처리했고 오래된 구간이 남았다. 다음 폴링이 이어받는다 |
+| `rc=2` 가 계속 반복 | ① 채널 이력이 길다 → `CONSORTIUM_SLACK_OLDEST` 로 시작점 이동 ② rate limit(비-Marketplace 앱은 분당 1회·15건) → `--poll` 간격을 60초 이상으로 ③ 네트워크 불안정 |
+| 수신이 0건에서 안 늘어남 | 백로그가 상한(50페이지)을 넘었는지 확인. 신규 메시지는 그래도 도착해야 한다 — 안 오면 `to_team`·채널 id 를 먼저 본다 |
 
 ---
 
