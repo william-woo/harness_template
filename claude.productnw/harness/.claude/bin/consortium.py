@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import re
 import sys
@@ -73,11 +74,11 @@ def _detect_host() -> str:
     if env:
         return env
     host_json = _ROOT / ".claude" / "host.json"
-    if host_json.exists():
-        try:
-            return json.loads(host_json.read_text(encoding="utf-8")).get("agent_type", "claude-code")
-        except (json.JSONDecodeError, OSError):
-            pass
+    data = _load_state(host_json, dict, "host.json")
+    if data is not None:
+        agent = data.get("agent_type")
+        if isinstance(agent, str) and agent.strip():
+            return agent.strip()
     return "claude-code"
 
 # 게이트웨이 어댑터 — slack ★권장 / teams 대안 (둘 다 발신+수신 실구현) / telegram 사람 연동 전용.
@@ -136,6 +137,29 @@ def _safe_component(value: str, fallback: str) -> str:
 def _now() -> str:
     """UTC ISO 타임스탬프."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _load_state(path: Path, kind: type, what: str):
+    """상태 파일을 **안전하게** 읽는다 (없거나 이상하면 None).
+
+    파싱만 감싸면 부족하다 — 타입이 다르면 소비 지점에서 터진다. 실측으로 확인된
+    것들: `slack-seen.json` 이 `[1,2]` 면 `sorted(seen)` 이 TypeError 로 죽고 그
+    crash 가 영속 **전**이라 매 폴링 재적재된다. `received-seen.json`·
+    `telegram-offset.json` 은 열거형 except 라 `RecursionError` 를 놓친다.
+
+    상태 파일은 **우리가 쓰지만 디스크가 배신할 수 있는** 입력이다. 여섯 지점이
+    제각각이던 것을 여기 하나로 모은다 — 주소가 하나여야 클래스를 닫을 수 있다.
+    """
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, kind):
+            raise TypeError(f"{kind.__name__} 이 아님: {type(data).__name__}")
+        return data
+    except Exception as exc:  # noqa: BLE001 — 상태 파일도 신뢰 불가 입력이다
+        print(f"  ⚠️ {what} 손상 — 빈 상태로 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+        return None
 
 
 def _write_unique(path: Path, text: str) -> Path:
@@ -265,11 +289,9 @@ def _ingest_record(raw: object, me: str, unique_hint: str, extra: dict | None = 
 
 def _load_roster() -> dict:
     """roster.json 을 읽는다 (없으면 빈 구조)."""
-    if _ROSTER.exists():
-        try:
-            return json.loads(_ROSTER.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
+    data = _load_state(_ROSTER, dict, "로스터")
+    if data is not None and isinstance(data.get("teams"), dict):
+        return data
     return {"teams": {}}
 
 
@@ -576,15 +598,24 @@ def _slack_api(token: str, method: str, payload: dict, get: bool = False) -> tup
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
+        if exc.code == 429:
+            # rate limit 은 **회복 가능한** 실패다. 다른 오류와 구분해야 호출자가
+            # 기다렸다 이어서 완주할 수 있다 — 구분이 없으면 Marketplace 미등재 앱
+            # (분당 1회) 체제에서 cursor 가 영구 동결되고 tail 이 영원히 안 온다.
+            try:
+                wait = int((exc.headers or {}).get("Retry-After", "") or 0)
+            except (TypeError, ValueError):
+                wait = 0
+            return False, {"rate_limited": True, "retry_after": max(0, min(wait, 60))}
         return False, f"HTTP {exc.code} {_safe_err(exc, url)[:300]}"
     except Exception as exc:  # noqa: BLE001 — 네트워크 경계
-        # `url` 을 secret 으로 넘긴다 — 경로에 토큰이 박혀 있고, 토큰에 공백이
-        # 있으면 `_TOKEN_RE`(`[^/\s]+`)가 거기서 끊겨 매치에 실패한다 (실측 노출).
         return False, f"요청 실패: {_safe_err(exc, url)}"
     if not isinstance(body, dict):
         return False, f"응답이 객체가 아님: {type(body).__name__}"
     if not body.get("ok"):
         # Slack 은 실패도 HTTP 200 으로 준다 — ok 플래그를 봐야 한다.
+        if body.get("error") == "ratelimited":
+            return False, {"rate_limited": True, "retry_after": 0}
         return False, f"API 거부: {str(body.get('error'))[:200]}"
     return True, body
 
@@ -663,11 +694,12 @@ def _receive_slack() -> int:
     # 이 값을 주어 시작점을 옮긴다 (`date +%s` 또는 메시지 ts).
     oldest = "0"
     if cursor_file.exists():
+        raw_cursor = _load_state(cursor_file, dict, "slack-cursor 기록")
         try:
-            oldest = str(json.loads(cursor_file.read_text(encoding="utf-8"))["oldest"])
-            float(oldest)   # 의미 검증 — "garbage" 가 들어가면 이후 폴링이 전부 rc=1 이다
-        except Exception as exc:  # noqa: BLE001 — 멱등 힌트일 뿐, 깨져도 수신은 계속된다
-            print(f"  ⚠️ cursor 기록 손상 — 처음부터 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+            oldest = str((raw_cursor or {})["oldest"])
+            if not math.isfinite(float(oldest)):   # inf/nan 은 API 가 매번 거부한다
+                raise ValueError(f"유한수가 아님: {oldest}")
+        except Exception:  # noqa: BLE001
             oldest = "0"
     # 환경변수는 **cursor 가 있어도** 우선한다. 파일 부재 시에만 적용되면, 백로그에
     # 막힌 운영 중 노드에서 문서가 처방한 탈출구가 동작하지 않는다 (QA 실측).
@@ -693,7 +725,20 @@ def _receive_slack() -> int:
         if next_cursor:
             payload["cursor"] = next_cursor
         ok, body = _slack_api(token, "conversations.history", payload, get=True)
+        if not ok and isinstance(body, dict) and body.get("rate_limited"):
+            # 유계 재시도 — 같은 페이지를 최대 2회까지 기다렸다 다시 받는다.
+            # 무한 대기는 `--poll` 데몬을 멈추고, 재시도가 없으면 이 체제에서
+            # 페이지네이션이 영원히 완주하지 못한다 (실측: tail 6건 영구 미도달).
+            for attempt in (1, 2):
+                wait = body.get("retry_after") or (attempt * 20)
+                print(f"  ⏳ rate limit — {wait}s 대기 후 재시도 ({attempt}/2)")
+                time.sleep(min(wait, 60))
+                ok, body = _slack_api(token, "conversations.history", payload, get=True)
+                if ok or not (isinstance(body, dict) and body.get("rate_limited")):
+                    break
         if not ok:
+            if isinstance(body, dict):
+                body = "rate limit (재시도 소진)"
             if pages:
                 # 일부만 받았다면 그 구간만 처리하고, 못 받은 더 오래된 구간을
                 # 건너뛰지 않도록 cursor 를 **전진시키지 않는다**.
@@ -708,7 +753,8 @@ def _receive_slack() -> int:
             return 1
         pages.extend(chunk)
         prev_cursor = next_cursor
-        next_cursor = ((body.get("response_metadata") or {}).get("next_cursor") or "")
+        meta = body.get("response_metadata")
+        next_cursor = (meta.get("next_cursor") or "") if isinstance(meta, dict) else ""
         if not body.get("has_more") or not next_cursor or next_cursor == prev_cursor:
             break   # 같은 커서를 반복 주는 비정상 서버에서 무한 루프를 막는다
     else:
@@ -750,13 +796,8 @@ def _receive_slack() -> int:
     # 원본은 어디에도 남지 않는다 (큐의 최소 계약 위반).
     # `seen` 은 부분 처리의 멱등 장치다 — cursor 가 동결돼도 재적재를 막는다.
     seen_file = _STATE / "slack-seen.json"
-    seen: set[str] = set()
-    if seen_file.exists():
-        try:
-            seen = set(json.loads(seen_file.read_text(encoding="utf-8")))
-        except Exception as exc:  # noqa: BLE001 — 멱등 힌트일 뿐, 깨져도 수신은 계속된다
-            print(f"  ⚠️ seen 기록 손상 — 빈 상태로 재시작(중복 적재 가능): "
-                  f"{type(exc).__name__}: {str(exc)[:60]}")
+    raw_seen = _load_state(seen_file, list, "slack-seen 기록")
+    seen: set[str] = {t for t in (raw_seen or []) if isinstance(t, str)}
 
     advanced = oldest
     frozen = truncated   # 다 못 받았으면 cursor 는 멈춘다 (더 오래된 쪽이 미수집)
@@ -764,8 +805,10 @@ def _receive_slack() -> int:
         ts = str(msg.get("ts", "")) if isinstance(msg, dict) else ""
         if ts and ts in seen:
             continue                      # 이미 처리한 것 (부분 처리 회차의 잔상)
-        if ts:
-            seen.add(ts)
+        # seen 등재는 **처리가 확정된 뒤**다. try 앞에서 등재하면 보존까지 실패한
+        # 메시지도 "처리됨" 으로 남아, 동결이 약속한 재시도가 무효가 되고 원본이
+        # 어디에도 없이 사라진다 (실측: MSG-2 가 inbox·quarantine 둘 다 없음).
+        handled = True
         try:
             if _ingest_record(msg, me, _safe_component(ts, "x"),
                               extra={"slack_ts": ts, "slack_channel": channel}) is None:
@@ -787,6 +830,9 @@ def _receive_slack() -> int:
                 print(f"     ↳ 원본 보존 실패 — cursor 를 여기서 동결한다: "
                       f"{type(keep_exc).__name__}: {str(keep_exc)[:60]}")
                 frozen = True
+                handled = False   # 원본이 어디에도 없다 — 다음 폴링이 다시 받아야 한다
+        if ts and handled:
+            seen.add(ts)
         if ts and not frozen:
             try:
                 float(ts)          # 파싱 불가 ts 를 cursor 에 넣으면 이후 폴링이 전부 실패한다
@@ -801,9 +847,19 @@ def _receive_slack() -> int:
         # cursor 이하는 다시 조회되지 않으므로 seen 에서 덜어낸다 (무한 증가 방지).
         try:
             bound = float(advanced)
-            seen = {t for t in seen if float(t) > bound}
         except (TypeError, ValueError):
-            pass
+            bound = None
+        if bound is not None:
+            # 원소별로 거른다 — 하나가 파싱 불가라고 prune 전체를 포기하면
+            # seen 이 영영 줄지 않는다 (실측: `["abc"]` 하나로 전체 중단).
+            kept = set()
+            for t in seen:
+                try:
+                    if float(t) > bound:
+                        kept.add(t)
+                except (TypeError, ValueError):
+                    continue      # 파싱 불가 항목은 버린다
+            seen = kept
     tmp_seen = seen_file.with_suffix(".json.tmp")
     tmp_seen.write_text(json.dumps(sorted(seen)), encoding="utf-8")
     os.replace(tmp_seen, seen_file)
@@ -949,11 +1005,12 @@ def _receive_telegram() -> int:
     offset_file = _STATE / "telegram-offset.json"
     # offset 은 멱등 힌트다. 깨져도 수신은 계속되어야 한다 (seen 과 같은 규율).
     offset = 0
-    if offset_file.exists():
+    raw_offset = _load_state(offset_file, dict, "telegram-offset 기록")
+    if raw_offset is not None:
         try:
-            offset = int(json.loads(offset_file.read_text(encoding="utf-8"))["offset"])
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError, KeyError, TypeError, ValueError) as exc:
-            print(f"  ⚠️ offset 기록 손상 — 0 에서 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+            offset = int(raw_offset["offset"])
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠️ offset 값 이상 — 0 에서 재시작: {type(exc).__name__}")
 
     ok, result = _telegram_api(token, "getUpdates", {"offset": offset, "timeout": 0})
     if not ok:
@@ -1060,12 +1117,8 @@ def _receive_teams() -> int:
     # `_write_unique` 도입 후 의미론이 at-most-once → at-least-once 로 바뀌었다).
     # 유실보다 중복을 택한 것이고, 소비측은 `graph_msg_id` 로 dedupe 하면 된다.
     # 읽기를 무방어로 두면 torn write 한 번에 Teams 수신이 **영구 정지**한다.
-    seen: set[str] = set()
-    if seen_file.exists():
-        try:
-            seen = set(json.loads(seen_file.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError, TypeError) as exc:
-            print(f"  ⚠️ seen 기록 손상 — 빈 상태로 재시작: {type(exc).__name__}: {str(exc)[:60]}")
+    raw_seen = _load_state(seen_file, list, "received-seen 기록")
+    seen: set[str] = {t for t in (raw_seen or []) if isinstance(t, str)}
 
     url = f"{_GRAPH_BASE}/teams/{team_id}/channels/{channel_id}/messages?$top=50"
     ok, data = _graph_get(url, token)

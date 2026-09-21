@@ -17,6 +17,7 @@
 import importlib.util
 import sys
 import io
+import json
 import os
 import tempfile
 import contextlib
@@ -198,6 +199,72 @@ class OutboxPoisonTest(unittest.TestCase):
                         self.fail(f"{name} 이 {poison!r} 에 죽었다: {type(exc).__name__}: {exc}")
                     self.assertIn("읽기 실패", buf.getvalue(),
                                   f"{name} 이 {poison!r} 를 건너뛰었다고 보고하지 않았다")
+
+
+class StateFilePoisonTest(unittest.TestCase):
+    """상태 파일 5종 × 오염 5종을 **한 목록으로** 돈다 (F019 9차 MUST-2).
+
+    `OutboxPoisonTest` 와 같은 설계다. 여섯 지점이 제각각 방어하던 것을
+    `_load_state` 하나로 모았고, 이 테스트가 그 단일 주소를 지킨다.
+
+    실측으로 확인됐던 것들: `slack-seen.json` 이 `[1,2]` 면 `sorted(seen)` 이
+    TypeError 로 죽고 그 crash 가 영속 **전**이라 매 폴링 재적재됐다.
+    `received-seen.json`·`telegram-offset.json` 은 열거형 except 라 깊은 중첩의
+    `RecursionError` 를 놓쳤다 — 이 파일이 세 라운드에 걸쳐 배운 바로 그 교훈이다.
+    """
+
+    POISONS = ("{ torn", "[1, 2]", '"just a string"', "null", "[" * 100000)
+    STATE_FILES = ("slack-seen.json", "received-seen.json", "telegram-offset.json",
+                   "slack-cursor.json", "roster.json")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._env = {k: os.environ.get(k) for k in
+                     ("CLAUDE_PROJECT_DIR", "CONSORTIUM_SLACK_TOKEN", "CONSORTIUM_SLACK_CHANNEL",
+                      "CONSORTIUM_TELEGRAM_TOKEN", "CONSORTIUM_TELEGRAM_CHAT_ID",
+                      "CONSORTIUM_TEAMS_TOKEN", "CONSORTIUM_TEAMS_TEAM_ID",
+                      "CONSORTIUM_TEAMS_CHANNEL_ID")}
+        os.environ.update({
+            "CLAUDE_PROJECT_DIR": str(Path(self.tmp.name)),
+            "CONSORTIUM_SLACK_TOKEN": "x", "CONSORTIUM_SLACK_CHANNEL": "C0",
+            "CONSORTIUM_TELEGRAM_TOKEN": "1:x", "CONSORTIUM_TELEGRAM_CHAT_ID": "-100",
+            "CONSORTIUM_TEAMS_TOKEN": "t", "CONSORTIUM_TEAMS_TEAM_ID": "t",
+            "CONSORTIUM_TEAMS_CHANNEL_ID": "c"})
+
+    def tearDown(self):
+        for key, val in self._env.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        self.tmp.cleanup()
+
+    def test_상태파일이_오염돼도_수신이_죽지_않는다(self):
+        for fname in self.STATE_FILES:
+            for poison in self.POISONS:
+                with self.subTest(file=fname, poison=poison[:12]):
+                    spec = importlib.util.spec_from_file_location("consortium_state", _BIN)
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.modules["consortium_state"] = mod
+                    spec.loader.exec_module(mod)
+                    mod._STATE.mkdir(parents=True, exist_ok=True)
+                    if fname != "roster.json":
+                        mod._ROSTER.write_text(
+                            json.dumps({"self": "team-b", "teams": {"team-b": {}}}),
+                            encoding="utf-8")
+                    (mod._STATE / fname).write_text(poison, encoding="utf-8")
+                    # 네트워크는 태우지 않는다 — 이 테스트가 보는 것은 상태 파일이다.
+                    mod._slack_api = lambda *a, **k: (True, {"ok": True, "messages": [],
+                                                             "has_more": False})
+                    mod._graph_get = lambda *a, **k: (True, {"value": []})
+                    mod._telegram_api = lambda *a, **k: (True, [])
+                    for fn in (mod._receive_slack, mod._receive_teams, mod._receive_telegram):
+                        try:
+                            with contextlib.redirect_stdout(io.StringIO()):
+                                fn()
+                        except Exception as exc:  # noqa: BLE001
+                            self.fail(f"{fn.__name__} 이 {fname}={poison[:12]!r} 에 죽었다: "
+                                      f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
