@@ -41,17 +41,26 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 [Gatekeeper](.claude/agents/gatekeeper.md) 가 모든 모호 케이스를 처리.
 
-### 규칙 #3 — 사용자 승인 필수 경계 (2026-08-16 축소)
+### 규칙 #3 — 사용자 승인 필수 경계 (2026-09-17 갱신)
 
-승인이 필요한 것은 **둘뿐**이다 — 나머지는 전부 자율 진행한다:
+승인이 필요한 것은 **셋뿐**이다 — 나머지는 전부 자율 진행한다:
 
 | 경계 | 대상 | 이유 |
 |---|---|---|
 | **3-A 삭제** | `rm` / `rmdir` / `unlink` / `shred` / `git clean` / `trash` / `find … -delete` | 비가역이고, 잘못 지우면 복구가 불가능하다 |
 | **3-B PR 생성·병합** | `gh pr create` / `gh pr merge` | 외부에 공개되고 팀에 알림이 간다 |
+| **3-C Confluence·Jira 쓰기·삭제** | Atlassian 커넥터의 **변경** 도구 전부 — `createConfluencePage` / `updateConfluencePage` / 코멘트 생성 2종 / `createJiraIssue` / `editJiraIssue` / `addCommentToJiraIssue` / `addWorklogToJiraIssue` / `transitionJiraIssue` / `createIssueLink` / Compass 생성 3종 / `addTeamworkGraphContext` | 팀이 보는 기록을 바꾼다. 되돌려도 알림·이력은 남는다 (ADR-023 "발행은 PR 과 같은 승인 층위") |
+
+> **조회는 자동**이다 — `getConfluencePage` / `getPagesInConfluenceSpace` / `searchConfluenceUsingCql` /
+> `getJiraIssue` / `searchJiraIssuesUsingJql` / `getVisibleJiraProjects` / `fetch` / `search` 등
+> read-only 도구는 승인 없이 쓴다. 읽기까지 막으면 조사가 매번 끊긴다.
 
 `permissions.ask` 에 위 패턴을 등재해 자동 허용을 오버라이드한다 (precedence: deny > ask > allow).
 `rm -rf /`·`~`·`$HOME` 류는 `deny` 로 **완전 차단**한다.
+
+> **변형별 적용**: 3-A·3-B 는 자율 변형 14종 전부. 3-C 는 Atlassian 커넥터를 쓰는
+> **vela 계열에만** 등재한다 — LINT-MR-15 의 오버레이 격리를 설정에서도 지킨다
+> (커넥터가 없는 변형에 규칙만 넣으면 영영 매칭되지 않는 죽은 설정이 된다).
 
 > **이전 정책과의 차이**: 계정·인증(`sudo`, `gh auth login`), 외부 디렉토리 접근, 시스템 패키지
 > 설치, `git push` 는 **더 이상 승인을 요구하지 않는다**. 장시간 자율 작업이 프롬프트로 끊기는
@@ -748,8 +757,9 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 한 팀 내 실행 라우팅 → `/project:orchestrate`
 
 **정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
-Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 SDK·웹훅이 필요해 **다운스트림이 봇
-연동**(codex/openclaw stub 와 동일 패턴). 같은 머신/공유 볼륨이면 로컬 큐로 컨소시엄 흐름을 검증 가능.
+**Slack★/Teams 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이고, Telegram 은 봇↔봇을
+플랫폼이 막아 **사람 연동 전용**이다. 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
+자격증명 없이도 로컬 큐로 컨소시엄 흐름을 검증할 수 있다 (graceful degrade).
 팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
 
 **claude.productnw 변형 전용**: 다른 변형엔 consortium.py / consortium.md 가 없어 미인식.
@@ -769,7 +779,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 | **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
-| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + 게이트웨이 stub) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack★/Teams 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
 | **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | **ⓑ¹⁰ `claude.aif/`** (판정 설계 — RLAIF/CAI 규율) | loope 1:1 + aif 오버레이 (항목형 rubric + 증거강제 + 앙상블 + UNCERTAIN) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속, aif 오버레이는 stdlib/문서) |
 | **ⓑ¹¹ `localllm.aif/`** (d-2 + 판정 설계) | localllm 1:1 + aif 오버레이 — **A/B 수치 비교가 가능한 유일한 aif 변형** | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
@@ -785,8 +795,8 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 > **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
 > 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
 > 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
-> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, Teams/Slack/Telegram 게이트웨이는
-> **stub**(codex/openclaw 처럼 안내+graceful degrade — 실제 봇 transport 는 다운스트림 책임). 팀 내부는
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack★/Teams 게이트웨이는
+> 발신·수신 모두 실구현**(polling — ADR-013 결정 5), Telegram 은 봇↔봇 불가라 사람 연동 전용. 팀 내부는
 > single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
 
 > **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
@@ -851,7 +861,7 @@ Teams/Slack/Telegram 게이트웨이는 **stub** — 자격증명(#3-A)·외부 
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
 
 **nw(컨소시엄) 오버레이** (claude.productnw 에만 — F019 신설):
-- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub — stdlib)
+- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + Slack★/Teams 게이트웨이 발신·수신 실구현 — stdlib 폴링)
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 

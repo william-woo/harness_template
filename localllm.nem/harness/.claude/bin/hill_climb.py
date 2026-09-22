@@ -50,32 +50,68 @@ _HIGH_REVISION_RATE = 0.5   # grader 판정 중 revision 비율 이 이상이면
 
 
 def _read_jsonl(path: Path) -> list[dict]:
-    """JSONL 파일을 관대하게 파싱한다 (깨진 줄은 건너뜀). 경계 방어."""
-    rows = []
+    """JSONL 을 관대하게 파싱한다 — **dict 인 줄만** 돌려준다.
+
+    파싱만 방어하고 소비 지점은 dict 를 가정하면, `42` 나 `[1,2]` 한 줄이
+    `l.get(...)` 에서 AttributeError 로 집계 전체를 죽인다. 방어와 소비가 다른
+    주소에 있으면 반드시 어긋난다 — 여기서 타입까지 걸러 한 주소로 모은다.
+    `analytics.jsonl` 은 handoff 가 `>>` 로 append 하는 파일이라 실제로 이런 줄이 생긴다.
+    """
+    rows: list[dict] = []
     if not path.exists():
         return rows
-    for line in path.read_text(encoding="utf-8").splitlines():
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            rows.append(json.loads(line))
+            row = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(row, dict):
+            rows.append(row)
     return rows
 
 
 def _collect_verify_loops() -> list[dict]:
-    """verify-loop 상태 파일들을 읽는다 (Loop 2 트레이스)."""
+    """verify-loop 상태 파일을 읽는다 — **형태가 맞는 것만** (Loop 2 트레이스).
+
+    `attempts` 가 list 가 아니거나 최상위가 dict 가 아니면 소비 지점에서 터진다.
+    깨진 소스는 조용히 빠지지 않고 `skipped` 로 셈해 `self`/`analyze` 에 노출한다.
+    """
     if not _VERIFY_LOOP.exists():
         return []
-    loops = []
+    loops: list[dict] = []
+    skipped = 0
     for p in sorted(_VERIFY_LOOP.glob("*.json")):
         try:
-            loops.append(json.loads(p.read_text(encoding="utf-8")))
-        except json.JSONDecodeError:
+            loop = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError, ValueError):
+            skipped += 1
             continue
+        if not isinstance(loop, dict) or not isinstance(loop.get("attempts"), list):
+            skipped += 1
+            continue
+        loop["attempts"] = [a for a in loop["attempts"] if isinstance(a, dict)]
+        loops.append(loop)
+    if skipped:
+        print(f"[hill-climb] ⚠️ 읽을 수 없는 루프 파일 {skipped}건 건너뜀", file=sys.stderr)
     return loops
+
+
+def _as_int(value: object) -> int | None:
+    """정수로 쓸 수 있으면 정수를, 아니면 None. `bool` 은 제외한다.
+
+    `isinstance(x, int)` 만 쓰면 `True` 가 통과해 `files_changed: true` 가
+    평균 1.0 으로 집계된다 (실측).
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def _signals() -> dict:
@@ -85,13 +121,13 @@ def _signals() -> dict:
     learnings = _read_jsonl(_LEARNINGS)
 
     # ── verify-loop (Loop 2) 신호 ──
-    status_counts = Counter(l.get("status", "?") for l in loops)
-    revisions = [l.get("revision_count", 0) for l in loops]
-    escalated = [l.get("feature", "?") for l in loops if l.get("status") == "escalated"]
+    status_counts = Counter(str(l.get("status", "?")) for l in loops)
+    revisions = [n for n in (_as_int(l.get("revision_count", 0)) for l in loops) if n is not None]
+    escalated = [str(l.get("feature", "?")) for l in loops if l.get("status") == "escalated"]
     grader_verdicts: Counter = Counter()   # (grader, verdict) → n
     for l in loops:
         for a in l.get("attempts", []):
-            grader_verdicts[(a.get("grader", "?"), a.get("verdict", "?"))] += 1
+            grader_verdicts[(str(a.get("grader", "?")), str(a.get("verdict", "?")))] += 1
     # grader 별 revision 비율
     grader_rev_rate = {}
     graders = {g for (g, _v) in grader_verdicts}
@@ -101,16 +137,16 @@ def _signals() -> dict:
         grader_rev_rate[g] = (rev / total) if total else 0.0
 
     # ── analytics 신호 ──
-    ev_counts = Counter(e.get("event", "?") for e in analytics)
+    ev_counts = Counter(str(e.get("event", "?")) for e in analytics)
     handoffs = [e for e in analytics if e.get("event") == "handoff"]
-    features_touched = Counter(e.get("feature_id", "?") for e in handoffs if e.get("feature_id"))
-    files_changed = [e.get("files_changed", 0) for e in handoffs if isinstance(e.get("files_changed"), int)]
-    big_handoffs = [(e.get("feature_id", "?"), e.get("files_changed"))
-                    for e in handoffs if isinstance(e.get("files_changed"), int)
-                    and e.get("files_changed") >= _HIGH_FILES_CHANGED]
+    features_touched = Counter(str(e.get("feature_id", "?")) for e in handoffs if e.get("feature_id"))
+    files_changed = [n for n in (_as_int(e.get("files_changed")) for e in handoffs) if n is not None]
+    big_handoffs = [(str(e.get("feature_id", "?")), _as_int(e.get("files_changed")))
+                    for e in handoffs
+                    if (_as_int(e.get("files_changed")) or 0) >= _HIGH_FILES_CHANGED]
 
     # ── learnings 신호 ──
-    learn_by_type = Counter(l.get("type", "?") for l in learnings)
+    learn_by_type = Counter(str(l.get("type", "?")) for l in learnings)
 
     return {
         "verify_loop": {

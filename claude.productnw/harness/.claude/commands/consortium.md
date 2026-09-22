@@ -14,10 +14,15 @@
 | 구성요소 | 상태 |
 |---|---|
 | 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox) | ✅ **stdlib 로 실재 동작** |
-| Teams/Slack/Telegram 실제 전송 | 🔸 **stub** — 자격증명(#3-A)·외부 SDK·웹훅 필요 → **다운스트림이 봇 연동** |
+| **Slack** 발신+수신 ★권장 | ✅ **실구현** — 봇 토큰 1개 + 채널 id. `conversations.history` 는 채널 **로그 읽기**라 다른 봇의 글도 들어온다 |
+| **Teams** 발신+수신 | ✅ **실구현** — 자격증명 4개 + Azure AD 앱 등록 + 관리자 동의 필요 |
+| Telegram | ⚠️ 발신 + **사람이 쓴 메시지** 수신만 — 봇은 다른 봇의 글을 못 본다(플랫폼 정책) |
 
-→ 같은 머신/공유 볼륨이면 로컬 큐만으로 **협업 흐름·핸드오프를 검증**할 수 있고, 진짜 원격
-멀티팀 메시징은 다운스트림이 게이트웨이 봇을 붙여 완성한다. (분산 메시징 시스템 전체는 하네스 범위 밖.)
+→ 로컬 큐만으로도 **협업 흐름·핸드오프를 검증**할 수 있고, 실제 원격 멀티팀 메시징은
+**Slack 이면 10분**이면 붙는다 (가이드 §2). 컨소시엄은 에이전트↔에이전트라
+**봇이 다른 봇의 글을 보는가**가 선택을 가른다 — Telegram 은 그걸 못 해서 탈락했다(§11).
+세 transport 는 **같은 수신 경계**를 지나므로 계약 검증·파일명 위생·유일성이
+플랫폼과 무관하게 동일하게 걸린다.
 
 ---
 
@@ -33,19 +38,27 @@ python3 .claude/bin/consortium.py send --to team-beta --role designer --cycle PC
 python3 .claude/bin/consortium.py inbox                        # 수신 메시지 (게이트웨이가 외부→inbox)
 
 # 게이트웨이 — host-aware transport (ADR-013)
-python3 .claude/bin/consortium.py gateway teams                # 연동 안내 (host 표시)
-# claude-code/codex host: Teams webhook(발신) + Graph 폴링(수신)
-CONSORTIUM_TEAMS_WEBHOOK="$(cat ~/.config/consortium/teams_webhook.txt)" \
-  python3 .claude/bin/consortium.py gateway teams --send       # outbox→Teams 채널 발신
-python3 .claude/bin/consortium.py gateway teams --receive      # Graph 폴링 채널→inbox
+python3 .claude/bin/consortium.py gateway slack                # 연동 안내 (host 표시)
+# ★권장: Slack — 봇 토큰 1개 + 채널 id 로 발신·수신
+CONSORTIUM_SLACK_TOKEN="$(< ~/.config/consortium/slack_token.txt)" \
+CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
+  python3 .claude/bin/consortium.py gateway slack --send       # outbox→채널 발신
+CONSORTIUM_SLACK_TOKEN="$(< ~/.config/consortium/slack_token.txt)" \
+CONSORTIUM_SLACK_CHANNEL="$(< ~/.config/consortium/slack_channel.txt)" \
+  python3 .claude/bin/consortium.py gateway slack --receive --poll 60   # 채널→inbox
+# 대안: Teams (사내 표준이 Teams 인 조직)
+CONSORTIUM_TEAMS_WEBHOOK="$(< ~/.config/consortium/teams_webhook.txt)" \
+  python3 .claude/bin/consortium.py gateway teams --send
 # openclaw host: OpenClaw Gateway 위임 (핸드오프 브리지, webhook/Graph 불요)
 HARNESS_AGENT_TYPE=openclaw python3 .claude/bin/consortium.py gateway teams --send
 python3 .claude/bin/consortium.py self                         # host/transport 점검
 ```
 
 > **게이트웨이 설치**: [docs/consortium-gateway-setup.md](../../docs/consortium-gateway-setup.md) 참조.
-> - claude-code/codex host: §2~8 (Teams 웹훅 발신 + Graph 폴링 수신, 완전 왕복)
-> - **openclaw host**: §9 (OpenClaw 네이티브 채널에 위임 — 핸드오프 브리지, ADR-013)
+> - **처음이라면 §2 (Slack — 10분)** 만 읽으면 된다
+> - Telegram 은 §11 (봇↔봇 불가 — 사람이 끼는 흐름 전용)
+> - claude-code/codex host + Teams: §3~§9 (웹훅 발신 + Graph 폴링 수신)
+> - **openclaw host**: §10 (OpenClaw 네이티브 채널에 위임 — 핸드오프 브리지, ADR-013)
 > consortium 게이트웨이는 host(`HARNESS_AGENT_TYPE`/host.json)에 따라 transport 를 자동 선택한다.
 
 ## 메시지 계약 (팀 간 상호운용 표준)
@@ -57,8 +70,16 @@ python3 .claude/bin/consortium.py self                         # host/transport 
   "stage": "design", "msg": "...", "status": "queued", "ts": "..."
 }
 ```
-필수: `from_team / to_team / role / cycle_id / msg`. `stage` ∈ {plan,design,develop,verify,deploy}.
-→ 게이트웨이는 이 JSON 을 그대로 실어 보내고, 수신도 같은 스키마로 inbox 에 적재하면 된다 (플랫폼 무관).
+필수: `from_team / to_team / role / cycle_id / msg` (전부 **비어 있지 않은 문자열**).
+`stage` ∈ {plan,design,develop,verify,deploy}. 계약 검증은 **발신·수신 양쪽**에 걸린다
+(ADR-012 결정 3) — 값을 정하는 쪽은 수신에선 원격이기 때문이다.
+
+→ 게이트웨이는 이 JSON 을 그대로 실어 보내고, **수신분은 `openclaw-inbound/` 에 드롭**한다.
+`gateway <platform> --receive` 가 **단일 수신 경계**에서 계약 검증·파일명 위생·유일성을 처리한다.
+
+> ⚠️ **`inbox/` 에 직접 쓰지 말 것.** 경계를 건너뛰면 원격이 정한 값이 그대로 파일명·경로·
+> 라우팅 키가 된다. 이 변형이 리뷰 3라운드에 걸쳐 닫은 결함(경로 탈출·큐 영구 정지·메시지
+> 소멸)이 전부 그 지점에서 나왔다.
 
 ## 컨소시엄 흐름 (멀티팀 product-cycle)
 

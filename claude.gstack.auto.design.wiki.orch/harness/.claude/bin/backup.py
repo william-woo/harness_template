@@ -84,6 +84,11 @@ _EXCLUDE_PATTERNS: list[str] = [
     # Binary state — gitignore 일관
     ".claude/state/qa-browser/screenshots/",
     ".claude/state/qa-browser/runs/",
+    # 컨소시엄 런타임 — 로스터·큐에 팀 간 업무 메시지가 쌓이고,
+    # .secrets/ 하위에 게이트웨이 자격증명이 놓일 수 있다 (F019 리뷰 MUST-4)
+    ".claude/state/consortium/",
+    # Atlassian 매핑 — 머신 로컬 (ADR-023 비용 절)
+    ".claude/state/atlassian/",
 ]
 
 # 보안 BLOCK 패턴 — 누락 시 exit 1 (결정 5 예외, 결정 6 보안)
@@ -107,6 +112,12 @@ _SECURITY_BLOCK_PATTERNS: list[str] = [
     "*.p12",
     "*.pfx",
     "*.jks",
+    # 자격증명 보관 관례 디렉토리 — 이름만으로 내용이 비밀임이 드러난다 (F019 리뷰 MUST-4)
+    ".secrets/",
+    # 토큰·웹훅 파일명 관례 (consortium 게이트웨이 등)
+    "*token.txt",
+    "*webhook.txt",
+    "*secret.txt",
 ]
 
 # 보안 BLOCK 화이트리스트 접미사 — 자격증명이 아닌 양식 파일 (ADR-005 결정 6 보강)
@@ -293,8 +304,16 @@ def _is_rsync_excluded(rel: str, excludes: list[str]) -> bool:
     for pattern in excludes:
         p = pattern.rstrip("/")
         if pattern.endswith("/"):
-            # 디렉토리 패턴 — 경로 어느 깊이에서든 매칭 (rsync 동일)
-            if p in parts[:-1]:
+            # 디렉토리 패턴. 두 형태를 구분해야 한다 (F019 리뷰 중 발견):
+            #   ① 단일 세그먼트 (`node_modules/`) — 경로 어느 깊이에서든 매칭
+            #   ② 다중 세그먼트 (`.claude/state/qa-browser/screenshots/`) — 루트 기준 prefix
+            # 이전 구현은 ①만 처리해 `p in parts[:-1]` 로 비교했는데, ②는 `p` 가
+            # 여러 세그먼트를 담은 한 문자열이라 단일 세그먼트 목록과 **절대 같아지지 않았다**.
+            # 그래서 qa-browser 스크린샷·실행로그가 제외되지 않고 백업에 실려 왔다.
+            if "/" in p:
+                if rel == p or rel.startswith(p + "/"):
+                    return True
+            elif p in parts[:-1]:
                 return True
         elif "/" in p:
             # 경로 지정 패턴 (예: .claude/state/lint-last.json) — 루트 기준
@@ -324,7 +343,14 @@ def scan_security_blocks(root: Path) -> list[str]:
     blocked: list[str] = []
 
     def _add(rel: str) -> None:
-        """화이트리스트·rsync 제외 대상이 아닌 경우에만 BLOCK 목록에 추가한다."""
+        """화이트리스트·rsync 제외 대상이 아닌 경우에만 BLOCK 목록에 추가한다.
+
+        한 파일이 여러 패턴에 걸릴 수 있으므로(`.secrets/x_token.txt` 는 디렉토리
+        패턴과 `*token.txt` 글롭 양쪽) 중복을 막는다 — 사용자에게 같은 경로를
+        두 번 보여 주면 차단 건수를 신뢰할 수 없게 된다.
+        """
+        if rel in blocked:
+            return
         if not _is_security_whitelisted(rel) and not _is_rsync_excluded(rel, excludes):
             blocked.append(rel)
 
@@ -339,8 +365,21 @@ def scan_security_blocks(root: Path) -> list[str]:
                         rel = str(p.relative_to(root))
                         if ".git" not in rel.split("/") and not rel.startswith(".git"):
                             _add(rel)
+            elif pattern.endswith("/"):
+                # 디렉토리 패턴 (예: `.secrets/`, `.aws/`) — 깊이 무관하게 찾는다.
+                # 이 분기가 없으면 `.secrets` 는 "정확한 파일명" 분기로 떨어지고,
+                # rglob 이 디렉토리를 찾아도 `is_file()` 이 False 라 **아무것도
+                # 차단하지 않는다** (재리뷰 실측: `.secrets/foo.bin` 0건 차단).
+                # `*token.txt` 가 우연히 겹쳐 잡는 바람에 테스트가 이를 가렸다.
+                for target in root.rglob(pat):
+                    if not target.is_dir():
+                        continue
+                    for p in target.rglob("*"):
+                        rel = str(p.relative_to(root))
+                        if p.is_file() and ".git" not in rel.split("/"):
+                            _add(rel)
             elif "/" in pat:
-                # 경로 포함 패턴 (예: .aws/credentials, .aws/)
+                # 경로 포함 패턴 (예: .aws/credentials)
                 # 루트 기준 상대 경로로 매핑
                 target = root / pat
                 if target.is_file():

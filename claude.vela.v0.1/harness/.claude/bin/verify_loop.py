@@ -28,9 +28,13 @@ LangChain "loop engineering" 의 Loop 2(Verification Loop)를 하네스에 이�
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
+import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,24 +73,103 @@ def _grader_kind(grader: str) -> str:
     return "judge"
 
 
+# feature id·rubric 이름은 **파일 경로 성분**이 된다. 검증 없이 쓰면 상태 디렉토리를
+# 벗어난다 (실측: `start ../../pwn` → `.claude/pwn.json` 생성).
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _safe_name(value: str, what: str) -> str:
+    """경로 성분으로 쓸 이름을 검증한다. 위반이면 SystemExit(2).
+
+    화이트리스트로 거르고 `..` 를 따로 막는다 — `.` 가 허용 문자라 `..` 만으로도
+    상위로 갈 수 있기 때문이다.
+    """
+    name = (value or "").strip()
+    if not _NAME_RE.match(name) or ".." in name:
+        print(f"[verify-loop] ❌ 잘못된 {what}: {value!r}")
+        print("  영숫자로 시작하고 영숫자·`.`·`_`·`-` 만, 64자 이내 (`..` 불가)")
+        raise SystemExit(2)
+    return name
+
+
 def _loop_path(feature: str) -> Path:
     """feature 의 루프 상태 파일 경로."""
-    return _STATE / f"{feature}.json"
+    return _STATE / f"{_safe_name(feature, 'feature id')}.json"
+
+
+def _read_loop(path: Path) -> dict | None:
+    """상태 파일 하나를 **안전하게** 읽는다. 손상이면 옆으로 치우고 None.
+
+    한 파일이 깨졌다고 `list` 가 정상 파일까지 못 보여주거나 `record` 가 영구히
+    실패하면, 그 feature 의 루프는 되살릴 수 없다 (실측: torn JSON 1건에 세 명령 모두
+    traceback). 삭제하지 않고 `*.corrupt-<ts>` 로 보존해 원인을 남긴다.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — 상태 파일은 신뢰 불가 입력이다
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        quarantined = path.with_suffix(f".json.corrupt-{stamp}")
+        try:
+            os.replace(path, quarantined)
+        except OSError:
+            pass
+        print(f"[verify-loop] ⚠️ 상태 파일 손상 — {quarantined.name} 로 보존하고 새로 시작: "
+              f"{type(exc).__name__}: {str(exc)[:60]}")
+        return None
+    # 형태까지 본다 — 파싱만 통과한 비정형은 소비 지점에서 KeyError/AttributeError 가 된다.
+    if not isinstance(data, dict) or not isinstance(data.get("attempts"), list):
+        print(f"[verify-loop] ⚠️ 상태 파일 형태 오류(무시): {path.name}")
+        return None
+    data.setdefault("revision_count", 0)
+    data.setdefault("escalation_threshold", _ESCALATION_THRESHOLD)
+    data.setdefault("status", "in-loop")
+    data.setdefault("rubric", "code-review")
+    data["attempts"] = [a for a in data["attempts"] if isinstance(a, dict)]
+    return data
 
 
 def _load(feature: str) -> dict | None:
-    """루프 상태를 읽는다 (없으면 None)."""
+    """루프 상태를 읽는다 (없거나 손상이면 None)."""
     p = _loop_path(feature)
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    return None
+    return _read_loop(p) if p.exists() else None
 
 
 def _save(loop: dict) -> None:
-    """루프 상태를 저장한다."""
+    """루프 상태를 **원자적으로** 저장한다 (락으로 read-modify-write 보호).
+
+    `write_text` 는 truncate 후 쓰므로 중단되면 **직전까지의 판정 이력이 사라진다**
+    (실측: 쓰기 중단 → 파일이 `{"feature": "F100` 만 남음). 동시 `record` 두 건이
+    서로를 덮어쓰는 것도 실측됐다 (20건 동시 → 11건만 기록).
+    """
     _STATE.mkdir(parents=True, exist_ok=True)
-    _loop_path(loop["feature"]).write_text(
-        json.dumps(loop, ensure_ascii=False, indent=2), encoding="utf-8")
+    target = _loop_path(loop["feature"])
+    fd, tmp = tempfile.mkstemp(dir=str(_STATE), prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(loop, fh, ensure_ascii=False, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+@contextlib.contextmanager
+def _loop_lock(feature: str):
+    """read-modify-write 를 직렬화한다 (stdlib `fcntl`, Linux 전제).
+
+    reviewer·qa sub-agent 가 병렬로 돌 수 있고 `reviewer.md` 는 결정론 grader 를
+    먼저 기록하라고 권한다 — 그 조합이 실제로 lost update 를 만들었다.
+    """
+    _STATE.mkdir(parents=True, exist_ok=True)
+    lock_path = _STATE / f".{_safe_name(feature, 'feature id')}.lock"
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass          # 락을 못 걸어도 진행한다 — 없는 것보다 낫고, 막지는 않는다
+        yield
 
 
 def cmd_start(args) -> int:
@@ -116,15 +199,31 @@ def cmd_start(args) -> int:
 def cmd_record(args) -> int:
     """grader 의 판정을 루프에 기록하고 에스컬레이션을 판정한다."""
     feature = args.feature
+    # 입력 검증을 **부작용 앞**에 둔다 — 예전에는 `--verdict bogus` 여도 자동 start 가
+    # 먼저 돌아 빈 상태 파일이 생긴 뒤 exit 1 이었다.
+    if args.verdict not in _VERDICTS:
+        print(f"[verify-loop] ❌ verdict 오류: {args.verdict} (pass|revision|fail)")
+        return 1
+    for label, val in (("--must", args.must), ("--should", args.should)):
+        if val is not None and val < 0:
+            print(f"[verify-loop] ❌ {label} 는 0 이상이어야 합니다: {val}")
+            return 1
+    if args.grader not in _DETERMINISTIC | _JUDGE:
+        print(f"[verify-loop] ⚠️ 미등록 grader '{args.grader}' — judge 로 기록합니다.")
+        print(f"  결정론: {', '.join(sorted(_DETERMINISTIC))} / judge: {', '.join(sorted(_JUDGE))}")
+    # read-modify-write 를 **락 안**에서 한다. reviewer·qa sub-agent 가 병렬로 돌면
+    # 서로의 기록을 덮어썼다 (실측: 동시 20건 → 3건만 남음).
+    with _loop_lock(feature):
+        return _record_locked(args, feature)
+
+
+def _record_locked(args, feature: str) -> int:
+    """락을 쥔 상태에서 판정 1건을 기록한다 (cmd_record 의 본체)."""
     loop = _load(feature)
     if loop is None:
         print(f"[verify-loop] ⚠️ {feature} 루프 없음 — 자동 개시합니다 (start 생략 허용).")
         cmd_start(argparse.Namespace(feature=feature, rubric=args.rubric or "code-review"))
         loop = _load(feature)
-    if args.verdict not in _VERDICTS:
-        print(f"[verify-loop] ❌ verdict 오류: {args.verdict} (pass|revision|fail)")
-        return 1
-
     kind = _grader_kind(args.grader)
     attempt = {
         "n": len(loop["attempts"]) + 1,
@@ -138,14 +237,27 @@ def cmd_record(args) -> int:
     if args.should is not None:
         attempt["should"] = args.should
     if args.notes:
-        attempt["notes"] = args.notes
+        # 제어문자를 지우고 길이를 자른다 — `status` 출력이 터미널에 그대로 렌더돼
+        # ANSI escape 주입이 가능했고, 100KB notes 가 그대로 저장됐다.
+        # 개행·탭도 공백으로 — notes 는 한 줄 요약이고, `status` 출력이 여러 줄로
+        # 번지면 다른 판정 항목과 구분이 안 된다.
+        clean = re.sub(r"[\x00-\x1f\x7f]", " ", args.notes)
+        attempt["notes"] = clean[:2000] + ("…(절단)" if len(clean) > 2000 else "")
     loop["attempts"].append(attempt)
 
     if args.verdict == "revision":
         loop["revision_count"] += 1
 
-    # 상태 전이
-    if args.verdict == "pass":
+    # 상태 전이 — **judge 의 pass 만** 루프를 통과시킨다.
+    # 결정론 grader(lint/design-review/qa-browser)의 pass 는 게이트 하나를 통과한
+    # 것이지 판정이 아니다. 예전에는 `record F002 --grader lint --verdict pass` 한 번에
+    # `passed` 가 됐는데, 그게 하필 verify-loop.md·reviewer.md 가 권하는 **첫 단계**였다.
+    if args.verdict == "pass" and kind == "deterministic":
+        gates = loop.setdefault("gates_passed", [])
+        if args.grader not in gates:
+            gates.append(args.grader)
+        loop["status"] = "escalated" if loop["revision_count"] >= loop["escalation_threshold"] else "in-loop"
+    elif args.verdict == "pass":
         loop["status"] = "passed"
     elif args.verdict == "fail":
         loop["status"] = "failed"
@@ -204,7 +316,9 @@ def cmd_list(args) -> int:
     if not _STATE.exists() or not any(_STATE.glob("*.json")):
         print("[verify-loop] 루프 없음 — `start <feature>` 로 개시")
         return 0
-    loops = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(_STATE.glob("*.json"))]
+    # `_read_loop` 를 쓴다 — 손상 파일 1건에 목록 전체가 죽으면 정상 루프까지 못 본다.
+    # 방어가 두 주소에 흩어지면 하나만 고치게 된다 (이 리포가 일곱 번 겪은 일).
+    loops = [lp for lp in (_read_loop(p) for p in sorted(_STATE.glob("*.json"))) if lp]
     print(f"[verify-loop] 루프 {len(loops)}개")
     for loop in loops:
         _print_loop(loop)
