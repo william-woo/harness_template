@@ -2,7 +2,7 @@
 
 > **localllm 변형 (d-2 · loope 계보)** — 이 변형은 Claude Code 가 아니라 **OpenCode +
 > 로컬 LLM(Ollama)** 으로 구동한다 (F015/F023, ADR-009/017). 진입 컨텍스트는
-> `.opencode/AGENTS.md`, 역할별 모델은 `opencode.json` (생성형 14B / 판정 32B).
+> `.opencode/AGENTS.md`, 역할별 모델은 `opencode.json` (32B 기본, gatekeeper 만 14B — ADR-017 개정 4-bis).
 > 실측 근거: `docs/poc/MODEL-GRADES.md` + 측정 01~05.
 
 > Claude Code 멀티 에이전트 프로젝트를 위한 재사용 가능한 하네스 구조.

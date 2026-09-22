@@ -165,7 +165,7 @@ python3 .claude/bin/autoresearch.py promote exp-003 --yes    # 하네스 반영 
 ## 대표 사용 패턴
 
 ```bash
-# 단일 역할 직접 호출 (생성형 — 14B 자동)
+# 단일 역할 직접 호출 (생성·판정 — 32B 자동 (gatekeeper 만 14B))
 opencode run --agent developer "F001 로그인 API 를 feature_list 기준으로 구현해줘"
 # 판정 역할 (32B 자동)
 opencode run --agent reviewer "방금 구현된 F001 을 리뷰하고 verify-loop 에 기록해줘"

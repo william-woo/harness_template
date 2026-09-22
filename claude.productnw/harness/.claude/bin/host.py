@@ -340,6 +340,24 @@ def cmd_render_skills(args) -> None:
         print(f"[ERROR] render-skills 명령 실패: {e}", file=sys.stderr)
 
 
+def _resolve_in_project(arg: str, what: str) -> Path | None:
+    """사용자가 준 경로를 **프로젝트 루트 안으로 구속**해 해석한다.
+
+    왜 (F023 리뷰 MUST-2): 예전에는 절대경로든 `../..` 든 그대로 받아, `--agents-out
+    ../../pwn` 이 프로젝트 밖에 파일을 만들었다. 렌더러의 stale 정리와 결합하면
+    **외부 디렉토리의 `.md` 를 지울 수 있었다** — F020 의 `start ../../pwn` 과 같은
+    클래스인데 렌더러에는 적용되지 않았던 것이다.
+    """
+    candidate = Path(arg)
+    resolved = (candidate if candidate.is_absolute() else _PROJECT_ROOT / candidate).resolve()
+    root = _PROJECT_ROOT.resolve()
+    if resolved != root and root not in resolved.parents:
+        print(f"  ❌ {what} 가 프로젝트 루트를 벗어납니다: {resolved}")
+        print(f"     루트: {root}")
+        return None
+    return resolved
+
+
 def cmd_render_agents(args) -> None:
     """
     .claude/agents/*.md 를 OpenCode 포맷(.opencode/agent/*.md)으로 변환한다.
@@ -394,10 +412,9 @@ def cmd_render_agents(args) -> None:
             agents_src = _PROJECT_ROOT / ".claude" / "agents"
 
         if agents_out_arg:
-            agents_out = (
-                Path(agents_out_arg) if Path(agents_out_arg).is_absolute()
-                else _PROJECT_ROOT / agents_out_arg
-            )
+            agents_out = _resolve_in_project(agents_out_arg, "--agents-out")
+            if agents_out is None:
+                return 2
         else:
             agents_out = _PROJECT_ROOT / ".opencode" / "agent"
 
@@ -475,10 +492,9 @@ def cmd_render_commands(args) -> None:
             commands_src = _PROJECT_ROOT / ".claude" / "commands"
 
         if commands_out_arg:
-            commands_out = (
-                Path(commands_out_arg) if Path(commands_out_arg).is_absolute()
-                else _PROJECT_ROOT / commands_out_arg
-            )
+            commands_out = _resolve_in_project(commands_out_arg, "--commands-out")
+            if commands_out is None:
+                return 2
         else:
             commands_out = _PROJECT_ROOT / ".opencode" / "commands"
 
@@ -668,19 +684,24 @@ def main() -> None:
 
         if args.command is None:
             # 서브커맨드 없으면 info 기본 실행
-            cmd_info(args)
+            rc = cmd_info(args)
         elif args.command in handlers:
-            handlers[args.command](args)
+            rc = handlers[args.command](args)
         else:
             parser.print_help()
+            rc = 0
 
-    except SystemExit:
-        # argparse가 raise하는 SystemExit도 exit 0으로 처리
-        pass
+    except SystemExit as exc:
+        # argparse 의 `--help`/인자 오류는 그 코드를 그대로 쓴다.
+        sys.exit(exc.code if isinstance(exc.code, int) else 0)
     except Exception as e:
         print(f"[ERROR] host.py 실패: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    sys.exit(0)
+    # **핸들러의 반환값을 종료코드로 쓴다.** 예전에는 무조건 `sys.exit(0)` 이라,
+    # 경로 거부·소스 부재 같은 실패가 전부 "성공" 으로 보고됐다. 호출자(스크립트·
+    # CI·테스트)가 실패를 알 방법이 없으면 게이트가 아무것도 막지 못한다.
+    sys.exit(rc if isinstance(rc, int) else 0)
 
 
 if __name__ == "__main__":
