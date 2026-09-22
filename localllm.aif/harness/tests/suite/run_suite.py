@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,11 @@ SUITE_DIR = Path(__file__).resolve().parent
 # 하네스 루트 = 이 스크립트의 상위 2단 (tests/suite/run_suite.py → <harness>)
 TEMPLATE = Path(os.environ.get("SUITE_TEMPLATE", SUITE_DIR.parent.parent))
 RESULTS = Path(os.environ.get("SUITE_RESULTS", SUITE_DIR / "results"))
-SANDBOX_ROOT = Path(os.environ.get("SUITE_SANDBOX", SUITE_DIR / "sandboxes"))
+# 기본값을 **템플릿 밖**에 둔다. 예전 기본값(`SUITE_DIR/sandboxes`)은 템플릿 내부라
+# 바로 아래 재귀복사 가드에 **항상** 걸렸다 — README 의 기본 호출 3종이 전부 exit 1
+# 이었고, env 를 준 4번째 형태만 동작했다. 완화책이 회귀를 만든 유형이다.
+SANDBOX_ROOT = Path(os.environ.get(
+    "SUITE_SANDBOX", Path(tempfile.gettempdir()) / "harness-suite-sandboxes"))
 DRIVER_TIMEOUT = 1500  # 초 — 드라이버 자체가 내부 timeout/재시도를 가짐
 
 # ── 시나리오 정의 ──────────────────────────────────────────────────────────
@@ -222,8 +227,34 @@ SCENARIOS: list[dict] = [
 ]
 
 
+def _preflight_suite() -> None:
+    """외부 전제를 **코드로 가드**한다 — 없으면 10/10 INFRA 가 조용히 나온다.
+
+    측정 08 교훈 4("환경 전제는 코드로 가드")가 정작 스위트 자신에는 적용돼 있지
+    않았다. 미설치 환경에서 전 시나리오가 INFRA 로 떨어지면 원인을 찾는 데만
+    한참 걸린다.
+    """
+    missing = [tool for tool in ("opencode", "rsync", "git") if shutil.which(tool) is None]
+    if missing:
+        raise SystemExit(
+            "스위트 실행 전제가 없습니다: " + ", ".join(missing) + "\n"
+            "  opencode: bash .claude/bin/opencode-setup.sh\n"
+            "  rsync·git: 배포판 패키지 매니저로 설치\n"
+            "  (이 스위트는 로컬 LLM 을 실제로 호출합니다 — Ollama 도 떠 있어야 합니다)"
+        )
+
+
 def _sandbox(scn_id: str, rnd: int) -> Path:
     """시나리오 샌드박스를 초기화하고 경로를 반환한다."""
+    # 샌드박스가 템플릿 내부면 rsync 가 자기 자신을 재귀 복사해 경로 길이 한계까지
+    # 중첩되고, 그 뒤 템플릿을 소스로 하는 모든 복사가 exit 23 으로 깨진다 (측정 11 결과 11).
+    tpl = TEMPLATE.resolve()
+    sbr = SANDBOX_ROOT.resolve()
+    if tpl == sbr or tpl in sbr.parents:
+        raise SystemExit(
+            f"SUITE_SANDBOX 가 SUITE_TEMPLATE 내부입니다 — 재귀 복사 방지\n"
+            f"  template={tpl}\n  sandbox={sbr}"
+        )
     sb = SANDBOX_ROOT / f"sb-r{rnd}-{scn_id}"
     if sb.exists():
         shutil.rmtree(sb)
@@ -494,6 +525,7 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
 
 
 def main() -> None:
+    _preflight_suite()
     argv = sys.argv[1:]
     rnd = 1
     if "--round" in argv:

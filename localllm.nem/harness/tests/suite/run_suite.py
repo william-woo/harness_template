@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,11 @@ SUITE_DIR = Path(__file__).resolve().parent
 # 하네스 루트 = 이 스크립트의 상위 2단 (tests/suite/run_suite.py → <harness>)
 TEMPLATE = Path(os.environ.get("SUITE_TEMPLATE", SUITE_DIR.parent.parent))
 RESULTS = Path(os.environ.get("SUITE_RESULTS", SUITE_DIR / "results"))
-SANDBOX_ROOT = Path(os.environ.get("SUITE_SANDBOX", SUITE_DIR / "sandboxes"))
+# 기본값을 **템플릿 밖**에 둔다. 예전 기본값(`SUITE_DIR/sandboxes`)은 템플릿 내부라
+# 바로 아래 재귀복사 가드에 **항상** 걸렸다 — README 의 기본 호출 3종이 전부 exit 1
+# 이었고, env 를 준 4번째 형태만 동작했다. 완화책이 회귀를 만든 유형이다.
+SANDBOX_ROOT = Path(os.environ.get(
+    "SUITE_SANDBOX", Path(tempfile.gettempdir()) / "harness-suite-sandboxes"))
 # 시나리오 예산. 기본 1500초는 **qwen 속도를 전제로 정해진 값**이다 (호출당 30~77초 ×
 # 사이클 7~10 호출 = 300~700초 → 여유). 호출당 비용이 다른 모델은 판정을 완벽히 해도
 # 이 예산을 넘는다 — nemotron 은 150~220초 × 7~10 = 1650~2200초다 (측정 11 결과 14).
@@ -225,6 +230,23 @@ SCENARIOS: list[dict] = [
         "expect_exit": (0, 2), "checks": ["test_unchanged:test_strict.py"],
     },
 ]
+
+
+def _preflight_suite() -> None:
+    """외부 전제를 **코드로 가드**한다 — 없으면 10/10 INFRA 가 조용히 나온다.
+
+    측정 08 교훈 4("환경 전제는 코드로 가드")가 정작 스위트 자신에는 적용돼 있지
+    않았다. 미설치 환경에서 전 시나리오가 INFRA 로 떨어지면 원인을 찾는 데만
+    한참 걸린다.
+    """
+    missing = [tool for tool in ("opencode", "rsync", "git") if shutil.which(tool) is None]
+    if missing:
+        raise SystemExit(
+            "스위트 실행 전제가 없습니다: " + ", ".join(missing) + "\n"
+            "  opencode: bash .claude/bin/opencode-setup.sh\n"
+            "  rsync·git: 배포판 패키지 매니저로 설치\n"
+            "  (이 스위트는 로컬 LLM 을 실제로 호출합니다 — Ollama 도 떠 있어야 합니다)"
+        )
 
 
 def _sandbox(scn_id: str, rnd: int) -> Path:
@@ -508,6 +530,7 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
 
 
 def main() -> None:
+    _preflight_suite()
     argv = sys.argv[1:]
     rnd = 1
     if "--round" in argv:

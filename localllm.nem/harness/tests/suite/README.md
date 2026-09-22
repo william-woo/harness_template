@@ -10,6 +10,22 @@ python3 tests/suite/run_suite.py --round 3       # 라운드 태깅
 SUITE_SANDBOX=/tmp/sb SUITE_RESULTS=/tmp/res python3 tests/suite/run_suite.py
 ```
 
+## 실행 전제 (코드로 가드됨)
+
+이 스위트는 **로컬 LLM 을 실제로 호출**한다 — 단위 테스트가 아니다.
+
+| 전제 | 확인 |
+|---|---|
+| `opencode` | `bash .claude/bin/opencode-setup.sh` |
+| Ollama + 등재된 모델 | `opencode models` 로 해석되는지 |
+| `rsync` · `git` | 배포판 패키지 |
+
+없으면 `main()` 진입에서 안내와 함께 중단한다. 예전에는 10/10 INFRA 가 조용히 나와
+원인을 찾는 데만 한참 걸렸다 (측정 08 교훈 4 를 스위트 자신에 적용).
+
+기본 샌드박스는 **템플릿 밖**(`$TMPDIR/harness-suite-sandboxes`)이다 —
+템플릿 내부면 rsync 가 자기 자신을 재귀 복사한다.
+
 ## oracle (드라이버 주장을 신뢰하지 않는다)
 
 | oracle | 검사 | 탐지 |

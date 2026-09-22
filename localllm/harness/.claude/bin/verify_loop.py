@@ -120,6 +120,10 @@ def _read_loop(path: Path) -> dict | None:
     if not isinstance(data, dict) or not isinstance(data.get("attempts"), list):
         print(f"[verify-loop] ⚠️ 상태 파일 형태 오류(무시): {path.name}")
         return None
+    # `feature` 키가 없으면 `_save` 가 `loop["feature"]` 에서 KeyError 로 죽고,
+    # 그 루프는 **영구 wedge** 가 된다 (F025 리뷰가 잡은 내 F020 회귀).
+    # 파일명이 곧 feature id 이므로 그것으로 채운다.
+    data.setdefault("feature", path.stem)
     data.setdefault("revision_count", 0)
     data.setdefault("escalation_threshold", _ESCALATION_THRESHOLD)
     data.setdefault("status", "in-loop")
@@ -142,7 +146,10 @@ def _save(loop: dict) -> None:
     서로를 덮어쓰는 것도 실측됐다 (20건 동시 → 11건만 기록).
     """
     _STATE.mkdir(parents=True, exist_ok=True)
-    target = _loop_path(loop["feature"])
+    feature = loop.get("feature")
+    if not isinstance(feature, str) or not feature.strip():
+        raise ValueError("루프 상태에 feature 이름이 없습니다 — 저장 대상을 알 수 없습니다")
+    target = _loop_path(feature)
     fd, tmp = tempfile.mkstemp(dir=str(_STATE), prefix=".tmp-", suffix=".json")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

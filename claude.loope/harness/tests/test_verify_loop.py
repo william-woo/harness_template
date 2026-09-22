@@ -86,6 +86,26 @@ class VerifyLoopContractTest(unittest.TestCase):
                 self.assertIn("F001", res.stdout, "정상 루프가 목록에서 사라졌다")
                 self.assertNotIn("Traceback", res.stderr)
 
+    def test_feature_키가_없는_상태_파일도_record_가_된다(self):
+        """`_read_loop` 가 `feature` 를 채우지 않아 `_save` 가 KeyError 로 죽었다.
+
+        내가 F020 에서 손상 방어를 넣을 때 만든 회귀다 — 형태 검증은 했는데
+        **저장에 필요한 키**를 빠뜨렸다. 그 루프는 매 `record` 마다 죽어 영구 wedge 였다.
+        """
+        self._state.mkdir(parents=True, exist_ok=True)
+        (self._state / "F009.json").write_text(
+            json.dumps({"attempts": [], "revision_count": 0, "status": "in-loop"}),
+            encoding="utf-8")
+        for run in (1, 2):
+            with self.subTest(run=run):
+                res = _run(self.root, _BIN, "record", "F009",
+                           "--grader", "reviewer", "--verdict", "revision")
+                self.assertEqual(res.returncode, 0, f"{run}회차에 죽었다: {res.stderr[:200]}")
+                self.assertNotIn("KeyError", res.stderr)
+        loop = json.loads((self._state / "F009.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(loop["attempts"]), 2)
+        self.assertEqual(loop["feature"], "F009", "파일명으로 feature 를 채우지 않았다")
+
     def test_revision_3회에_에스컬레이션한다(self):
         _run(self.root, _BIN, "start", "F003")
         for _ in range(3):
