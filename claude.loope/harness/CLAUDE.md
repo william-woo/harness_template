@@ -33,17 +33,37 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 ### 규칙 #3 — 사용자 승인 필수 경계 (2026-09-17 갱신)
 
-승인이 필요한 것은 **둘뿐**이다 — 나머지는 전부 자율 진행한다:
+승인이 필요한 것은 **셋뿐**이다 — 나머지는 전부 자율 진행한다:
 
 | 경계 | 대상 | 이유 |
 |---|---|---|
 | **3-A 삭제** | `rm` / `rmdir` / `unlink` / `shred` / `git clean` / `trash` / `find … -delete` | 비가역이고, 잘못 지우면 복구가 불가능하다 |
 | **3-B PR 생성·병합** | `gh pr create` / `gh pr merge` | 외부에 공개되고 팀에 알림이 간다 |
+| **3-C Confluence·Jira 쓰기·삭제** | Atlassian 커넥터의 **변경** 도구 전부 — `createConfluencePage` / `updateConfluencePage` / 코멘트 생성 2종 / `createJiraIssue` / `editJiraIssue` / `addCommentToJiraIssue` / `addWorklogToJiraIssue` / `transitionJiraIssue` / `createIssueLink` / Compass 생성 3종 / `addTeamworkGraphContext` | 팀이 보는 기록을 바꾼다. 되돌려도 알림·이력은 남는다 (ADR-023 "발행은 PR 과 같은 승인 층위") |
+
+> **조회는 자동**이다 — `getConfluencePage` / `getPagesInConfluenceSpace` / `searchConfluenceUsingCql` /
+> `getJiraIssue` / `searchJiraIssuesUsingJql` / `getVisibleJiraProjects` / `fetch` / `search` 등
+> read-only 도구는 승인 없이 쓴다. 읽기까지 막으면 조사가 매번 끊긴다.
 
 `permissions.ask` 에 위 패턴을 등재해 자동 허용을 오버라이드한다 (precedence: deny > ask > allow).
 `rm -rf /`·`~`·`$HOME` 류는 `deny` 로 **완전 차단**한다.
 
+> **변형별 적용**: 3-A·3-B 는 자율 변형 14종 전부. 3-C 는 Atlassian 커넥터를 쓰는
+> **vela 계열에만** 등재한다 — LINT-MR-15 의 오버레이 격리를 설정에서도 지킨다
+> (커넥터가 없는 변형에 규칙만 넣으면 영영 매칭되지 않는 죽은 설정이 된다).
 
+> **이전 정책과의 차이**: 계정·인증(`sudo`, `gh auth login`), 외부 디렉토리 접근, 시스템 패키지
+> 설치, `git push` 는 **더 이상 승인을 요구하지 않는다**. 장시간 자율 작업이 프롬프트로 끊기는
+> 비용이 그 보호막의 값어치보다 크다는 판단이다 (사용자 지시).
+
+선언 규칙이 못 잡는 삭제 경로(예: `python3` 스크립트 내 삭제, 복합 명령)는 에이전트가
+**행동 규칙으로 삭제 전 확인**한다. 실제로 복합 명령(`rm … ; mkdir …`)은 패턴 매칭을
+빠져나가므로, 삭제가 필요하면 **새 디렉토리를 쓰는 쪽을 먼저 검토**한다.
+
+강제 메커니즘:
+- `permissions.ask` — 선언적 차단 (1차)
+- `pre-bash-auto-boundary-check.sh` 훅 — 패턴 매칭 (2차)
+- Gatekeeper 에이전트 — 컨텍스트 기반 판정 (모호 케이스)
 
 ### Autonomous Mode 비활성화 시
 `.claude/settings.json` 의 `permissions.allow` 에서 wildcard 제거 + autonomous 훅 wiring 제거.
@@ -753,6 +773,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | **ⓑ¹⁰ `claude.aif/`** (판정 설계 — RLAIF/CAI 규율) | loope 1:1 + aif 오버레이 (항목형 rubric + 증거강제 + 앙상블 + UNCERTAIN) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속, aif 오버레이는 stdlib/문서) |
 | **ⓑ¹¹ `localllm.aif/`** (d-2 + 판정 설계) | localllm 1:1 + aif 오버레이 — **A/B 수치 비교가 가능한 유일한 aif 변형** | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
+| **ⓑ¹² `localllm.nem/`** (d-2 + nemotron) | localllm 1:1 + 모델 축만 교체 — `nemotron-3-nano:30b` 단일, 추론 예산 자동 등재 | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
+| **ⓑ¹³ `claude.vela.v0.1/`** ★ (배포 단위 — vela 계보) | loope 1:1 + **Atlassian 오버레이** (Jira·Confluence 연동, 공식 MCP + 멱등성 코드) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속 + Atlassian MCP) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 > **claude.loope 변형 (F020)**: productmgr 변형 복사 + loop 오버레이 (ADR-014). LangChain
@@ -847,7 +869,29 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - (localllm.aif 만) `cycle_driver` 의 `_aif_findings` — 항목형 앙상블 결과를 judge 입력에 주입
 - (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
+**모델 축 분기 변형** (F030 신설 — 오버레이가 아니라 **모델만 다른 형제**):
+- `localllm.nem/` — `nemotron-3-nano:30b` 단일 (전 9 역할). 후속 `localllm.gem/` = gemma 기반
+- 부모 `localllm/` 은 qwen2.5 2 티어로 **그대로 유지** — 대조군이 사라지면 측정 01~09 가 해석 불가가 된다
+- **추론 모델 관문** (ADR-021): nemotron·gemma 는 도구 호출 **전에** 추론 토큰을 쓴다. 전역 설정에
+  `limit: {context, output}` 이 없으면 추론 중간에 잘려 도구 호출이 **0건**이 된다 (`finish=length`).
+  `opencode-setup.sh` 가 등재·보정을 자동 처리. `limit` 은 두 필드를 **모두** 요구 — 하나만 넣으면
+  OpenCode 가 `Configuration is invalid` 로 전 실행을 거부한다
+- 오버레이 프로필은 부모와 동일하므로 LINT-MR 의 localllm 등재 지점 6곳에 **함께** 등재한다
+
+**vela 버전 계보** (F032 신설 — ADR-023):
+- **배포 단위 변형은 `claude.vela.v<major>.<minor>`** 로 명명한다. 첫 릴리스는 `claude.vela.v0.1`
+  (`claude.loope` 1:1 복사에서 출발)
+- 기능 서술 이름(`claude.gstack.auto.design.wiki.orch`)은 **계보를 드러내는 축**으로,
+  축 접미사(`.aif` 판정 / `.nem` 모델 / `localllm` 호스트)는 **실험 격리 축**으로 그대로 유지한다.
+  **기존 이름을 개명하지 않는다** — ADR·측정 문서의 참조가 전부 깨진다
+- **v0.1 에서 SSOT 는 여전히 `claude.loope`** 다. vela 는 그 위의 배포 스냅샷이다.
+  둘의 장기 관계(매 릴리스 복사 vs SSOT 이관)는 v0.2 착수 시 재검토한다
+- **Atlassian 오버레이** (vela 전용 — LINT-MR-15): 공식 MCP 커넥터를 쓰므로 **API 래퍼를
+  만들지 않고**, `atlassian_map.py` 가 멱등성(중복 발행 방지)만 결정론으로 담당한다.
+  **우리 리포가 SSOT**, Atlassian 은 발행 대상 — 역반영 금지. 발행은 **PR 과 같은 승인 층위**
+
+회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
++ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~15 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14·F030 변형 등재·F032 MR-15 추가).
 
 ---
 

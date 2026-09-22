@@ -19,6 +19,8 @@
 | **`claude.loope/`** | **허용** (productmgr 상속) | Obsidian/qmd/Marp (loop 오버레이는 stdlib/문서) | LINT-MR-13 (loop 오버레이 격리) |
 | **`claude.aif/`** | **허용** (loope 상속) | Obsidian/qmd/Marp (aif 오버레이는 stdlib/문서) | LINT-MR-14 (aif 오버레이 격리) |
 | **`localllm.aif/`** | **허용** (localllm 상속) | 위 + OpenCode/Ollama | LINT-MR-14 + MR-9 |
+| **`localllm.nem/`** (모델 축) | **허용** (localllm 상속) | 위 + OpenCode/Ollama | MR-9/10/11/13 (부모와 동일 프로필) |
+| **`claude.vela.v0.1/`** ★ (배포 단위) | **허용** (loope 상속 + Atlassian MCP) | Obsidian/qmd/Marp + Atlassian 공식 MCP 커넥터 | MR-15 (Atlassian 오버레이 격리) |
 | `openai/.codex/` | 0 | — | LINT-MR-7 |
 
 **wiki 변형 예외 계약**:
@@ -68,6 +70,33 @@
 - LINT-MR-13 이 loop 오버레이의 claude.loope 전용 격리를 강제
 
 ---
+
+**모델 축 변형 예외 계약** (ADR-021, F030):
+- 부모 `localllm` 1:1 복사 + **모델 축만 교체** — 오버레이 추가 없음 (`localllm.nem` = nemotron, 후속 `localllm.gem` = gemma)
+- 부모는 qwen2.5 기준으로 **불변 유지**. 부모를 갈아끼우면 측정 01~09 의 대조군이 사라진다
+- **추론 모델 관문**: 추론 모델(`thinking` 능력 선언)은 도구 호출 전에 추론 토큰을 쓴다. 전역
+  설정에 `limit:{context,output}` 이 없으면 도구 호출이 0건이 된다 — `opencode-setup.sh` 가 등재·보정
+- **기록 위조 금지**: `docs/poc/measurements/*` 는 부모 조건(qwen)의 실측이다. 모델명만 바꿔
+  재사용하지 않고, 새 모델 등급은 `MODEL-GRADES.md` 에 **별도 절**로 덧붙인다
+- **검증 범위**: 스모크(정상 응답) 확인. 도구 호출 성립·완주율·판정 품질은 스위트 A/B 대기 —
+  그 전까지 성능 우위를 주장하지 않는다
+- 오버레이 프로필이 부모와 같으므로 LINT-MR 의 localllm 등재 지점에 **함께** 등재한다
+
+**vela 계보 예외 계약** (ADR-023, F032):
+- `claude.loope` 1:1 복사 + **Atlassian 오버레이**. 배포 단위 변형은 `claude.vela.v<major>.<minor>` 로 명명
+- **기존 이름을 개명하지 않는다** — 기능 서술 이름·축 접미사는 그대로. ADR·측정 문서 참조가 깨진다
+- **자체 MCP 서버를 만들지 않는다**: Atlassian 공식 커넥터가 41개 도구를 이미 제공한다.
+  OAuth·API 버전 추적·스코프 관리를 우리가 떠안을 이유가 없다
+- **API 래퍼도 만들지 않는다**: MCP 도구는 에이전트가 직접 부른다. 코드가 필요한 곳은 **멱등성**
+  하나뿐 — `atlassian_map.py` 가 digest 비교로 중복 발행을 막는다 (판단은 모델이, 멱등성은 코드가)
+- **우리 리포가 SSOT**: Atlassian 은 발행 대상이고 **역반영은 금지**한다. 두 SSOT 는 반드시 어긋난다
+- **발행은 PR 과 같은 승인 층위**: 외부 공개이고 팀에 알림이 간다. 자동 발행하지 않는다
+  (handoff·lint 가 부르지 않음). `passes` 는 Jira 상태로 바꾸지 않는다 — QA 단독 권한
+- **graceful degrade**: 커넥터 미연결 시 안내만 하고 하네스는 정상 동작한다. 사용자별 인증이므로
+  다운스트림은 각자 연결해야 한다. `localllm` 계열(OpenCode 호스트)에는 이 커넥터가 없다
+- **검증 범위**: 커넥터 실측(사이트·권한·81 프로젝트)·매핑 왕복 시험 완료.
+  **실제 발행(Confluence 페이지·Jira 코멘트)은 미검증** — 승인 후 실사용으로 확인한다
+- LINT-MR-15 가 Atlassian 오버레이의 vela 계열 전용 격리를 강제
 
 **aif 변형 예외 계약** (ADR-020, F028):
 - 부모(claude.loope / localllm) 1:1 복사 + aif 오버레이 — RLAIF/CAI 판정 설계 규율 이식

@@ -18,7 +18,8 @@ JSON·마크다운 분석으로 검사한다.
   LINT-AC     acceptance_criteria 누락·모호
   LINT-ADR    ADR ↔ feature 연결성
   LINT-LEARN  learnings 모순 휴리스틱
-  LINT-MIRROR 미러링 diff (4변형)
+  LINT-SSOT   main ≡ claude.loope invariant (ADR-015, BLOCK)
+  LINT-MIRROR gstack 표준 변형 대조 (참고용 INFO)
   LINT-MR     변형 오버레이 정합 (14변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12, F020: MR-13, F028: MR-14)
 
 외부 의존성: 없음 (Python stdlib only)
@@ -756,7 +757,10 @@ def check_mirror() -> list:
         main_keys = set(main_files.keys())
         gstack_keys = set(gstack_files.keys())
 
-        # BLOCK: .py 파일 diff
+        # `.py` diff 는 **BLOCK 이 아니다** — F021 로 SSOT 가 `claude.loope` 로
+        # 옮겨졌고(ADR-015), `claude.gstack` 은 autonomous 오버레이를 제외한 **표준**
+        # 변형이라 main 과 다른 것이 정상이다. main ≡ loope 는 `LINT-SSOT` 가 본다.
+        # 구 기준으로 BLOCK 을 내면 게이트가 늘 빨간 상태가 되어 아무도 안 보게 된다.
         common_py = {k for k in (main_keys & gstack_keys) if k.endswith(".py")}
         py_diff_found = False
         for rel in sorted(common_py):
@@ -770,8 +774,8 @@ def check_mirror() -> list:
                 ))
                 diff_summary = f"{len(diff_lines)}줄 diff"
                 results.append(_issue(
-                    checker, BLOCK, rel,
-                    f".claude/ ↔ claude.gstack/ .py 파일 diff 존재 ({diff_summary}) — 미러링 누락 의심"
+                    checker, INFO, rel,
+                    f".claude/ ↔ claude.gstack/ .py diff ({diff_summary}) — gstack 은 표준 변형이라 정상일 수 있다"
                 ))
                 py_diff_found = True
 
@@ -1807,6 +1811,119 @@ def check_mirror_regression() -> list:
 
 # ---------------------------------------------------------------------------
 # 검사기 레지스트리
+
+# ---------------------------------------------------------------------------
+# LINT-SSOT: main ≡ claude.loope (ADR-015 invariant)
+# ---------------------------------------------------------------------------
+
+# ADR-015 결정 2 의 제외 목록 — 머신·프로젝트 로컬이라 미러 대상이 아니다.
+_SSOT_EXCLUDE_NAMES = {
+    "settings.json", "settings.local.json", "host.json",
+    "__pycache__", ".pyc", "state",
+    "design",          # design_pick 산출물 (tokens.json·backup) — 프로젝트 로컬
+    "live_status.sh",  # 머신 로컬 관측 도구
+}
+
+
+def _ssot_rel_files(root: Path) -> dict:
+    """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다."""
+    import hashlib
+    out = {}
+    if not root.exists():
+        return out
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        parts = set(path.relative_to(root).parts)
+        if parts & _SSOT_EXCLUDE_NAMES or path.name in _SSOT_EXCLUDE_NAMES:
+            continue
+        if path.suffix == ".pyc":
+            continue
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            continue
+        out[str(path.relative_to(root))] = digest
+    return out
+
+
+def check_ssot() -> list:
+    """`main .claude/` ≡ `claude.loope/harness/.claude/` 를 **내용으로** 강제한다.
+
+    왜 새 검사기인가 (F021 리뷰 MUST-6):
+      `LINT-MIRROR` 는 구 SSOT(`claude.gstack`)를 보고 `.py` 만 비교한다. 그래서
+      ADR-015 가 invariant 로 선언한 `main ≡ loope` 를 **원리적으로 못 잡는다** —
+      실제로 `coding-standards.md` 내용 drift, `CLAUDE.md` 본문 drift, 한쪽에만
+      있는 파일이 전부 0 BLOCK 으로 통과했다.
+
+      F010 의 "미러 회귀 2회" 교훈이 겨냥한 결함 클래스가 정확히 이것이다:
+      규칙을 문서에 적어 두고 강제는 파일 존재만 보는 것.
+    """
+    results = []
+    checker = "LINT-SSOT"
+    loope = (_PROJECT_ROOT / "src" / "harness_template" / "claude.loope" / "harness")
+    if not loope.exists():
+        results.append(_issue(checker, INFO, "claude.loope/", "변형 없음 — 검사 생략"))
+        return results
+
+    pairs = [(".claude/", _CLAUDE_DIR, loope / ".claude"),
+             ("docs/adr/", _PROJECT_ROOT / "docs" / "adr", loope / "docs" / "adr")]
+    for label, main_root, var_root in pairs:
+        main_files = _ssot_rel_files(main_root)
+        var_files = _ssot_rel_files(var_root)
+        only_main = sorted(set(main_files) - set(var_files))
+        only_var = sorted(set(var_files) - set(main_files))
+        differing = sorted(k for k in (set(main_files) & set(var_files))
+                           if main_files[k] != var_files[k])
+        for rel in only_main:
+            results.append(_issue(checker, BLOCK, f"{label}{rel}",
+                                  "main 에만 존재 — loope 로 미러하거나 ADR-015 제외 목록에 등재"))
+        for rel in only_var:
+            results.append(_issue(checker, BLOCK, f"{label}{rel}",
+                                  "loope 에만 존재 — main 에서 삭제된 파일이 남았을 수 있다"))
+        for rel in differing:
+            results.append(_issue(checker, BLOCK, f"{label}{rel}",
+                                  "내용 drift — ADR-015 의 main ≡ loope invariant 위반"))
+        if not (only_main or only_var or differing):
+            results.append(_issue(checker, PASS, label,
+                                  f"main ≡ loope OK ({len(main_files)} 파일)"))
+
+    # CLAUDE.md 는 변형별 헤더가 다를 수 있으므로 **본문 섹션** 단위로 비교한다.
+    main_md = _PROJECT_ROOT / "CLAUDE.md"
+    var_md = loope / "CLAUDE.md"
+    if main_md.exists() and var_md.exists():
+        import re as _re
+
+        def _sections(path: Path) -> dict:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            out, cur, buf = {}, None, []
+            for line in text.splitlines():
+                if line.startswith("## "):
+                    if cur:
+                        out[cur] = "\n".join(buf).strip()
+                    cur, buf = line[3:].strip(), []
+                else:
+                    buf.append(line)
+            if cur:
+                out[cur] = "\n".join(buf).strip()
+            return out
+
+        a, b = _sections(main_md), _sections(var_md)
+        # 헤더 인용부("이 작업 환경은…")는 변형별 맞춤이 허용된다 — 섹션 이름으로 제외.
+        skip = {"📋 프로젝트 개요", "🗂️ 디렉토리 구조", "🔨 주요 명령어"}
+        drift = [k for k in (set(a) & set(b)) if k not in skip and a[k] != b[k]]
+        missing = sorted((set(a) - set(b)) - skip)
+        for name in missing:
+            results.append(_issue(checker, BLOCK, f"CLAUDE.md §{name}",
+                                  "main 에만 있는 섹션 — loope 로 미러"))
+        for name in sorted(drift):
+            results.append(_issue(checker, BLOCK, f"CLAUDE.md §{name}",
+                                  "본문 drift — 일괄 편집이 일부 변형에만 도달했을 수 있다"))
+        if not (drift or missing):
+            results.append(_issue(checker, PASS, "CLAUDE.md", "본문 섹션 정합 OK"))
+    return results
+
+
 # ---------------------------------------------------------------------------
 
 _CHECKERS = {
@@ -1815,7 +1932,8 @@ _CHECKERS = {
     "LINT-AC": ("acceptance_criteria 누락·모호", check_ac),
     "LINT-ADR": ("ADR ↔ feature 연결성", check_adr),
     "LINT-LEARN": ("learnings 모순", check_learn),
-    "LINT-MIRROR": ("미러링 diff (4변형)", check_mirror),
+    "LINT-MIRROR": ("gstack 표준 변형 대조 (참고용 INFO)", check_mirror),
+    "LINT-SSOT": ("main ≡ claude.loope invariant (ADR-015)", check_ssot),
     "LINT-MR": ("변형 오버레이 정합 (12변형 — F018 MR-11, F019 MR-12, F020 MR-13 추가)", check_mirror_regression),
 }
 

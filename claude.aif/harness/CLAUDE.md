@@ -847,7 +847,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - (localllm.aif 만) `cycle_driver` 의 `_aif_findings` — 항목형 앙상블 결과를 judge 입력에 주입
 - (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
+회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
++ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
 
 ---
 
