@@ -177,6 +177,44 @@ class BookkeepTest(unittest.TestCase):
             self.assertFalse(self.mod._bookkeep_feature(fl, "F001"))
 
 
+class HelperResolutionTest(unittest.TestCase):
+    """모듈이 부르는 `_helper()` 가 실제로 정의돼 있는가.
+
+    왜 이 검사가 있는가 (F024 재현 중 발견):
+      `cmd_run` 진입의 전제 확인 줄이 `_detect_host()` 를 불렀는데 그런 함수는
+      **세 사본 어디에도 없었다** (실제 이름은 `_driver_host`). `run` 은 즉시
+      NameError 로 죽었고, 그런데도 게이트 테스트 12건은 전부 통과했다 —
+      전부 순수 함수만 직접 불렀고 `cmd_run` 진입 경로를 아무도 지나지 않았기
+      때문이다. "통과하는 테스트가 결함 부재의 증거는 아니다"의 또 한 사례다.
+
+    개별 호출을 하나씩 잠그는 대신 **부르는 헬퍼 이름 전부**를 훑는다. 다음에
+    같은 실수를 해도 어느 줄이든 잡힌다.
+    """
+
+    def setUp(self):
+        self.mod = _load()
+
+    def test_호출되는_밑줄_헬퍼가_전부_정의돼_있다(self):
+        import ast
+        import builtins
+
+        tree = ast.parse(_TARGET.read_text(encoding="utf-8"), filename=str(_TARGET))
+        called = {
+            node.func.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id.startswith("_")
+        }
+        # 지역 변수에 담긴 콜러블은 제외 대상이지만, 밑줄 접두 이름은 이 모듈에서
+        # 전부 모듈 수준 헬퍼다. 예외가 생기면 그때 좁힌다.
+        missing = sorted(
+            name for name in called
+            if not hasattr(self.mod, name) and not hasattr(builtins, name)
+        )
+        self.assertEqual(missing, [], f"정의되지 않은 헬퍼를 호출한다: {missing}")
+
+
 if __name__ == "__main__":
     print(f"대상: {_TARGET}")
     unittest.main(verbosity=2)

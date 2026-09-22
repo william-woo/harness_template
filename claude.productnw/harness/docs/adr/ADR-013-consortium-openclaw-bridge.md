@@ -2,6 +2,7 @@
 
 > Feature: F019 (확장) — claude.productnw 컨소시엄 게이트웨이 host-aware 화
 > 상태: `Accepted` (구현 — host 별 transport 분기 + OpenClaw 핸드오프 브리지)
+> 개정: 2026-09-23 — 결정 5-bis: **Teams·Telegram 제거, Slack 단일**
 > 관련: ADR-012(consortium d-3), ADR-001(host 어댑터), ADR-009(opencode 어댑터)
 
 ## 맥락
@@ -92,7 +93,8 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 ## 결과
 - 신규: `_detect_host()` + `_send_openclaw()`/`_receive_openclaw()` (consortium.py),
   핸드오프 디렉토리 2종, 이 ADR, 설치 가이드 §10.
-- 변경: `gateway teams --send/--receive` 가 host 에 따라 transport 분기. self-check 에 host/transport 표시.
+- 변경: `gateway <platform> --send/--receive` 가 host 에 따라 transport 분기. self-check 에 host/transport 표시.
+  (2026-09-23 이후 platform 은 `slack` 하나 — 결정 5-bis)
 - 미구현(다운스트림): OpenClaw courier 의 실제 채널 I/O 바인딩 (ACP/Gateway 도구).
   브리지 왕복(outbox → openclaw-outbound → courier → openclaw-inbound → inbox)은
   `tests/test_consortium_gateway.py::OpenClawBridgeRoundTripTest` 가 실제로 태운다 —
@@ -140,36 +142,53 @@ nw 오버레이(consortium.py/관련 문서)는 여전히 claude.productnw 전�
 | stdlib only | ✅ | ✅ | ✅ |
 | 컨소시엄 적합 | ✅ | ✅ | ❌ |
 
-**Telegram·Teams 를 제거하지 않는다**: Teams 는 사내 표준인 조직에 필요하고 5라운드
-리뷰로 굳혔다. Telegram 은 **사람이 끼는 흐름**(에이전트가 사람에게 알리고, 사람이
-지시를 준다)에는 여전히 유효하므로 그 범위로 좁혀 남겼다 — 할 수 없는 것을 할 수
-있다고 적지 않는 것이 이 파일의 규율이다.
+**두 수신 경로가 같은 경계를 쓴다** — `_ingest_record` (결정 1 정정):
+slack(history) · openclaw(드롭). `ReceiveBoundaryParityTest` 는 같은 악성 입력 5종을
+둘 다에 태운다. transport 별 사본 테스트를 만들면 테스트가 같은 병에 걸린다 — 실제로
+Slack 을 이 parity 에 등재하자마자 사본 테스트가 놓쳤을 결함(보존 실패 시 `break` 로
+뒤의 정상분이 막힘)이 즉시 잡혔다.
 
-**네 수신 경로가 같은 경계를 쓴다** — `_ingest_record` (결정 1 정정):
-teams(Graph) · slack(history) · telegram(getUpdates) · openclaw(드롭).
-`ReceiveBoundaryParityTest` 는 같은 악성 입력 5종을 **openclaw·slack·teams 셋에**
-태운다. Telegram 은 `TelegramHumanLoopTest` 가 따로 덮는다 — parity 에 넣으려면
-사람 작성자 모델이 필요해서다(봇 글은 애초에 전달되지 않는다).
-transport 별 사본 테스트를 만들면 테스트가 같은 병에 걸린다 — 실제로 Slack 을 이
-parity 에 등재하자마자 사본 테스트가 놓쳤을 결함(보존 실패 시 `break` 로 뒤의 정상분이
-막힘)이 즉시 잡혔다.
+> **결정 5-bis — Teams·Telegram 제거 (2026-09-23)**
+>
+> 위 문단은 원래 "Telegram·Teams 를 제거하지 않는다" 였다. **뒤집는다.**
+>
+> 9차 리뷰의 MUST 3건이 전부 같은 모양이었다 — Slack 에 들어간 수정이 형제 transport
+> 의 **장부 갱신**에는 가지 않았다:
+> - Telegram: 타 채팅 skip 분기가 `frozen` 을 무시하고 offset 을 전진 → Telegram 은
+>   offset 을 ack 로 받아 서버에서 update 를 지우므로 **원본이 어디에도 안 남는다**
+> - Teams: 일시 장애 1회에 quarantine 도 seen 되돌림도 없이 건너뜀 → **영구 소실**
+> - Teams: `$top=50` 고정 + `@odata.nextLink` 미추적 → 폴링 사이 51건이면 최고령분 소실
+>
+> 셋 다 rc=0 이라 cron 은 성공으로 본다. 그리고 셋 다 **Slack 에서는 이미 닫힌 결함**
+> 이었다 — 3·5·7차가 Slack 경로에 넣은 `handled`·quarantine·전 페이지 수집이 형제에
+> 가지 않았을 뿐이다.
+>
+> 경계를 하나로 모은 것(`_ingest_record`)은 옳았지만, 그 경계 **바깥**의 장부 갱신
+> (cursor/offset/seen)은 여전히 transport 마다 따로였다. parity 테스트가 "정상분이
+> 도착하는가" 만 단언하고 장부 상태는 보지 않아서 9라운드 동안 통과했다.
+>
+> 선택지는 둘이었다: (a) 장부 갱신까지 parity 로 잠그고 셋을 유지, (b) 경로를 줄인다.
+> **(b) 를 택한다** — Telegram 은 봇↔봇 불가라 컨소시엄에 애초에 못 쓰고(사람 연동은
+> Slack 으로도 된다), Teams 는 기능이 동등하면서 자격증명·승인 비용만 높다. 셋을 **같은
+> 수준으로 유지하는 비용**이 셋을 갖는 값보다 컸다는 것이 9라운드의 실측 결론이다.
+>
+> 되살릴 때의 조건: 장부 갱신(cursor/offset/seen)까지 parity 테스트로 잠근 뒤 들여온다.
+> 지금 남은 두 경로는 `slack` 과 `openclaw` 이고, 후자는 **메신저 선택지가 아니라**
+> host=openclaw 일 때 같은 Slack 채널로 가는 다른 길이다.
 
 **수신 범위를 자격증명으로 못 박는다**: Slack 은 `conversations.history` 가 채널 id 를
-요구하므로 구조적으로 그 채널만 읽는다. Telegram 은 `getUpdates` 가 봇이 속한 **모든**
-채팅을 주므로 `--receive` 에도 chat id 를 **필수**로 요구해 필터한다 — 없으면 낯선
-사용자의 DM 이 계약 검증을 통과해 라우팅 키로 흘러간다(실측).
+요구하므로 구조적으로 그 채널만 읽는다. (제거된 Telegram 은 `getUpdates` 가 봇이 속한
+**모든** 채팅을 줘서 `--receive` 에도 chat id 를 필수로 요구해야 했다 — 없으면 낯선
+사용자의 DM 이 계약 검증을 통과해 라우팅 키로 흘러갔다. Slack 에는 그 표면이 없다.)
 
-**cursor/offset 은 "보존 또는 처리된 접두" 까지만 전진한다**: Telegram 의 offset 전진은
-서버에 **확인(ack)** 이라 그 update 가 지워진다. 처리에 실패한 것을 그냥 전진시키면
-원본이 어디에도 남지 않는다(실측 소실). 실패분 원본을 `*-quarantine/` 에 보존하고,
-보존까지 실패하면 그 지점부터 cursor 를 **동결**한다 — 루프는 계속 돌려 뒤의 정상분을
-막지 않는다.
+**cursor 는 "보존 또는 처리된 접두" 까지만 전진한다**: 처리에 실패한 것을 그냥
+전진시키면 원본이 어디에도 남지 않는다(실측 소실). 실패분 원본을 `*-quarantine/` 에
+보존하고, 보존까지 실패하면 그 지점부터 cursor 를 **동결**한다 — 루프는 계속 돌려
+뒤의 정상분을 막지 않는다.
 
-**검증 범위**: mock Web API 로 Slack 왕복 9건 + parity 5종×3 transport 실측. **실제 Slack 앱 연동은
-미검증** (자격증명은 사용자 소유 — d-3 경계). 설치 절차는 `docs/consortium-gateway-setup.md §2`.
-
-**본문 상한**: Telegram 은 4096자를 넘으면 **거부**하고 outbox 에 남긴다. 봉투가 잘리면
-수신측이 복원하지 못한다 — 조용한 손상보다 시끄러운 거부를 택한다.
+**검증 범위**: mock Web API 로 Slack 왕복 + OpenClaw 브리지 + 수신 경계 parity 26건 실측.
+**실제 Slack 앱 연동은 미검증** (자격증명은 사용자 소유 — d-3 경계).
+설치 절차는 `docs/consortium-gateway-setup.md §2`.
 
 **폴링 수신의 진행 보장 (2026-09-19 추가)**: 페이지를 다 받지 못하면 **받은 것은 처리하고
 cursor 는 동결**한다 (`rc=2`). 세 가지 오답을 거쳤다 — ① 창 하나만 처리하고 cursor 를

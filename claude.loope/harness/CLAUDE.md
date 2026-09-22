@@ -747,8 +747,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 한 팀 내 실행 라우팅 → `/project:orchestrate`
 
 **정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
-**Slack★/Teams 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이고, Telegram 은 봇↔봇을
-플랫폼이 막아 **사람 연동 전용**이다. 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
+**Slack 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이다. Teams·Telegram 은
+2026-09-23 에 제거했다 (ADR-013 결정 5-bis). 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
 자격증명 없이도 로컬 큐로 컨소시엄 흐름을 검증할 수 있다 (graceful degrade).
 팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
 
@@ -769,7 +769,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
-| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack★/Teams 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
 | **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | **ⓑ¹⁰ `claude.aif/`** (판정 설계 — RLAIF/CAI 규율) | loope 1:1 + aif 오버레이 (항목형 rubric + 증거강제 + 앙상블 + UNCERTAIN) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속, aif 오버레이는 stdlib/문서) |
 | **ⓑ¹¹ `localllm.aif/`** (d-2 + 판정 설계) | localllm 1:1 + aif 오버레이 — **A/B 수치 비교가 가능한 유일한 aif 변형** | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
@@ -787,8 +787,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 > **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
 > 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
 > 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
-> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack★/Teams 게이트웨이는
-> 발신·수신 모두 실구현**(polling — ADR-013 결정 5), Telegram 은 봇↔봇 불가라 사람 연동 전용. 팀 내부는
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack 게이트웨이는
+> 발신·수신 모두 실구현**(polling — ADR-013 결정 5·5-bis). 팀 내부는
 > single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
 
 > **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
@@ -853,7 +853,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
 
 **nw(컨소시엄) 오버레이** (claude.productnw 에만 — F019 신설):
-- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + Slack★/Teams 게이트웨이 발신·수신 실구현 — stdlib 폴링)
+- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + Slack 게이트웨이 발신·수신 실구현 — stdlib 폴링)
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 

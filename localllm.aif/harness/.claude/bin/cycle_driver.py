@@ -976,7 +976,9 @@ def cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     # 모듈 docstring 의 "미설치 시 안내 후 exit 0" 은 `self` 에만 참이었다 —
     # `run` 은 FileNotFoundError traceback 으로 죽었다. 진입에서 확인한다.
-    if _detect_host() != "claude-code" and shutil.which("opencode") is None:
+    # 부모(localllm)와 달리 이 사본엔 호스트 분기(`_driver_host`/`_claude_exec`, F029)가
+    # 아직 없다. 그래서 조건 없이 opencode 를 요구한다 — 분기가 미러되면 함께 바꾼다.
+    if shutil.which("opencode") is None:
         print("[cycle] ❌ `opencode` 를 찾을 수 없습니다 — d-2 하네스의 실행 전제입니다.")
         print("  설치: bash .claude/bin/opencode-setup.sh  (또는 PATH 확인)")
         return 1

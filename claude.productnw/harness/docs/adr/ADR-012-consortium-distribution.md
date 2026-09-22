@@ -1,8 +1,9 @@
 # ADR-012: `claude.productnw` 변형 — 분산 멀티팀 에이전트 컨소시엄 (d-3)
 
 > Feature: F019 — Phase 14 `claude.productnw` 변형
-> 상태: `Accepted` (구현 — consortium.py 메시지 계약/로스터/로컬 큐 + **Slack★/Teams 게이트웨이 실구현** + /project:consortium)
+> 상태: `Accepted` (구현 — consortium.py 메시지 계약/로스터/로컬 큐 + **Slack 게이트웨이 실구현** + /project:consortium)
 > 개정: 2026-09-19 — 결정 2 의 "네트워크 전송은 stub" 수정 (ADR-013 결정 5)
+> 개정: 2026-09-23 — **Teams·Telegram 제거, Slack 단일** (ADR-013 결정 5-bis)
 > 관련: ADR-008(orch/single-host, d-1·d-2·d-3 단계), ADR-011(productmgr/product-cycle)
 
 ## 맥락
@@ -51,8 +52,12 @@ nw 오버레이. → 컨소시엄의 각 팀이 PM·세션검색·wiki·orchestr
 | 메시지 계약(JSON 스키마) | ✅ stdlib 실재 | 팀 간 상호운용 표준 — 플랫폼 무관 |
 | 컨소시엄 로스터(팀·에이전트 등록) | ✅ stdlib 실재 | 누가 무엇을 담당하는지 SSOT |
 | 로컬 큐(inbox/outbox 파일) | ✅ stdlib 실재 | 같은 머신/공유 볼륨이면 협업 흐름 검증 가능 |
-| Slack★ / Teams 게이트웨이 | ✅ **실구현** | 발신 + **폴링 수신**. 자격증명 발급만 #3-A (아래 수정 참조) |
-| Telegram 게이트웨이 | ⚠️ 부분 | 발신 + **사람이 쓴 메시지** 수신. 봇↔봇은 플랫폼이 금지 |
+| Slack 게이트웨이 | ✅ **실구현** | 발신 + **폴링 수신**. 자격증명 발급만 #3-A (아래 수정 참조) |
+| OpenClaw 브리지 | ✅ **실구현** | host=openclaw 일 때 같은 Slack 채널로 가는 위임 경로 |
+
+> **2026-09-23**: Teams·Telegram 게이트웨이는 **제거했다**. Telegram 은 봇↔봇을 플랫폼이
+> 막아 컨소시엄에 애초에 쓸 수 없었고, Teams 는 기능이 동등하면서 9차 리뷰 MUST 3건이
+> 전부 그쪽 장부 갱신 누락이었다 (rc=0 조용한 메시지 소실). 상세는 ADR-013 결정 5-bis.
 
 → graceful degrade: 봇 미연동이어도 로컬 큐로 컨소시엄 흐름(등록→메시지→핸드오프)을 검증할 수 있다.
 
@@ -105,7 +110,7 @@ consortium.py 는 stdlib only(json/argparse/urllib/pathlib). 게이트웨이도 
   (single-host 의 암묵 공유 불가). 명시 전달만이 표준.
 - **인증 경계**: 게이트웨이 = 외부 메시징 = #3-A. 토큰·봇 등록은 사용자 승인·다운스트림 책임.
 - **결과적 일관성**: 비동기 큐 — 즉시성·순서 보장 없음. cycle_id 로 추적.
-- **검증 범위**: 로컬 큐 + Slack★/Teams/OpenClaw **mock 왕복** E2E 검증 완료(42건).
+- **검증 범위**: 로컬 큐 + Slack/OpenClaw **mock 왕복** E2E 검증 완료(26건 + 경로 9건).
   **실제 워크스페이스 연동은 미검증** — 자격증명이 사용자 소유라 우리가 돌려 볼 수 없다
   (d-2 의 localllm 이 32B 환경을 다운스트림에 위임한 것과 같은 정직한 경계).
 
@@ -122,5 +127,7 @@ consortium.py 는 stdlib only(json/argparse/urllib/pathlib). 게이트웨이도 
 ## 결과
 - 신규: `consortium.py`, `consortium.md`, `state/consortium/`, 이 ADR, LINT-MR-12.
 - 상속 재사용: productmgr 의 product-cycle + 8 에이전트 + orchestrate/plan-full.
-- 2026-09-19 개정: Slack★/Teams 폴링 transport 를 **실구현**했다 (ADR-013 결정 5).
+- 2026-09-19 개정: Slack/Teams 폴링 transport 를 **실구현**했다 (ADR-013 결정 5).
   미이식으로 남는 것은 **자격증명 발급**과 Slack 푸시(Events API/Socket Mode)뿐이다.
+- 2026-09-23 개정: **Teams·Telegram 제거** (ADR-013 결정 5-bis). 남은 transport 는
+  `slack` 과 host=openclaw 위임 브리지 둘이고, 둘 다 `_ingest_record` 한 경계를 지난다.
