@@ -910,15 +910,24 @@ def _aif_findings(role: str, files: list[str]) -> list[str]:
     items = aj.parse_items(rubric)
     if not items:
         return []
-    repeats = int(os.environ.get("CYCLE_AIF_REPEATS", "2"))
-    prompt = aj.build_prompt(rubric, items, ", ".join(files), _files_context(files))
+    # 비숫자 env 하나에 `int()` 가 터져 **사이클 전체가 죽었다** — docstring 의
+    # "어떤 실패에도 빈 목록" 과 정면으로 모순이었다.
+    try:
+        repeats = max(1, int(os.environ.get("CYCLE_AIF_REPEATS", "2")))
+    except ValueError:
+        _log("  ⓘ CYCLE_AIF_REPEATS 값이 숫자가 아니다 — 기본 2회로 진행")
+        repeats = 2
+    context = _files_context(files)
+    prompt = aj.build_prompt(rubric, items, ", ".join(files), context)
     model = _role_models().get(role)
     judgments = []
     for _ in range(repeats):
         rc, out = _opencode_run(None, prompt, model=model)
         if rc == 124:
             return []
-        judgments.append(aj.validate(items, out))
+        # 컨텍스트를 함께 넘겨 **증거의 실재 여부**까지 대조한다. 없이 부르면
+        # 날조된 `파일:행` 이 그대로 "검출된 문제" 로 judge 에 들어간다.
+        judgments.append(aj.validate(items, out, context))
     if not any(j.get("valid") for j in judgments):
         why = "; ".join(j.get("reason", "?")[:70] for j in judgments)
         _log(f"  ⓘ AIF 항목 판정({role}) 전부 무효 — 주입 없음 ({why})")
@@ -930,7 +939,13 @@ def _aif_findings(role: str, files: list[str]) -> list[str]:
         if v["sev"] != "MUST":
             continue
         if v["decided"] == "unmet":
-            ev = (v["evidence"] or "")[:120]
+            ev = (v["evidence"] or "").strip()[:120]
+            if not ev:
+                # 증거 없는 unmet 을 "검출된 문제" 로 내보내면 거짓 revision 이 된다.
+                # `validate` 가 이미 무효 처리하지만, 주입 지점에서도 한 번 더 막는다 —
+                # 이 경로가 judge 에게 **결정론 검사 결과**로 읽히기 때문이다.
+                _log(f"  ⓘ AIF {iid}: 근거 없는 unmet — 주입하지 않음")
+                continue
             out_lines.append(f"AIF item {iid} ({v['title']}) unmet — evidence: {ev}")
         elif v["decided"] == "UNCERTAIN":
             out_lines.append(f"AIF item {iid} ({v['title']}) undecided ({v['tally']}) — verify it yourself")
@@ -1140,8 +1155,10 @@ def cmd_run(args) -> int:
         ("qa", "verify every acceptance criterion is met"),
     ):
         before_n = max((a.get("n", 0) for a in _vl_state(feature).get("attempts", [])), default=0)
-        mech = (_mechanical_findings(files) + _require_problems(getattr(args, "require", ""))
-                + _aif_findings(role, files))
+        mech = _mechanical_findings(files) + _require_problems(getattr(args, "require", ""))
+        # AIF 는 **모델 판정**이다 — 결정론 검사와 한 목록에 섞으면 judge 가
+        # "이미 검출된 사실" 로 읽는다. 헤더를 분리해 출처를 드러낸다.
+        aif = _aif_findings(role, files)
         judge_prompt = (
             f"You must {ask} for feature {feature}.\n"
             "Inspect the code with the bash tool using cat — that is the approved and sufficient "
@@ -1150,8 +1167,10 @@ def cmd_run(args) -> int:
             f"Step 1: run bash: cat {' '.join(files)}\n"
             f"Step 2: run bash: {args.test_cmd}\n"
             f"Acceptance criteria:\n{criteria}\n"
-            + ("Already detected by deterministic checks (weigh these):\n"
+            + ("Already detected by deterministic checks (these are facts):\n"
                + "\n".join(f"- {x}" for x in mech) + "\n" if mech else "")
+            + ("Item-rubric judgments by a model (N-vote ensemble — verify before relying on "
+               "them):\n" + "\n".join(f"- {x}" for x in aif) + "\n" if aif else "")
             + "VERDICT RULE: passing tests are not sufficient. If ANY acceptance criterion is "
               "unmet — including a missing docstring — record --verdict revision. Use pass only "
               "when every criterion is satisfied.\n"

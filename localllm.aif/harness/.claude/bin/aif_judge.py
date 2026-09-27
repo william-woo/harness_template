@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -38,14 +39,90 @@ _RUBRICS = _ROOT / ".claude" / "rubrics"
 _STATE = _ROOT / ".claude" / "state" / "aif"
 
 _VERDICTS = ("met", "unmet", "na")
-_PATH_LINE = re.compile(r"[\w./-]+:\d+")
-_QUOTED = re.compile(r"[\"'`].{4,}[\"'`]")
+_PATH_LINE = re.compile(r"([\w./-]+):(\d+)")
+_QUOTED = re.compile(r"[\"'`](.{4,}?)[\"'`]")
+# 판정 파일은 `j<숫자>.json` 만이다. 느슨한 glob 은 `junk.json` 도 판정으로 집계했고,
+# 사전순 정렬은 j10 을 j2 앞에 뒀다.
+_JUDGMENT_FILE = re.compile(r"^j(\d+)\.json$")
+
+# run·rubric 이름은 **파일 경로 성분**이 된다. 검증 없이 쓰면 상태 디렉토리를 벗어난다
+# (실측: `record --run ../../escaped` → `.claude/escaped/j1.json`).
+# `verify_loop.py:_safe_name` 이 이미 같은 결함을 닫았으므로 그 규칙을 그대로 쓴다.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ITEM_HEADER = re.compile(r"^###\s+(\w+)\s*\|\s*(MUST|SHOULD)\s*\|\s*(.+?)\s*$")
 _ANSWER = re.compile(r"^\s*[-*]?\s*(\w+)\s*:\s*(met|unmet|na)\b(.*)$", re.I)
 
 
 def _log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def _safe_name(value: str, what: str) -> str:
+    """경로 성분으로 쓸 이름을 검증한다. 위반이면 SystemExit(2)."""
+    name = (value or "").strip()
+    if not _NAME_RE.match(name) or ".." in name:
+        _log(f"❌ 잘못된 {what}: {value!r}")
+        _log("  영숫자로 시작하고 영숫자·`.`·`_`·`-` 만, 64자 이내 (`..` 불가)")
+        raise SystemExit(2)
+    return name
+
+
+def _run_dir(run: str) -> Path:
+    """판정 기록 디렉토리 — 이름 검증을 한 주소에 모은다."""
+    return _STATE / _safe_name(run, "run 이름")
+
+
+def _judgment_files(d: Path) -> list[tuple[int, Path]]:
+    """`j<n>.json` 만 번호 순으로 돌려준다."""
+    if not d.is_dir():
+        return []
+    found = [(int(m.group(1)), p) for p in d.iterdir()
+             if (m := _JUDGMENT_FILE.match(p.name)) and p.is_file()]
+    return sorted(found)
+
+
+def _write_judgment(d: Path, res: dict) -> int:
+    """판정을 **배타 생성**으로 저장하고 번호를 돌려준다.
+
+    예전엔 `len(glob)+1` 이라 j1·j3 만 있으면 3 을 다시 계산해 **기존 판정을 덮어썼고**,
+    동시 record 10회에 파일이 9개가 됐다. 번호는 최대값+1 로 잡고 경쟁은 `O_EXCL` 이 막는다.
+    """
+    d.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(res, ensure_ascii=False, indent=2)
+    start = max((n for n, _ in _judgment_files(d)), default=0)
+    for n in range(start + 1, start + 1001):
+        try:
+            fd = os.open(str(d / f"j{n}.json"), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        return n
+    raise OSError(f"판정 저장 실패(후보 1000개 소진): {d}")
+
+
+def _load_judgment(path: Path) -> dict:
+    """판정 파일 1건을 **안전하게** 읽는다 (손상·타입 불일치는 무효 판정으로).
+
+    예전엔 `json.loads` 가 무방어라 **유효한 j2 가 있어도 j1 하나가 깨지면 run 전체가
+    죽었다**. 더 나쁜 것은 `{"items": "문자열"}` — 예외 없이 전 항목이 조용히 UNCERTAIN
+    이 돼 원인이 보이지 않았다.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError, RecursionError) as exc:
+        return {"valid": False, "reason": f"손상 {path.name} ({type(exc).__name__})", "items": {}}
+    if not isinstance(data, dict):
+        return {"valid": False, "reason": f"최상위가 객체가 아님 {path.name}", "items": {}}
+    items = data.get("items")
+    if not isinstance(items, dict):
+        return {"valid": False, "reason": f"items 가 객체가 아님 {path.name}", "items": {}}
+    data["items"] = {k: v for k, v in items.items()
+                     if isinstance(v, dict) and isinstance(v.get("verdict"), str)}
+    if len(data["items"]) != len(items):
+        data["valid"] = False
+        data["reason"] = f"항목 형태 오류 {path.name}"
+    return data
 
 
 # ─────────────────────────────── rubric 파싱 ────────────────────────────────
@@ -114,11 +191,21 @@ def build_prompt(name: str, items: list[dict], target: str, context: str = "") -
 
 
 def _read_target(target: str) -> str:
-    """`--target` 의 쉼표 구분 경로들을 읽어 판정 대상 내용을 만든다 (없는 파일은 표시)."""
+    """`--target` 의 쉼표 구분 경로들을 읽어 판정 대상 내용을 만든다.
+
+    프로젝트 루트 밖은 읽지 않는다 — `--target /etc/hostname` 이 호스트명을 그대로
+    프롬프트에 실었다. `cycle_driver._safe_rel` 의 docstring 이 이 정확한 사례를
+    F020·F023 결함으로 기록하고 있다. 같은 클래스를 세 번째로 닫는다.
+    """
     chunks = []
+    root = _ROOT.resolve()
     for name in (t.strip() for t in target.split(",") if t.strip()):
-        p = _ROOT / name
-        body = p.read_text(encoding="utf-8") if p.is_file() else "(파일 없음)"
+        candidate = Path(name)
+        resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
+        if resolved != root and root not in resolved.parents:
+            chunks.append(f"--- {name} ---\n(프로젝트 루트 밖 — 읽지 않음)")
+            continue
+        body = resolved.read_text(encoding="utf-8") if resolved.is_file() else "(파일 없음)"
         chunks.append(f"--- {name} ---\n{body}")
     return "\n".join(chunks)
 
@@ -129,13 +216,57 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
-def validate(items: list[dict], raw: str) -> dict:
+def _echoes(evidence: str, rubric_ev: str) -> bool:
+    """증거가 rubric 의 '증거:' 문구를 베낀 것인가.
+
+    예전엔 `startswith(앞 15자)` 라 `"확인: "`·`"- "` 같은 **접두어 한 조각**으로
+    무력화됐다 (실측: 6건 중 5건이 통과). 포함 관계로 바꾼다 — 베낀 문구가 어디에
+    있든 잡힌다.
+    """
+    needle = _norm(rubric_ev)[:20]
+    return bool(needle) and needle in _norm(evidence)
+
+
+def _evidence_grounded(evidence: str, context: str) -> str:
+    """증거가 **실재하는지** 컨텍스트와 대조한다. 문제 없으면 빈 문자열.
+
+    형식 검사만으로는 `nonexistent_file_zzz.py:9999` 도, 어디에도 없는 인용도
+    통과했다 (실측). acceptance_criteria 3 이 요구한 것은 형식이 아니라 증거다.
+    컨텍스트가 없으면(호스트가 안 넘긴 경우) 검사를 건너뛴다 — 없는 것으로
+    거짓 unmet 을 만들지 않는다.
+    """
+    if not context:
+        return ""
+    norm_ctx = _norm(context)
+    # 컨텍스트 헤더 `--- <파일명> ---` 에서 실재 파일 목록을 뽑는다
+    known = set(re.findall(r"^--- (.+?) ---$", context, re.M))
+    known_names = {Path(k).name for k in known} | known
+    for path, line_no in _PATH_LINE.findall(evidence):
+        if Path(path).name not in known_names and path not in known_names:
+            return f"없는 파일을 증거로 듦: {path}"
+        # 행 번호가 그 파일의 줄 수를 넘으면 날조다
+        block = re.search(rf"^--- {re.escape(path)} ---$(.*?)(?=^--- |\Z)",
+                          context, re.M | re.S)
+        if block and int(line_no) > len(block.group(1).splitlines()):
+            return f"파일 끝을 넘는 행 번호: {path}:{line_no}"
+    for quoted in _QUOTED.findall(evidence):
+        if len(quoted) >= 8 and _norm(quoted) not in norm_ctx:
+            return f"대상에 없는 인용: {quoted[:40]}"
+    return ""
+
+
+def validate(items: list[dict], raw: str, context: str = "") -> dict:
     """
     judge 가 반환한 텍스트를 검증한다.
 
     항목 누락·중복·미정의 id 는 판정 전체를 무효(INVALID)로 만든다. 개별 항목의 증거 결함
-    (증거 부재 / rubric 에코 / na 사유 부재)은 그 항목만 무효 처리해 `UNCERTAIN` 으로 남긴다 —
-    추측으로 채우면 판정 자체가 신뢰를 잃기 때문이다.
+    (증거 부재 / rubric 에코 / 날조된 파일:행·인용 / na 사유 부재)은 그 항목만 무효 처리해
+    `UNCERTAIN` 으로 남긴다 — 추측으로 채우면 판정 자체가 신뢰를 잃기 때문이다.
+
+    Args:
+        items: `parse_items` 결과
+        raw: judge 가 돌려준 텍스트
+        context: 판정 대상 내용. 주면 증거의 **실재 여부**까지 대조한다.
 
     Returns:
         {"valid": bool, "reason": str, "items": {id: {"verdict","evidence","invalid"}}}
@@ -150,6 +281,10 @@ def validate(items: list[dict], raw: str) -> dict:
         if not m:
             continue
         iid, verdict = m.group(1), m.group(2).lower()
+        # 로컬 32B judge 는 소문자 id 를 흔히 쓴다. `_ANSWER` 는 verdict 에만 re.I 를
+        # 걸어서, `m1: met` 하나로 **판정 전체가 무효**가 됐다 (미정의 id).
+        if iid not in by_id:
+            iid = next((k for k in by_id if k.lower() == iid.lower()), iid)
         if iid not in by_id:
             unknown.append(iid)
             continue
@@ -169,8 +304,21 @@ def validate(items: list[dict], raw: str) -> dict:
                 rec["invalid"] = "증거 부재 또는 과소"
             elif not absence and not (_PATH_LINE.search(evidence) or _QUOTED.search(evidence)):
                 rec["invalid"] = "파일:행 또는 인용 증거 없음"
-            elif _norm(by_id[iid]["ev"])[:15] and _norm(evidence).startswith(_norm(by_id[iid]["ev"])[:15]):
+            elif _echoes(evidence, by_id[iid]["ev"]):
                 rec["invalid"] = "rubric 증거 문구 에코"
+            else:
+                rec["invalid"] = _evidence_grounded(evidence, context)
+        elif verdict == "unmet":
+            # 증거 검증이 met·na 에만 있었다. 빈 증거 unmet 이 유효표로 인정되고,
+            # cycle_driver 가 그것을 "결정론 검사가 검출한 문제" 헤더 아래로 judge 에
+            # 주입했다 — `_aif_findings` 자신의 docstring 이 경고한 거짓 부재 경로다.
+            # 무엇을 어디서 확인했는지 없으면 지적으로 인정하지 않는다.
+            if len(evidence) < 12:
+                rec["invalid"] = "unmet 근거 부재 — 무엇을 어디서 확인했는지 적어야 한다"
+            elif _echoes(evidence, by_id[iid]["ev"]):
+                rec["invalid"] = "rubric 증거 문구 에코"
+            else:
+                rec["invalid"] = _evidence_grounded(evidence, context)
         elif verdict == "na" and len(evidence) < 5:
             rec["invalid"] = "na 사유 부재"
         found[iid] = rec
@@ -229,6 +377,7 @@ def aggregate(items: list[dict], judgments: list[dict]) -> dict:
 
 def cmd_plan(args) -> int:
     """판정 프롬프트를 출력한다 (호스트가 이걸 judge 에게 준다)."""
+    args.rubric = _safe_name(args.rubric, "rubric 이름")
     items = parse_items(args.rubric)
     if not items:
         _log(f"❌ rubric 항목 없음 — {_RUBRICS / (args.rubric + '.items.md')}")
@@ -241,18 +390,29 @@ def cmd_plan(args) -> int:
 
 def cmd_record(args) -> int:
     """judge 판정을 검증해 저장한다 (입력: 파일 또는 stdin)."""
+    args.rubric = _safe_name(args.rubric, "rubric 이름")
+    d = _run_dir(args.run)
     items = parse_items(args.rubric)
     if not items:
         _log(f"❌ rubric 항목 없음 — {args.rubric}")
         return 1
-    raw = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
-    res = validate(items, raw)
-    d = _STATE / args.run
-    d.mkdir(parents=True, exist_ok=True)
-    n = len(list(d.glob("j*.json"))) + 1
+    if args.file:
+        try:
+            raw = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:      # 운영자 입력 = 경계. traceback 대신 안내한다.
+            _log(f"❌ 판정 파일을 읽을 수 없습니다: {args.file} ({type(exc).__name__})")
+            return 1
+    else:
+        raw = sys.stdin.read()
+    # `--target` 을 주면 증거의 **실재 여부**까지 대조한다 (없으면 형식 검사까지).
+    context = _read_target(args.target) if getattr(args, "target", None) else ""
+    res = validate(items, raw, context)
     res["rubric"] = args.rubric
-    (d / f"j{n}.json").write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    res["evidence_verified"] = bool(context)
+    n = _write_judgment(d, res)
 
+    if not context:
+        _log("ⓘ --target 미지정 — 증거의 실재 여부는 확인하지 않았다(형식 검사까지).")
     if not res["valid"]:
         _log(f"⚠️ 판정 {n} 무효 — {res['reason']} (집계에서 제외된다)")
     else:
@@ -263,19 +423,34 @@ def cmd_record(args) -> int:
 
 def cmd_aggregate(args) -> int:
     """저장된 판정들을 앙상블해 최종 verdict 를 낸다."""
-    d = _STATE / args.run
-    files = sorted(d.glob("j*.json")) if d.is_dir() else []
+    d = _run_dir(args.run)
+    files = [p for _, p in _judgment_files(d)]
     if not files:
         _log(f"❌ 판정 기록 없음 — {d}")
         return 1
-    judgments = [json.loads(f.read_text(encoding="utf-8")) for f in files]
-    items = parse_items(judgments[0].get("rubric", args.rubric or ""))
+    judgments = [_load_judgment(f) for f in files]
+    for j in judgments:
+        if not j.get("valid") and j.get("reason"):
+            _log(f"⚠️ 제외: {j['reason']}")
+    rubric_name = _safe_name(args.rubric, "rubric 이름") if args.rubric else ""
+    # run 안에 서로 다른 rubric 의 판정이 섞이면, 항목 id 가 안 맞아 전 항목이
+    # "유효표 과반 미달" 로 조용히 UNCERTAIN 이 됐다 — 원인이 로그에 안 보였다.
+    seen_rubrics = {j.get("rubric") for j in judgments if j.get("rubric")}
+    base = rubric_name or (sorted(seen_rubrics)[0] if seen_rubrics else "")
+    if len(seen_rubrics) > 1:
+        _log(f"⚠️ run 에 rubric 이 섞여 있다 {sorted(seen_rubrics)} — '{base}' 기준으로 집계하고 "
+             f"나머지는 무효 처리한다.")
+        for j in judgments:
+            if j.get("rubric") and j["rubric"] != base:
+                j["valid"] = False
+    items = parse_items(base)
     if not items:
         _log("❌ rubric 항목을 찾을 수 없다 — --rubric 으로 지정하라")
         return 1
 
     agg = aggregate(items, judgments)
     (d / "verdict.json").write_text(json.dumps(agg, ensure_ascii=False, indent=2), encoding="utf-8")
+    rubric = base
 
     mark = {"met": "✅", "unmet": "❌", "na": "—", "UNCERTAIN": "❔"}
     _log(f"=== {args.run} — 판정 {agg['judgments']}회 (무효 {agg['invalid_judgments']}) ===")
@@ -284,7 +459,6 @@ def cmd_aggregate(args) -> int:
         if v["decided"] == "unmet" and v["evidence"]:
             _log(f"       근거: {v['evidence'][:160]}")
     _log(f"\n최종: **{agg['overall']}**")
-    rubric = judgments[0].get("rubric", "")
     if agg["overall"] == "uncertain":
         # verify_loop 는 pass|revision|fail 만 받는다. 갈린 판정을 그중 하나로 강제 기록하면
         # 불확실성이 기록에서 사라진다 — 반복을 늘려 해소하거나 사람이 판단한다.
@@ -314,6 +488,7 @@ def cmd_compare(args) -> int:
 
 def cmd_auto(args) -> int:
     """로컬 LLM 으로 판정을 N회 자동 수행한다 (cycle_driver 보유 변형 전용)."""
+    args.rubric = _safe_name(args.rubric, "rubric 이름")
     items = parse_items(args.rubric)
     if not items:
         _log(f"❌ rubric 항목 없음 — {args.rubric}")
@@ -326,16 +501,19 @@ def cmd_auto(args) -> int:
         _log("  다른 변형에서는 plan → (호스트 judge) → record → aggregate 로 쓴다.")
         return 2
 
-    prompt = build_prompt(args.rubric, items, args.target, _read_target(args.target))
+    context = _read_target(args.target)
+    prompt = build_prompt(args.rubric, items, args.target, context)
     model = cd._role_models().get(args.role)
-    d = _STATE / args.run
-    d.mkdir(parents=True, exist_ok=True)
+    d = _run_dir(args.run)
     for i in range(1, args.repeats + 1):
         rc, out = cd._opencode_run(None, prompt, model=model)
-        res = validate(items, out)
+        res = validate(items, out, context)
         res["rubric"] = args.rubric
-        (d / f"j{i}.json").write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
-        _log(f"  판정 {i}/{args.repeats}: {'유효' if res['valid'] else '무효 — ' + res['reason']}")
+        res["evidence_verified"] = bool(context)
+        # 예전엔 `j{i}` 를 무조건 덮어써서, 앞선 `record` 결과 위에 겹쳐 썼다.
+        n = _write_judgment(d, res)
+        _log(f"  판정 {n} ({i}/{args.repeats}): "
+             f"{'유효' if res['valid'] else '무효 — ' + res['reason']}")
     return cmd_aggregate(args)
 
 
@@ -373,6 +551,7 @@ def main() -> None:
     p_re.add_argument("rubric")
     p_re.add_argument("--run", required=True, help="판정 묶음 id (예: F001-r1)")
     p_re.add_argument("--file", help="판정 텍스트 파일 (생략 시 stdin)")
+    p_re.add_argument("--target", help="판정 대상 경로 — 주면 증거의 실재 여부까지 대조한다")
 
     p_ag = sub.add_parser("aggregate", help="앙상블 집계 → 최종 verdict")
     p_ag.add_argument("run")
