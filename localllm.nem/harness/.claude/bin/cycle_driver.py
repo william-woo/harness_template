@@ -931,11 +931,40 @@ def _artifact_problems(files: list[str]) -> list[str]:
 
 
 def _tool_schema() -> dict:
-    """도구 스키마 스냅샷을 읽는다 (ADR-022 결정 1). 없으면 빈 dict."""
+    """도구 스키마 스냅샷을 읽는다 (ADR-022 결정 1). 없거나 이상하면 빈 dict.
+
+    docstring 이 "없으면 물러난다" 고 적었지만 **손상 ≠ 부재**였다. 잘린 JSON 이면
+    `_ensure_files` 가 JSONDecodeError 로 중단됐고, `required` 가 리스트가 아니라
+    문자열이면 파생기가 그 문자열을 **한 글자씩** 인자 이름으로 읽어 성립 불가능한
+    지시를 스스로 만들어 냈다 — 이 기능이 없애려던 바로 그것이다.
+    스냅샷은 파일 I/O 경계이므로 여기서 막는다.
+
+    (이 설명에 결함 예시를 그대로 적었더니 `schema_check` 가 그걸 실제 지시로
+     보고 BLOCK 을 냈다. 검사기가 옳았다 — 문구를 바꿨다.)
+    """
     p = _ROOT / ".claude" / "schema" / "opencode-tools.json"
     if not p.is_file():
         return {}
-    return json.loads(p.read_text(encoding="utf-8")).get("tools") or {}
+    try:
+        snap = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError, RecursionError) as exc:
+        _log(f"  ⚠️ 도구 스키마 스냅샷 손상 — 기본 문구로 진행: {type(exc).__name__}")
+        return {}
+    tools = snap.get("tools") if isinstance(snap, dict) else None
+    if not isinstance(tools, dict):
+        _log("  ⚠️ 도구 스키마 스냅샷 형태 오류(tools 가 객체가 아님) — 기본 문구로 진행")
+        return {}
+    # spec 의 `required` 가 비어 있거나 문자열이면 파생이 쓰레기를 낸다. 그런 spec 은 버린다.
+    clean = {}
+    for name, spec in tools.items():
+        if not isinstance(spec, dict):
+            continue
+        req = spec.get("required")
+        if not isinstance(req, list) or not req or not all(isinstance(k, str) and k for k in req):
+            _log(f"  ⚠️ 스냅샷의 '{name}' required 가 비정상 — 그 항목만 무시")
+            continue
+        clean[name] = spec
+    return clean
 
 
 def _write_instruction(rel: str) -> str:
@@ -1039,12 +1068,28 @@ def _record_from_prose(role: str, feature: str, out: str, before: int) -> str | 
     Returns:
         str | None: 기록한 verdict, 줄이 없으면 None
     """
-    m = _VERDICT_LINE.search(out or "")
-    if not m:
+    # 프롬프트는 "end your reply with exactly one line" 이다 — **마지막**이 권위다.
+    # 첫 매치를 취하면 모델이 스스로 고친 판정이 버려진다 (실측: `pass` 초안 뒤
+    # `revision` 정정 → pass 가 기록됨). 게다가 프롬프트를 인용한 뒤 실판정을 낸
+    # 경우엔 첫 매치가 에코라 실판정까지 통째로 버려졌다.
+    text = out or ""
+    matches = list(_VERDICT_LINE.finditer(text))
+    if not matches:
+        return None
+    m = matches[-1]
+    # 그 줄이 **마지막 비공백 줄**일 때만 인정한다. judge 가 `cat` 한 파일 안에
+    # `VERDICT:` 가 들어 있어도 기록되지 않게 한다.
+    if text[m.end():].strip():
+        _log(f"  ⚠️ {role} VERDICT 줄이 응답 끝이 아님 — 기록하지 않음")
         return None
     verdict, note = m.group(1).lower(), (m.group(2) or "").strip()
-    if not note or _is_echo_note(note):
+    if not note or _is_echo_note(note) or _is_placeholder_note(note):
         _log(f"  ⚠️ {role} VERDICT 줄에 근거가 없음 — 기록하지 않음")
+        return None
+    # 초기 경로의 `_contradicts` 게이트가 이 경로엔 없었다 — "pass 인데 본문은
+    # 미충족을 말한다" 가 그대로 pass 로 기록됐다.
+    if _contradicts(verdict, note):
+        _log(f"  ⚠️ {role} pass 인데 근거가 미충족을 말한다 — 기록하지 않음")
         return None
     _vl(["record", feature, "--grader", role, "--verdict", verdict, "--notes", note[:300]])
     _log(f"  ⓘ {role} 가 도구를 부르지 않아 드라이버가 VERDICT 줄을 대신 기록: {verdict}")
@@ -1306,6 +1351,12 @@ def cmd_run(args) -> int:
                 )
             rc, _out = _agent_call(role, prompt)
             verdict = _judge_recorded(feature, role, before_n)
+            if not verdict:
+                # 폴백이 **재판정 경로에만** 배선돼 있었다 (`_judge_with_retry`).
+                # 초기 라운드에서 judge 가 VERDICT 줄을 정확히 내도 기회조차 없어
+                # 3회 재시도 후 exit 2 였다 — 측정 11 의 "폴백 발동 0회" 는
+                # 그 배선 결함 위에서 나온 수치다 (결과 14 각주 참조).
+                verdict = _record_from_prose(role, feature, _out, before_n)
             if verdict:
                 # 기록됐다고 끝이 아니다 — 프롬프트의 `<your concrete finding>` 를
                 # 그대로 베껴 넣으면 판정이 아니라 **메아리**다. 그 상태로 pass 를

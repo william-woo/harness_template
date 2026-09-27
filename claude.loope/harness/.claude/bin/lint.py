@@ -924,6 +924,8 @@ _D2_OVERLAY_FILES = [
     "harness/.claude/bin/opencode-setup.sh",
     "harness/.claude/bin/cycle_driver.py",   # 결정론 supervisor 드라이버 (F025 — ADR-018)
     "harness/.claude/bin/autoresearch.py",   # 자가 실험 루프 (F027 — ADR-019)
+    "harness/.claude/bin/schema_check.py",   # 도구 지시 ↔ 스키마 정합 (F031 — ADR-022)
+    "harness/.claude/schema/opencode-tools.json",   # 도구 스키마 스냅샷 (F031)
 ]
 
 # d-2 상태/산출 디렉토리 (MR-9)
