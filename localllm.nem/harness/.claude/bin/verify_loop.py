@@ -59,6 +59,9 @@ _DETERMINISTIC = {"lint", "design-review", "qa-browser", "test"}
 _JUDGE = {"reviewer", "qa", "architect"}
 
 _VERDICTS = ("pass", "revision", "fail")
+_STATUSES = ("in-loop", "passed", "failed", "escalated")
+# `_print_loop` 가 직접 첨자하는 키들 — 없으면 목록 전체가 죽는다.
+_REQUIRED_ATTEMPT_KEYS = {"n", "grader", "kind", "verdict"}
 
 
 def _now() -> str:
@@ -67,10 +70,14 @@ def _now() -> str:
 
 
 def _grader_kind(grader: str) -> str:
-    """grader 이름 → 종류(deterministic|judge). 미등록은 judge 로 간주."""
-    if grader in _DETERMINISTIC:
-        return "deterministic"
-    return "judge"
+    """grader 이름 → 종류(deterministic|judge).
+
+    미등록 이름은 여기 오지 않는다 — `cmd_record` 가 먼저 거부한다 (MUST-2).
+    예전엔 미등록을 **judge 로 승격**시켰고, judge 의 pass 는 루프를 통과시키므로
+    `--grader Lint` 오타 하나가 게이트를 통째로 건너뛰었다. 권한이 큰 쪽을 기본값으로
+    두는 것이 fail-open 이다.
+    """
+    return "deterministic" if grader in _DETERMINISTIC else "judge"
 
 
 # feature id·rubric 이름은 **파일 경로 성분**이 된다. 검증 없이 쓰면 상태 디렉토리를
@@ -97,6 +104,22 @@ def _loop_path(feature: str) -> Path:
     return _STATE / f"{_safe_name(feature, 'feature id')}.json"
 
 
+def _quarantine(path: Path, why: str) -> None:
+    """손상·비정형 상태 파일을 `*.corrupt-<ts>` 로 치우고 None 을 돌려준다.
+
+    삭제하지 않는 이유: 원인을 남겨야 다음 사람이 무슨 일이 있었는지 안다.
+    파싱 오류와 형태 오류가 **같은 주소**를 쓰게 모아 둔다 — 갈라 두면 한쪽만 고친다.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    quarantined = path.with_suffix(f".json.corrupt-{stamp}")
+    try:
+        os.replace(path, quarantined)
+    except OSError:
+        pass
+    print(f"[verify-loop] ⚠️ 상태 파일 {why} — {quarantined.name} 로 보존하고 새로 시작")
+    return None
+
+
 def _read_loop(path: Path) -> dict | None:
     """상태 파일 하나를 **안전하게** 읽는다. 손상이면 옆으로 치우고 None.
 
@@ -106,30 +129,50 @@ def _read_loop(path: Path) -> dict | None:
     """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001 — 상태 파일은 신뢰 불가 입력이다
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        quarantined = path.with_suffix(f".json.corrupt-{stamp}")
-        try:
-            os.replace(path, quarantined)
-        except OSError:
-            pass
-        print(f"[verify-loop] ⚠️ 상태 파일 손상 — {quarantined.name} 로 보존하고 새로 시작: "
-              f"{type(exc).__name__}: {str(exc)[:60]}")
-        return None
+    except (ValueError, UnicodeDecodeError, RecursionError, OSError) as exc:
+        # 디렉토리·권한 오류까지 "손상" 으로 보고 **rename** 하면 안 된다 — 예전엔
+        # `IsADirectoryError` 에 디렉토리를 통째로 옆으로 치웠다. 읽기 실패 종류를 좁힌다.
+        if isinstance(exc, OSError) and not isinstance(exc, (IsADirectoryError, PermissionError)):
+            raise
+        if isinstance(exc, (IsADirectoryError, PermissionError)):
+            print(f"[verify-loop] ⚠️ 상태 파일을 읽을 수 없음(건너뜀): {path.name} — "
+                  f"{type(exc).__name__}")
+            return None
+        return _quarantine(path, f"손상 ({type(exc).__name__}: {str(exc)[:60]})")
     # 형태까지 본다 — 파싱만 통과한 비정형은 소비 지점에서 KeyError/AttributeError 가 된다.
     if not isinstance(data, dict) or not isinstance(data.get("attempts"), list):
-        print(f"[verify-loop] ⚠️ 상태 파일 형태 오류(무시): {path.name}")
-        return None
-    # `feature` 키가 없으면 `_save` 가 `loop["feature"]` 에서 KeyError 로 죽고,
-    # 그 루프는 **영구 wedge** 가 된다 (F025 리뷰가 잡은 내 F020 회귀).
-    # 파일명이 곧 feature id 이므로 그것으로 채운다.
-    data.setdefault("feature", path.stem)
-    data.setdefault("revision_count", 0)
-    data.setdefault("escalation_threshold", _ESCALATION_THRESHOLD)
-    data.setdefault("status", "in-loop")
-    data.setdefault("rubric", "code-review")
-    data["attempts"] = [a for a in data["attempts"] if isinstance(a, dict)]
+        # 예전엔 여기서 None 만 돌려줬고, 그러면 자동 start 가 그 파일을 **덮어썼다**.
+        # "손상은 삭제하지 않고 보존한다" 는 약속이 파싱 오류에만 적용됐던 것이다.
+        return _quarantine(path, "형태 오류(최상위 dict + attempts list 아님)")
+
+    # `feature` 키는 **파일명이 SSOT** 다. 예전엔 `setdefault` 라 키가 있으면 그대로
+    # 믿었고, 내용이 다른 feature 를 가리키면 `_save` 가 **다른 파일에 써서** 원본은
+    # 영영 갱신되지 않았다 (락은 F001, 쓰기는 F002 — 교차 lost update).
+    data["feature"] = path.stem
+    data["revision_count"] = _as_count(data.get("revision_count"), 0)
+    data["escalation_threshold"] = _as_count(
+        data.get("escalation_threshold"), _ESCALATION_THRESHOLD, minimum=1)
+    if data.get("status") not in _STATUSES:
+        data["status"] = "in-loop"
+    if not isinstance(data.get("rubric"), str) or not data["rubric"].strip():
+        data["rubric"] = "code-review"
+    # attempt 원소도 소비 지점(`_print_loop` 의 `a['n']`)이 직접 첨자한다 — 필수 키가
+    # 없는 원소 하나에 `list` 가 통째로 죽었다. dict 여부만으로는 부족하다.
+    data["attempts"] = [a for a in data["attempts"]
+                        if isinstance(a, dict) and _REQUIRED_ATTEMPT_KEYS <= a.keys()]
     return data
+
+
+def _as_count(value: object, default: int, minimum: int = 0) -> int:
+    """정수 카운터를 안전하게 읽는다 (bool 은 정수가 아니다).
+
+    `revision_count` 가 문자열 `"3"` 이면 `+= 1` 이 TypeError 를 내고 **매 record 마다**
+    같은 자리에서 죽었다 — 영구 wedge. `escalation_threshold` 가 None 이면 `>=` 비교가
+    터진다. 값을 못 믿으면 기본값으로 갈아끼운다.
+    """
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        return default
+    return value
 
 
 def _load(feature: str) -> dict | None:
@@ -180,24 +223,28 @@ def _loop_lock(feature: str):
 
 
 def cmd_start(args) -> int:
-    """feature 의 검증 루프를 개시한다 (rubric 바인딩)."""
-    feature = args.feature
-    rubric = args.rubric or "code-review"
+    """feature 의 검증 루프를 개시한다 (rubric 바인딩).
+
+    이미 루프가 있으면 **거부**한다 (`--force` 로만 리셋). 예전엔 조용히 덮어써서
+    에스컬레이션 직전의 revision 카운터를 0 으로 되돌릴 수 있었다 — 판정 위조 경로다.
+    """
+    feature = _safe_name(args.feature, "feature id")
+    # rubric 도 `_RUBRICS / f"{rubric}.md"` 로 **경로 성분**이 된다. 커밋 1731d3e 는
+    # "rubric 이름도 같은 검증" 이라 적었지만 실제로는 feature 에만 걸려 있었다.
+    rubric = _safe_name(args.rubric or "code-review", "rubric 이름")
+    existing = _load(feature)
+    if existing is not None and not getattr(args, "force", False):
+        print(f"[verify-loop] ❌ {feature} 루프가 이미 있습니다 "
+              f"(시도 {len(existing['attempts'])}회, revision {existing['revision_count']}).")
+        print("  이력을 지우고 다시 시작하려면 `--force`. 이어서 기록하려면 `record` 를 쓰십시오.")
+        return 1
     rubric_file = _RUBRICS / f"{rubric}.md"
     if not rubric_file.exists():
         avail = ", ".join(p.stem for p in _RUBRICS.glob("*.md")) or "(없음)"
         print(f"[verify-loop] ⚠️ rubric '{rubric}' 없음 — 사용 가능: {avail}")
         print(f"  계속 진행하나 rubric 없이 기록됩니다 (.claude/rubrics/{rubric}.md 권장).")
-    loop = {
-        "feature": feature,
-        "rubric": rubric,
-        "attempts": [],
-        "revision_count": 0,
-        "status": "in-loop",
-        "escalation_threshold": _ESCALATION_THRESHOLD,
-        "started": _now(),
-    }
-    _save(loop)
+    with _loop_lock(feature):
+        _start_locked(feature, rubric)
     print(f"[verify-loop] 개시: {feature} (rubric={rubric}, 에스컬레이션 임계 {_ESCALATION_THRESHOLD}회)")
     print(f"  다음: grader 가 채점 후 `record {feature} --grader <name> --verdict pass|revision|fail`")
     return 0
@@ -216,12 +263,32 @@ def cmd_record(args) -> int:
             print(f"[verify-loop] ❌ {label} 는 0 이상이어야 합니다: {val}")
             return 1
     if args.grader not in _DETERMINISTIC | _JUDGE:
-        print(f"[verify-loop] ⚠️ 미등록 grader '{args.grader}' — judge 로 기록합니다.")
-        print(f"  결정론: {', '.join(sorted(_DETERMINISTIC))} / judge: {', '.join(sorted(_JUDGE))}")
+        # 예전엔 경고만 하고 **judge 로 기록**했다. judge 의 pass 는 루프를 통과시키므로
+        # `--grader Lint`(대소문자)·`lnt`(오타) 하나로 게이트를 건너뛸 수 있었다.
+        # 등록부가 곧 계약이다 — 새 grader 가 필요하면 등록부에 추가한다.
+        print(f"[verify-loop] ❌ 미등록 grader: {args.grader!r}")
+        print(f"  결정론: {', '.join(sorted(_DETERMINISTIC))}")
+        print(f"  judge:  {', '.join(sorted(_JUDGE))}")
+        return 1
     # read-modify-write 를 **락 안**에서 한다. reviewer·qa sub-agent 가 병렬로 돌면
     # 서로의 기록을 덮어썼다 (실측: 동시 20건 → 3건만 남음).
     with _loop_lock(feature):
         return _record_locked(args, feature)
+
+
+def _start_locked(feature: str, rubric: str) -> dict:
+    """락을 쥔 상태에서 새 루프를 만든다 (자동 개시 경로가 공유한다)."""
+    loop = {
+        "feature": feature,
+        "rubric": rubric,
+        "attempts": [],
+        "revision_count": 0,
+        "status": "in-loop",
+        "escalation_threshold": _ESCALATION_THRESHOLD,
+        "started": _now(),
+    }
+    _save(loop)
+    return loop
 
 
 def _record_locked(args, feature: str) -> int:
@@ -229,8 +296,9 @@ def _record_locked(args, feature: str) -> int:
     loop = _load(feature)
     if loop is None:
         print(f"[verify-loop] ⚠️ {feature} 루프 없음 — 자동 개시합니다 (start 생략 허용).")
-        cmd_start(argparse.Namespace(feature=feature, rubric=args.rubric or "code-review"))
-        loop = _load(feature)
+        # `cmd_start` 를 부르면 같은 락을 다시 잡는다 (flock 은 같은 프로세스에선
+        # 재진입되지만 의존하지 않는다). 락 안에서 쓰는 경로를 따로 둔다.
+        loop = _start_locked(feature, _safe_name(args.rubric or "code-review", "rubric 이름"))
     kind = _grader_kind(args.grader)
     attempt = {
         "n": len(loop["attempts"]) + 1,
@@ -259,11 +327,18 @@ def _record_locked(args, feature: str) -> int:
     # 결정론 grader(lint/design-review/qa-browser)의 pass 는 게이트 하나를 통과한
     # 것이지 판정이 아니다. 예전에는 `record F002 --grader lint --verdict pass` 한 번에
     # `passed` 가 됐는데, 그게 하필 verify-loop.md·reviewer.md 가 권하는 **첫 단계**였다.
-    if args.verdict == "pass" and kind == "deterministic":
-        gates = loop.setdefault("gates_passed", [])
-        if args.grader not in gates:
-            gates.append(args.grader)
-        loop["status"] = "escalated" if loop["revision_count"] >= loop["escalation_threshold"] else "in-loop"
+    if kind == "deterministic":
+        # 결정론 grader 는 **게이트**다 — 통과도 실패도 판정이 아니다.
+        # pass: 게이트 하나를 통과한 것이지 루프를 통과한 게 아니다.
+        # fail: lint 가 깨진 것을 `failed`(REJECTED — Planner·Architect 재설계)로
+        #       올리는 건 과하다. 재작업 신호이므로 revision 과 같은 층에 둔다.
+        if args.verdict == "pass":
+            gates = loop.setdefault("gates_passed", [])
+            if args.grader not in gates:
+                gates.append(args.grader)
+        loop["status"] = ("escalated"
+                          if loop["revision_count"] >= loop["escalation_threshold"]
+                          else "in-loop")
     elif args.verdict == "pass":
         loop["status"] = "passed"
     elif args.verdict == "fail":
@@ -298,13 +373,17 @@ def _print_loop(loop: dict) -> None:
              "escalated": "🚨 ESCALATED", "in-loop": "🔄 IN-LOOP"}.get(st, st)
     print(f"  {loop['feature']}  [{badge}]  rubric={loop['rubric']}  "
           f"revision {loop['revision_count']}/{loop['escalation_threshold']}")
+    gates = loop.get("gates_passed")
+    if gates:
+        print(f"    통과한 결정론 게이트: {', '.join(gates)}")
     for a in loop["attempts"]:
         extra = ""
         if "must" in a:
             extra = f" (MUST {a['must']}, SHOULD {a.get('should','?')})"
         if a.get("notes"):
             extra += f" — {a['notes']}"
-        print(f"    #{a['n']} {a['grader']}({a['kind']}) → {a['verdict']}{extra}")
+        print(f"    #{a.get('n','?')} {a.get('grader','?')}({a.get('kind','?')}) "
+              f"→ {a.get('verdict','?')}{extra}")
 
 
 def cmd_status(args) -> int:
@@ -335,7 +414,7 @@ def cmd_list(args) -> int:
 def cmd_rubric(args) -> int:
     """rubric 을 표시하거나 목록을 나열한다."""
     if args.name:
-        rf = _RUBRICS / f"{args.name}.md"
+        rf = _RUBRICS / f"{_safe_name(args.name, 'rubric 이름')}.md"
         if not rf.exists():
             print(f"[verify-loop] rubric '{args.name}' 없음")
             return 1
@@ -368,6 +447,8 @@ def main() -> None:
     p_start = sub.add_parser("start", help="검증 루프 개시")
     p_start.add_argument("feature", help="Feature ID (예: F001)")
     p_start.add_argument("--rubric", help="rubric 이름 (기본 code-review)")
+    p_start.add_argument("--force", action="store_true",
+                         help="기존 루프가 있어도 이력을 지우고 새로 개시")
 
     p_rec = sub.add_parser("record", help="grader 판정 기록")
     p_rec.add_argument("feature", help="Feature ID")

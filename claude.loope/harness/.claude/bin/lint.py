@@ -1817,33 +1817,58 @@ def check_mirror_regression() -> list:
 # ---------------------------------------------------------------------------
 
 # ADR-015 결정 2 의 제외 목록 — 머신·프로젝트 로컬이라 미러 대상이 아니다.
-_SSOT_EXCLUDE_NAMES = {
+#
+# **루트 상대 경로로 고정한다.** 예전엔 이름 집합을 경로 성분 전체와 대조해서,
+# `state`·`design` 이라는 **이름의 디렉토리가 어디에 있든** 그 아래 전부가 검사에서
+# 빠졌다. 실측: loope 에만 `.claude/agents/design/evil.md`·`.claude/skills/state/SKILL.md`·
+# `.claude/commands/host.json`·`.claude/bin/live_status.sh` 를 넣어도 **0 BLOCK**.
+# 제외 목록이 곧 밀반입 통로였다 (F021 재리뷰 MUST-1).
+_SSOT_EXCLUDE_PREFIXES = (
+    "state/",          # 프로젝트 로컬 런타임 상태
+    "design/",         # design_pick 산출물 (tokens.json·backup)
+)
+_SSOT_EXCLUDE_EXACT = {
     "settings.json", "settings.local.json", "host.json",
-    "__pycache__", ".pyc", "state",
-    "design",          # design_pick 산출물 (tokens.json·backup) — 프로젝트 로컬
-    "live_status.sh",  # 머신 로컬 관측 도구
+    "bin/live_status.sh",   # 머신 로컬 관측 도구
 }
 
 
-def _ssot_rel_files(root: Path) -> dict:
+def _ssot_excluded(rel: str, scoped: bool) -> bool:
+    """이 상대경로가 미러 비교에서 빠지는가 (루트 기준 **정확 일치/접두**).
+
+    `scoped` 는 제외 목록이 이 쌍에 적용되는지다. 목록은 `.claude/` 를 기준으로
+    쓰였으므로 다른 쌍(`docs/adr/`)에 그대로 걸면 안 된다 — 실제로 걸었더니
+    `docs/adr/design/ADR-099.md` 가 `design/` 접두에 걸려 **검사에서 빠졌다**
+    (테스트가 잡은, 이 수정 자신의 구멍이다).
+    """
+    if scoped and (rel in _SSOT_EXCLUDE_EXACT or rel.startswith(_SSOT_EXCLUDE_PREFIXES)):
+        return True
+    # 캐시는 쌍과 무관하게 제외 — 환경별로 다르고 내용도 무의미하다
+    return "__pycache__" in Path(rel).parts or rel.endswith(".pyc")
+
+
+def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다."""
     import hashlib
     out = {}
     if not root.exists():
         return out
     for path in root.rglob("*"):
+        # symlink 는 따라가지 않는다 — loope 쪽에 main 을 가리키는 링크를 두면
+        # 해시가 같아 drift 가 가려진다 (재리뷰 NICE-1).
+        if path.is_symlink():
+            out[str(path.relative_to(root))] = "<symlink — 미러에 심볼릭 링크 금지>"
+            continue
         if not path.is_file():
             continue
-        parts = set(path.relative_to(root).parts)
-        if parts & _SSOT_EXCLUDE_NAMES or path.name in _SSOT_EXCLUDE_NAMES:
-            continue
-        if path.suffix == ".pyc":
+        rel = str(path.relative_to(root))
+        if _ssot_excluded(rel, scoped):
             continue
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         except OSError:
             continue
-        out[str(path.relative_to(root))] = digest
+        out[rel] = digest
     return out
 
 
@@ -1866,11 +1891,13 @@ def check_ssot() -> list:
         results.append(_issue(checker, INFO, "claude.loope/", "변형 없음 — 검사 생략"))
         return results
 
-    pairs = [(".claude/", _CLAUDE_DIR, loope / ".claude"),
-             ("docs/adr/", _PROJECT_ROOT / "docs" / "adr", loope / "docs" / "adr")]
-    for label, main_root, var_root in pairs:
-        main_files = _ssot_rel_files(main_root)
-        var_files = _ssot_rel_files(var_root)
+    # 제외 목록(`state/`·`design/`·`settings.json`…)은 `.claude/` 기준으로 쓰였다.
+    # 다른 쌍에 그대로 적용하면 같은 이름의 하위 디렉토리가 통째로 사각이 된다.
+    pairs = [(".claude/", _CLAUDE_DIR, loope / ".claude", True),
+             ("docs/adr/", _PROJECT_ROOT / "docs" / "adr", loope / "docs" / "adr", False)]
+    for label, main_root, var_root, scoped in pairs:
+        main_files = _ssot_rel_files(main_root, scoped)
+        var_files = _ssot_rel_files(var_root, scoped)
         only_main = sorted(set(main_files) - set(var_files))
         only_var = sorted(set(var_files) - set(main_files))
         differing = sorted(k for k in (set(main_files) & set(var_files))
@@ -1913,13 +1940,19 @@ def check_ssot() -> list:
         skip = {"📋 프로젝트 개요", "🗂️ 디렉토리 구조", "🔨 주요 명령어"}
         drift = [k for k in (set(a) & set(b)) if k not in skip and a[k] != b[k]]
         missing = sorted((set(a) - set(b)) - skip)
+        # 파일 수준 비교는 양방향인데 섹션 수준은 main-only 만 봤다 — loope 에만
+        # 섹션을 더하면 0 BLOCK 이었다 (재리뷰 MUST-2). 정책이 층마다 달랐다.
+        extra = sorted((set(b) - set(a)) - skip)
         for name in missing:
             results.append(_issue(checker, BLOCK, f"CLAUDE.md §{name}",
                                   "main 에만 있는 섹션 — loope 로 미러"))
+        for name in extra:
+            results.append(_issue(checker, BLOCK, f"CLAUDE.md §{name}",
+                                  "loope 에만 있는 섹션 — main 에서 삭제됐거나 변형에 몰래 추가됐다"))
         for name in sorted(drift):
             results.append(_issue(checker, BLOCK, f"CLAUDE.md §{name}",
                                   "본문 drift — 일괄 편집이 일부 변형에만 도달했을 수 있다"))
-        if not (drift or missing):
+        if not (drift or missing or extra):
             results.append(_issue(checker, PASS, "CLAUDE.md", "본문 섹션 정합 OK"))
     return results
 
