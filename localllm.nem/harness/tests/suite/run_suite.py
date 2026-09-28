@@ -40,11 +40,6 @@ RESULTS = Path(os.environ.get("SUITE_RESULTS", SUITE_DIR / "results"))
 # 이었고, env 를 준 4번째 형태만 동작했다. 완화책이 회귀를 만든 유형이다.
 SANDBOX_ROOT = Path(os.environ.get(
     "SUITE_SANDBOX", Path(tempfile.gettempdir()) / "harness-suite-sandboxes"))
-# 시나리오 예산. 기본 1500초는 **qwen 속도를 전제로 정해진 값**이다 (호출당 30~77초 ×
-# 사이클 7~10 호출 = 300~700초 → 여유). 호출당 비용이 다른 모델은 판정을 완벽히 해도
-# 이 예산을 넘는다 — nemotron 은 150~220초 × 7~10 = 1650~2200초다 (측정 11 결과 14).
-# 예산이 모델 속도를 벌하지 않도록 환경변수로 모델별 산정을 허용한다 (조건 A / ADR-022 결정 4 계열).
-#   산정식: 호출당 실측 비용 × 사이클 최소 호출 수 × 1.5(재작업 여유)
 DRIVER_TIMEOUT = int(os.environ.get("SUITE_DRIVER_TIMEOUT", "1500"))
 
 # ── 시나리오 정의 ──────────────────────────────────────────────────────────
@@ -327,6 +322,19 @@ def _vl_state(sb: Path) -> dict:
         return {}
 
 
+_COST_LINE = re.compile(r"\[cost\][^\n]*claude_calls=(\d+)")
+
+
+def _claude_calls(driver_out: str) -> int:
+    """드라이버가 종료 시 남긴 `[cost] … claude_calls=N` 을 집계한다 (MUST-5).
+
+    호출 횟수는 실측 과금의 하한이다. 드라이버 로그에만 있으면 `driver_tail` 절단에
+    묻히므로 레코드 필드로 끌어올린다.
+    """
+    hits = _COST_LINE.findall(driver_out or "")
+    return int(hits[-1]) if hits else 0
+
+
 def _judge_verdicts(state: dict) -> list[dict]:
     return [a for a in state.get("attempts", []) if a.get("kind") == "judge"]
 
@@ -401,10 +409,21 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
     # 따라서 절 단위로 쪼개고, 결함어가 있는 절에 **해소·부재 표지**가 함께 있으면 제외한다.
     _DEFECT_WORDS = ("incorrect", "bug", "wrong", "fail", "missing", "excludes",
                      "does not", "should be", "결함", "누락", "잘못")
+    # 반박 표지. **해소를 뜻하는 것만** 넣는다 — 여기 넣은 문구는 그 절의 결함어를
+    # 통째로 무효화하므로, 넓게 잡으면 진짜 결함을 삼킨다 (거짓 부재).
+    # 실측으로 제거한 것들:
+    #   · "does not contain" — "the file does not contain a docstring" 은 **결함 서술**이다
+    #   · "존재"           — "존재하지 않음"·"존재 안 함" 에 부분매칭돼 결함을 지웠다
     _REFUTED = ("in fact present", "in fact correct", "is present", "are present",
                 "no longer", "already present", "now present", "not missing",
-                "not incorrect", "not wrong", "does not violate", "does not contain",
-                "does not introduce", "does not break", "존재", "해소", "충족", "수정됨")
+                "not incorrect", "not wrong", "does not violate",
+                "does not introduce", "does not break",
+                "actually satisfied", "actually correct", "as required", "as expected",
+                "nothing is missing", "nothing missing", "no issues", "no defects",
+                # "누락 없음" 은 반박이지만 "docstring 없음" 은 결함이다 — `없음` 만으로는
+                # 구별할 수 없으므로 결함어와 짝지어진 형태만 넣는다.
+                "누락 없음", "문제 없음", "이상 없음", "결함 없음",
+                "존재한다", "존재함", "해소", "충족", "수정됨")
 
     def _unresolved_defect_hits(text: str) -> list[str]:
         """결함어가 **반박되지 않은 절**에 나타나는 경우만 모은다."""
@@ -540,7 +559,9 @@ def main() -> None:
     args = [a for a in argv if not a.startswith("--")]
     picked = [s for s in SCENARIOS if not args or s["id"] in args]
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS / f"round{rnd}.jsonl"
+    _arm = os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+    _arm += "-lean" if os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0") else ""
+    out_path = RESULTS / f"round{rnd}-{_arm}.jsonl"
 
     print(f"=== suite round {rnd} — {len(picked)} 시나리오 ===", flush=True)
     for scn in picked:
@@ -576,7 +597,16 @@ def main() -> None:
         rec = {
             "round": rnd, "id": scn["id"], "name": scn["name"], "verdict": verdict,
             "exit": rc, "expect_exit": scn["expect_exit"], "ground_truth_ok": gt_ok,
+            # 구간 식별 — 이게 없으면 산출물이 남아도 **두 구간을 구분할 수 없다**
+            # (F029 리뷰 MUST-2: 결과 1·2 의 수치를 재현할 근거가 없던 이유의 절반).
+            "host": os.environ.get("HARNESS_DRIVER_HOST", "opencode"),
+            "lean": os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0"),
             "judges": [{"g": j["grader"], "v": j["verdict"], "notes": (j.get("notes") or "")[:200]} for j in judges],
+            # AC4 지표 6종 중 "재작업 라운드" — 결정론 grader 시도 횟수. judge 만
+            # 남기고 버려서 호스트 비교 표에 이 열이 없었다 (MUST-6).
+            "rework_rounds": sum(1 for a in _vl_state(sb).get("attempts", [])
+                                 if isinstance(a, dict) and a.get("kind") == "deterministic"),
+            "claude_calls": _claude_calls(drv_out),
             "findings": findings, "secs": round(time.time() - t0, 1),
             "driver_tail": drv_out[-1200:],
         }

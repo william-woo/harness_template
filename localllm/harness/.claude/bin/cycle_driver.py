@@ -144,9 +144,21 @@ def _lean(prompt: str) -> str:
     return out
 
 
+_DRIVER_HOSTS = ("opencode", "claude-code")
+
+
 def _driver_host() -> str:
-    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11)."""
-    return os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11).
+
+    모르는 값은 **즉시 실패**한다. 예전엔 `claude`·`Claude-Code` 같은 오타가 조용히
+    opencode 로 떨어져서, 호스트를 바꾸는 비교 실험이 **틀린 호스트를 측정**하고도
+    아무 표시가 없었다.
+    """
+    host = os.environ.get("HARNESS_DRIVER_HOST", "opencode").strip()
+    if host not in _DRIVER_HOSTS:
+        _log(f"[cycle] ❌ 알 수 없는 HARNESS_DRIVER_HOST: {host!r} — {list(_DRIVER_HOSTS)}")
+        raise SystemExit(2)
+    return host
 
 
 _CLAUDE_CALLS = 0   # 호스트 비교 측정의 비용 귀속용 호출 카운터
@@ -170,7 +182,11 @@ def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, st
     cmd = ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"]
     if model:
         cmd += ["--model", model]
-    timeout = int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT)))
+    try:
+        timeout = max(1, int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT))))
+    except ValueError:
+        _log("  ⓘ CYCLE_CLAUDE_TIMEOUT 값이 숫자가 아니다 — 기본값으로 진행")
+        timeout = _OC_TIMEOUT
     backoffs = [10, 30, 60]
     last_out = ""
     for attempt in range(1, attempts + 1):
@@ -181,7 +197,11 @@ def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, st
             rc, out = 124, f"timeout {timeout}s"
         last_out = out
         low = out.lower()
-        transient = rc == 124 or any(s in low for s in ("overloaded", "rate limit", "529", "503"))
+        # `"503"`·`"529"` 는 코드·행번호·테스트 id 에 흔히 나온다. **성공한 실행**의
+        # 출력에 그 문자열이 있다는 이유로 3회 재호출 후 rc=124 로 뒤집던 결함이 있었다
+        # (실측: "All 503 lines reviewed" → transient). rc != 0 일 때만 본다.
+        transient = rc == 124 or (rc != 0 and any(
+            s in low for s in ("overloaded", "rate limit", "529", "503")))
         if not transient:
             _log(f"  ⓘ claude 호출 누계 {_CLAUDE_CALLS}회 (rc={rc})")
             return rc, out
@@ -1132,12 +1152,35 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
     return None
 
 def cmd_run(args) -> int:
+    """`_cmd_run` 을 감싸 **모든 종료 경로에서** 비용을 한 줄로 남긴다.
+
+    예전엔 `_CLAUDE_CALLS` 를 세기만 하고 호출마다 찍었는데, run_suite 가
+    `driver_tail = drv_out[-1200:]` 만 저장하므로 그 로그는 잘려 사라졌다 —
+    측정 11 "비용" 절이 스스로 "테일 1200자만 보관하므로 하한값" 이라 적은 이유다.
+    반환 지점이 여덟 곳이라 각각에 넣는 대신 여기 한 곳에 모은다.
+    """
+    import time as _t
+    started = _t.time()
+    try:
+        return _cmd_run(args)
+    finally:
+        _log(f"[cost] host={os.environ.get('HARNESS_DRIVER_HOST', 'opencode')} "
+             f"claude_calls={_CLAUDE_CALLS} wall={_t.time() - started:.0f}s")
+
+
+def _cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     # 모듈 docstring 의 "미설치 시 안내 후 exit 0" 은 `self` 에만 참이었다 —
     # `run` 은 FileNotFoundError traceback 으로 죽었다. 진입에서 확인한다.
-    if _driver_host() != "claude-code" and shutil.which("opencode") is None:
+    host = _driver_host()
+    if host != "claude-code" and shutil.which("opencode") is None:
         print("[cycle] ❌ `opencode` 를 찾을 수 없습니다 — d-2 하네스의 실행 전제입니다.")
         print("  설치: bash .claude/bin/opencode-setup.sh  (또는 PATH 확인)")
+        return 1
+    # claude-code 분기에도 같은 전제 확인이 필요하다. 주석은 "미설치 시 traceback 으로
+    # 죽던 결함을 고쳤다" 고 적었지만 그 수정이 이 분기에는 가지 않았다.
+    if host == "claude-code" and shutil.which("claude") is None:
+        print("[cycle] ❌ `claude` CLI 를 찾을 수 없습니다 — HARNESS_DRIVER_HOST=claude-code 의 전제입니다.")
         return 1
     feature = args.feature
     files = [f.strip() for f in args.files.split(",")] if args.files else []

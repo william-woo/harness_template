@@ -144,9 +144,21 @@ def _lean(prompt: str) -> str:
     return out
 
 
+_DRIVER_HOSTS = ("opencode", "claude-code")
+
+
 def _driver_host() -> str:
-    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11)."""
-    return os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11).
+
+    모르는 값은 **즉시 실패**한다. 예전엔 `claude`·`Claude-Code` 같은 오타가 조용히
+    opencode 로 떨어져서, 호스트를 바꾸는 비교 실험이 **틀린 호스트를 측정**하고도
+    아무 표시가 없었다.
+    """
+    host = os.environ.get("HARNESS_DRIVER_HOST", "opencode").strip()
+    if host not in _DRIVER_HOSTS:
+        _log(f"[cycle] ❌ 알 수 없는 HARNESS_DRIVER_HOST: {host!r} — {list(_DRIVER_HOSTS)}")
+        raise SystemExit(2)
+    return host
 
 
 _CLAUDE_CALLS = 0   # 호스트 비교 측정의 비용 귀속용 호출 카운터
