@@ -77,6 +77,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "mcp__claude_ai_Atlassian_Rovo__(create|update|edit|add|transition|delete).*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-atlassian-write-check.sh\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [

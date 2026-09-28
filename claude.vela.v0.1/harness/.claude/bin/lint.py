@@ -1094,6 +1094,9 @@ _ATLASSIAN_OVERLAY_FILES = [
     "harness/.claude/bin/atlassian_map.py",
     "harness/.claude/commands/atlassian.md",
     "harness/.claude/skills/atlassian/SKILL.md",
+    # 3-C 철칙 (2026-09-28) — 쓰기 대상 제한. 목록과 그것을 강제하는 훅은 한 쌍이다.
+    "harness/.claude/atlassian-targets.json",
+    "harness/.claude/hooks/pre-atlassian-write-check.sh",
 ]
 
 # Atlassian 매핑 상태 디렉토리 (MR-15)
@@ -1874,6 +1877,59 @@ def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     return out
 
 
+def check_atlassian_targets() -> list:
+    """배포되는 허용 목록이 **비어 있는지** 본다 (3-C 철칙).
+
+    vela 를 가져가는 다운스트림이 우리 스페이스 키를 물려받으면, 그 하네스는
+    처음부터 **남의 Confluence 에 쓸 수 있는 상태**로 시작한다. 목록은 각자
+    채우는 것이지 배포에 실려 나가는 것이 아니다.
+
+    로컬 작업 트리(메인 `.claude/`)는 검사하지 않는다 — 거기 채우는 것이 정상이다.
+    """
+    checker = "LINT-ATL"
+    results = []
+    tpl = _PROJECT_ROOT / "src" / "harness_template"
+    variants = sorted(tpl.glob("claude.vela.*")) if tpl.exists() else []
+    if not variants:
+        results.append(_issue(checker, INFO, "claude.vela.*", "vela 변형 없음 — 검사 생략"))
+        return results
+    for var in variants:
+        rel = f"{var.name}/harness/.claude/atlassian-targets.json"
+        path = var / "harness" / ".claude" / "atlassian-targets.json"
+        hook = var / "harness" / ".claude" / "hooks" / "pre-atlassian-write-check.sh"
+        if not path.is_file():
+            results.append(_issue(checker, BLOCK, rel, "허용 목록 파일 없음 — 훅이 전면 거부한다"))
+            continue
+        if not hook.is_file():
+            results.append(_issue(checker, BLOCK, f"{var.name}/…/pre-atlassian-write-check.sh",
+                                  "허용 목록만 있고 **강제하는 훅이 없다** — 목록은 장식이 된다"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            results.append(_issue(checker, BLOCK, rel, f"JSON 파싱 실패: {exc}"))
+            continue
+        leaked = [k for k in ("confluence_spaces", "jira_projects") if data.get(k)]
+        if leaked:
+            results.append(_issue(checker, BLOCK, rel,
+                                  f"배포본에 허용 대상이 들어 있다 {leaked} — "
+                                  f"다운스트림이 남의 스페이스에 쓸 수 있게 된다"))
+        else:
+            results.append(_issue(checker, PASS, rel, "허용 목록 비어 있음 OK (fail-closed 기본값)"))
+        # 훅이 settings.json 에 배선돼 있는가 — 스크립트만 있으면 아무것도 막지 않는다
+        st = var / "harness" / ".claude" / "settings.json"
+        if st.is_file():
+            try:
+                pre = json.loads(st.read_text(encoding="utf-8")).get("hooks", {}).get("PreToolUse", [])
+            except ValueError:
+                pre = []
+            wired = any("atlassian" in json.dumps(m, ensure_ascii=False).lower() for m in pre)
+            results.append(_issue(checker, PASS if wired else BLOCK,
+                                  f"{var.name}/…/settings.json",
+                                  "PreToolUse 에 Atlassian 훅 배선 OK" if wired
+                                  else "훅이 PreToolUse 에 배선되지 않았다 — 선언만 있고 강제가 없다"))
+    return results
+
+
 def check_ssot() -> list:
     """`main .claude/` ≡ `claude.loope/harness/.claude/` 를 **내용으로** 강제한다.
 
@@ -1969,6 +2025,7 @@ _CHECKERS = {
     "LINT-LEARN": ("learnings 모순", check_learn),
     "LINT-MIRROR": ("gstack 표준 변형 대조 (참고용 INFO)", check_mirror),
     "LINT-SSOT": ("main ≡ claude.loope invariant (ADR-015)", check_ssot),
+    "LINT-ATL": ("Atlassian 쓰기 대상 제한 — 3-C 철칙 (배포본 fail-closed)", check_atlassian_targets),
     "LINT-MR": ("변형 오버레이 정합 (12변형 — F018 MR-11, F019 MR-12, F020 MR-13 추가)", check_mirror_regression),
 }
 
