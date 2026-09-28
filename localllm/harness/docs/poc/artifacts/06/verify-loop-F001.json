@@ -1,0 +1,53 @@
+{
+  "feature": "F001",
+  "rubric": "code-review",
+  "attempts": [
+    {
+      "n": 1,
+      "grader": "test",
+      "kind": "deterministic",
+      "verdict": "revision",
+      "ts": "2026-09-22T16:38:10+00:00",
+      "notes": "grader 실패: .... ---------------------------------------------------------------------- Ran 4 tests in 0.000s  OK"
+    },
+    {
+      "n": 2,
+      "grader": "test",
+      "kind": "deterministic",
+      "verdict": "pass",
+      "ts": "2026-09-22T16:38:46+00:00",
+      "notes": "결정론 grader 통과 (exit 0 + 기대 출력 + 산출물 유효)"
+    },
+    {
+      "n": 3,
+      "grader": "reviewer",
+      "kind": "judge",
+      "verdict": "revision",
+      "ts": "2026-09-22T16:39:04+00:00",
+      "notes": "Missing docstring in fizzbuzz(n) function"
+    },
+    {
+      "n": 4,
+      "grader": "reviewer",
+      "kind": "judge",
+      "verdict": "pass",
+      "ts": "2026-09-22T16:39:36+00:00",
+      "notes": "fizzbuzz() docstring is present and correct"
+    },
+    {
+      "n": 5,
+      "grader": "qa",
+      "kind": "judge",
+      "verdict": "pass",
+      "ts": "2026-09-22T16:40:24+00:00",
+      "notes": "All tests passed and meet criteria."
+    }
+  ],
+  "revision_count": 2,
+  "status": "passed",
+  "escalation_threshold": 3,
+  "started": "2026-09-22T16:36:37+00:00",
+  "gates_passed": [
+    "test"
+  ]
+}

@@ -62,6 +62,28 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 > **vela 계열에만** 등재한다 — LINT-MR-15 의 오버레이 격리를 설정에서도 지킨다
 > (커넥터가 없는 변형에 규칙만 넣으면 영영 매칭되지 않는 죽은 설정이 된다).
 
+> ### 3-C 철칙 — **허락한 대상에만 쓴다** (2026-09-28, 사용자 지시)
+>
+> `permissions.ask` 는 **호출마다 사람에게 묻지만 대상을 제한하지 않는다.** 긴 자율
+> 작업 끝의 승인 피로 한 번이면 엉뚱한 스페이스에 발행되고, 되돌려도 알림·이력은 남는다.
+> 그래서 층을 하나 더 둔다:
+>
+> | 층 | 무엇을 막는가 | 어디서 |
+> |---|---|---|
+> | `permissions.ask` | **이 호출을 해도 되는가** (사람 승인) | settings.json |
+> | **허용 목록** | **이 대상에 써도 되는가** (기계 차단) | `.claude/atlassian-targets.json` |
+> | PreToolUse 훅 | 위 목록을 **실제로 강제** | `pre-atlassian-write-check.sh` |
+>
+> - 허용 목록이 **없거나·비었거나·손상이면 전면 거부**한다 (fail-closed). 배포 기본값은 빈 목록이다.
+> - 호출에서 **대상을 판별하지 못해도 거부**한다 — 숫자 `pageId` 만 주는 호출은 막힌다.
+>   스페이스 키 / 이슈 키(`PROJ-123`)로 부르거나, 먼저 조회해서 키를 확인한다.
+> - 허용과 비허용이 **섞이면 거부**한다. 부분 통과는 없다.
+> - **허용 목록에 넣는 것은 사람의 결정이다.** 에이전트가 스스로 추가하지 않는다.
+>
+> **왜 훅이어야 하는가**: MCP 도구 호출은 모델 → 커넥터로 **곧장** 간다. `atlassian_map.py` 는
+> 그 경로에 없으므로 파이썬 코드로는 아무것도 막지 못한다 — 규칙 #1 이 경고하는 바로 그 간극이다.
+> PreToolUse 훅만이 실제 차단 지점이고, 그래서 `tests/test_atlassian_guard.py` 는 훅을 직접 태운다.
+
 > **이전 정책과의 차이**: 계정·인증(`sudo`, `gh auth login`), 외부 디렉토리 접근, 시스템 패키지
 > 설치, `git push` 는 **더 이상 승인을 요구하지 않는다**. 장시간 자율 작업이 프롬프트로 끊기는
 > 비용이 그 보호막의 값어치보다 크다는 판단이다 (사용자 지시).
@@ -757,8 +779,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - 한 팀 내 실행 라우팅 → `/project:orchestrate`
 
 **정직한 범위**: 메시지 계약(JSON 스키마) + 로스터 + 로컬 큐(inbox/outbox)는 **stdlib 로 실재 동작**.
-**Slack★/Teams 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이고, Telegram 은 봇↔봇을
-플랫폼이 막아 **사람 연동 전용**이다. 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
+**Slack 게이트웨이는 발신·수신 모두 실구현**(stdlib 폴링)이다. Teams·Telegram 은
+2026-09-23 에 제거했다 (ADR-013 결정 5-bis). 자격증명(#3-A) 발급만 사용자·다운스트림 몫이다.
 자격증명 없이도 로컬 큐로 컨소시엄 흐름을 검증할 수 있다 (graceful degrade).
 팀 내부는 single-host(d-1), 팀 **사이**만 계약 연결 — d-3 의 정직한 경계 (ADR-012).
 
@@ -779,7 +801,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
 | **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
 | **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
-| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack★/Teams 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
 | **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | **ⓑ¹⁰ `claude.aif/`** (판정 설계 — RLAIF/CAI 규율) | loope 1:1 + aif 오버레이 (항목형 rubric + 증거강제 + 앙상블 + UNCERTAIN) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속, aif 오버레이는 stdlib/문서) |
 | **ⓑ¹¹ `localllm.aif/`** (d-2 + 판정 설계) | localllm 1:1 + aif 오버레이 — **A/B 수치 비교가 가능한 유일한 aif 변형** | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
@@ -795,8 +817,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 > **claude.productnw 변형 (F019 / d-3)**: productmgr 변형 복사 + nw(컨소시엄) 오버레이 (ADR-012).
 > 여러 팀이 각자 멀티 에이전트 하네스를 두고 **팀 간 메시지 계약**으로 통신하며 통합 제품을 만드는
 > 분산 컨소시엄. `consortium.py` 가 ① 메시지 계약(JSON: from/to-team·role·cycle-id) ② 로스터(팀·에이전트
-> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack★/Teams 게이트웨이는
-> 발신·수신 모두 실구현**(polling — ADR-013 결정 5), Telegram 은 봇↔봇 불가라 사람 연동 전용. 팀 내부는
+> 등록) ③ 로컬 큐(inbox/outbox) 를 **stdlib 로 실재 구현**하고, **Slack 게이트웨이는
+> 발신·수신 모두 실구현**(polling — ADR-013 결정 5·5-bis). 팀 내부는
 > single-host(d-1), 팀 사이만 계약 연결. d-3 의 정직한 경계 (ADR-008 가 보류했던 단계의 PoC).
 
 > **claude.productmgr 변형 (F018)**: hermes 변형 복사 + pm 오버레이 (ADR-011). **Product Manager
@@ -861,7 +883,7 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - `.claude/state/product-cycle/` (사이클 핸드오프 디렉토리)
 
 **nw(컨소시엄) 오버레이** (claude.productnw 에만 — F019 신설):
-- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + Slack★/Teams 게이트웨이 발신·수신 실구현 — stdlib 폴링)
+- `.claude/bin/consortium.py` (메시지 계약 + 로스터 + 로컬 큐 + Slack 게이트웨이 발신·수신 실구현 — stdlib 폴링)
 - `.claude/commands/consortium.md` (팀 등록→메시지→핸드오프, d-3 정직한 범위)
 - `.claude/state/consortium/` (roster.json + inbox/outbox 핸드오프 디렉토리)
 
@@ -877,7 +899,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - (localllm.aif 만) `cycle_driver` 의 `_aif_findings` — 항목형 앙상블 결과를 judge 입력에 주입
 - (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
-회귀 방지: `python3 .claude/bin/lint.py check --only=LINT-MR` 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
+회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
++ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
 
 ---
 

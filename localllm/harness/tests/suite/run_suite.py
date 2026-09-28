@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -34,7 +35,11 @@ SUITE_DIR = Path(__file__).resolve().parent
 # 하네스 루트 = 이 스크립트의 상위 2단 (tests/suite/run_suite.py → <harness>)
 TEMPLATE = Path(os.environ.get("SUITE_TEMPLATE", SUITE_DIR.parent.parent))
 RESULTS = Path(os.environ.get("SUITE_RESULTS", SUITE_DIR / "results"))
-SANDBOX_ROOT = Path(os.environ.get("SUITE_SANDBOX", SUITE_DIR / "sandboxes"))
+# 기본값을 **템플릿 밖**에 둔다. 예전 기본값(`SUITE_DIR/sandboxes`)은 템플릿 내부라
+# 바로 아래 재귀복사 가드에 **항상** 걸렸다 — README 의 기본 호출 3종이 전부 exit 1
+# 이었고, env 를 준 4번째 형태만 동작했다. 완화책이 회귀를 만든 유형이다.
+SANDBOX_ROOT = Path(os.environ.get(
+    "SUITE_SANDBOX", Path(tempfile.gettempdir()) / "harness-suite-sandboxes"))
 DRIVER_TIMEOUT = 1500  # 초 — 드라이버 자체가 내부 timeout/재시도를 가짐
 
 # ── 시나리오 정의 ──────────────────────────────────────────────────────────
@@ -222,6 +227,23 @@ SCENARIOS: list[dict] = [
 ]
 
 
+def _preflight_suite() -> None:
+    """외부 전제를 **코드로 가드**한다 — 없으면 10/10 INFRA 가 조용히 나온다.
+
+    측정 08 교훈 4("환경 전제는 코드로 가드")가 정작 스위트 자신에는 적용돼 있지
+    않았다. 미설치 환경에서 전 시나리오가 INFRA 로 떨어지면 원인을 찾는 데만
+    한참 걸린다.
+    """
+    missing = [tool for tool in ("opencode", "rsync", "git") if shutil.which(tool) is None]
+    if missing:
+        raise SystemExit(
+            "스위트 실행 전제가 없습니다: " + ", ".join(missing) + "\n"
+            "  opencode: bash .claude/bin/opencode-setup.sh\n"
+            "  rsync·git: 배포판 패키지 매니저로 설치\n"
+            "  (이 스위트는 로컬 LLM 을 실제로 호출합니다 — Ollama 도 떠 있어야 합니다)"
+        )
+
+
 def _sandbox(scn_id: str, rnd: int) -> Path:
     """시나리오 샌드박스를 초기화하고 경로를 반환한다."""
     # 샌드박스가 템플릿 내부면 rsync 가 자기 자신을 재귀 복사해 경로 길이 한계까지
@@ -300,6 +322,19 @@ def _vl_state(sb: Path) -> dict:
         return {}
 
 
+_COST_LINE = re.compile(r"\[cost\][^\n]*claude_calls=(\d+)")
+
+
+def _claude_calls(driver_out: str) -> int:
+    """드라이버가 종료 시 남긴 `[cost] … claude_calls=N` 을 집계한다 (MUST-5).
+
+    호출 횟수는 실측 과금의 하한이다. 드라이버 로그에만 있으면 `driver_tail` 절단에
+    묻히므로 레코드 필드로 끌어올린다.
+    """
+    hits = _COST_LINE.findall(driver_out or "")
+    return int(hits[-1]) if hits else 0
+
+
 def _judge_verdicts(state: dict) -> list[dict]:
     return [a for a in state.get("attempts", []) if a.get("kind") == "judge"]
 
@@ -374,10 +409,21 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
     # 따라서 절 단위로 쪼개고, 결함어가 있는 절에 **해소·부재 표지**가 함께 있으면 제외한다.
     _DEFECT_WORDS = ("incorrect", "bug", "wrong", "fail", "missing", "excludes",
                      "does not", "should be", "결함", "누락", "잘못")
+    # 반박 표지. **해소를 뜻하는 것만** 넣는다 — 여기 넣은 문구는 그 절의 결함어를
+    # 통째로 무효화하므로, 넓게 잡으면 진짜 결함을 삼킨다 (거짓 부재).
+    # 실측으로 제거한 것들:
+    #   · "does not contain" — "the file does not contain a docstring" 은 **결함 서술**이다
+    #   · "존재"           — "존재하지 않음"·"존재 안 함" 에 부분매칭돼 결함을 지웠다
     _REFUTED = ("in fact present", "in fact correct", "is present", "are present",
                 "no longer", "already present", "now present", "not missing",
-                "not incorrect", "not wrong", "does not violate", "does not contain",
-                "does not introduce", "does not break", "존재", "해소", "충족", "수정됨")
+                "not incorrect", "not wrong", "does not violate",
+                "does not introduce", "does not break",
+                "actually satisfied", "actually correct", "as required", "as expected",
+                "nothing is missing", "nothing missing", "no issues", "no defects",
+                # "누락 없음" 은 반박이지만 "docstring 없음" 은 결함이다 — `없음` 만으로는
+                # 구별할 수 없으므로 결함어와 짝지어진 형태만 넣는다.
+                "누락 없음", "문제 없음", "이상 없음", "결함 없음",
+                "존재한다", "존재함", "해소", "충족", "수정됨")
 
     def _unresolved_defect_hits(text: str) -> list[str]:
         """결함어가 **반박되지 않은 절**에 나타나는 경우만 모은다."""
@@ -503,6 +549,7 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
 
 
 def main() -> None:
+    _preflight_suite()
     argv = sys.argv[1:]
     rnd = 1
     if "--round" in argv:
@@ -512,7 +559,9 @@ def main() -> None:
     args = [a for a in argv if not a.startswith("--")]
     picked = [s for s in SCENARIOS if not args or s["id"] in args]
     RESULTS.mkdir(parents=True, exist_ok=True)
-    out_path = RESULTS / f"round{rnd}.jsonl"
+    _arm = os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+    _arm += "-lean" if os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0") else ""
+    out_path = RESULTS / f"round{rnd}-{_arm}.jsonl"
 
     print(f"=== suite round {rnd} — {len(picked)} 시나리오 ===", flush=True)
     for scn in picked:
@@ -548,7 +597,16 @@ def main() -> None:
         rec = {
             "round": rnd, "id": scn["id"], "name": scn["name"], "verdict": verdict,
             "exit": rc, "expect_exit": scn["expect_exit"], "ground_truth_ok": gt_ok,
+            # 구간 식별 — 이게 없으면 산출물이 남아도 **두 구간을 구분할 수 없다**
+            # (F029 리뷰 MUST-2: 결과 1·2 의 수치를 재현할 근거가 없던 이유의 절반).
+            "host": os.environ.get("HARNESS_DRIVER_HOST", "opencode"),
+            "lean": os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0"),
             "judges": [{"g": j["grader"], "v": j["verdict"], "notes": (j.get("notes") or "")[:200]} for j in judges],
+            # AC4 지표 6종 중 "재작업 라운드" — 결정론 grader 시도 횟수. judge 만
+            # 남기고 버려서 호스트 비교 표에 이 열이 없었다 (MUST-6).
+            "rework_rounds": sum(1 for a in _vl_state(sb).get("attempts", [])
+                                 if isinstance(a, dict) and a.get("kind") == "deterministic"),
+            "claude_calls": _claude_calls(drv_out),
             "findings": findings, "secs": round(time.time() - t0, 1),
             "driver_tail": drv_out[-1200:],
         }

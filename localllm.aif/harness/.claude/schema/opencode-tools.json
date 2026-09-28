@@ -1,0 +1,122 @@
+{
+  "_source": "probe_proxy 캡처 (OpenCode → Ollama /v1/chat/completions 요청 페이로드)",
+  "_captured": "2026-08-16",
+  "_opencode_version": "1.16.2",
+  "_note": "런타임에 전체 스키마를 주는 경로가 없어 스냅샷으로 둔다 (ADR-022 결정 1). 갱신: tests/probe_proxy.py 로 1회 캡처 후 이 파일 재생성.",
+  "tools": {
+    "bash": {
+      "required": [
+        "command",
+        "description"
+      ],
+      "properties": [
+        "command",
+        "description",
+        "timeout",
+        "workdir"
+      ],
+      "description": "Executes a given bash command in a persistent shell session with optional timeout, ensuring proper handling and security measures."
+    },
+    "edit": {
+      "required": [
+        "filePath",
+        "oldString",
+        "newString"
+      ],
+      "properties": [
+        "filePath",
+        "newString",
+        "oldString",
+        "replaceAll"
+      ],
+      "description": "Performs exact string replacements in files. "
+    },
+    "glob": {
+      "required": [
+        "pattern"
+      ],
+      "properties": [
+        "path",
+        "pattern"
+      ],
+      "description": "- Fast file pattern matching tool that works with any codebase size"
+    },
+    "grep": {
+      "required": [
+        "pattern"
+      ],
+      "properties": [
+        "include",
+        "path",
+        "pattern"
+      ],
+      "description": "- Fast content search tool that works with any codebase size"
+    },
+    "read": {
+      "required": [
+        "filePath"
+      ],
+      "properties": [
+        "filePath",
+        "limit",
+        "offset"
+      ],
+      "description": "Read a file or directory from the local filesystem. If the path does not exist, an error is returned."
+    },
+    "skill": {
+      "required": [
+        "name"
+      ],
+      "properties": [
+        "name"
+      ],
+      "description": "Load a specialized skill when the task at hand matches one of the skills listed in the system prompt."
+    },
+    "task": {
+      "required": [
+        "description",
+        "prompt",
+        "subagent_type"
+      ],
+      "properties": [
+        "command",
+        "description",
+        "prompt",
+        "subagent_type",
+        "task_id"
+      ],
+      "description": "Launch a new agent to handle complex, multistep tasks autonomously."
+    },
+    "todowrite": {
+      "required": [
+        "todos"
+      ],
+      "properties": [
+        "todos"
+      ],
+      "description": "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user."
+    },
+    "webfetch": {
+      "required": [
+        "url"
+      ],
+      "properties": [
+        "format",
+        "timeout",
+        "url"
+      ],
+      "description": "- Fetches content from a specified URL"
+    },
+    "write": {
+      "required": [
+        "content",
+        "filePath"
+      ],
+      "properties": [
+        "content",
+        "filePath"
+      ],
+      "description": "Writes a file to the local filesystem."
+    }
+  }
+}

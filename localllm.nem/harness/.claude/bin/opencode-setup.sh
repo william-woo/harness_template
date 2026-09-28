@@ -76,6 +76,14 @@ fi
 
 # ── 3. Ollama provider 설정 (opencode.jsonc) ───────────────
 echo ""
+# 숫자 검증 — `OLLAMA_OUTPUT=abc` 가 그대로 JSON 에 들어가면 OpenCode 가 설정 파일을
+# 파싱하지 못해 **모든 실행이 거부**된다 (fresh 경로) / 병합 경로는 traceback.
+for _var in OLLAMA_CONTEXT OLLAMA_OUTPUT; do
+  eval "_val=\$$_var"
+  case "$_val" in
+    ''|*[!0-9]*) echo "  ⚠️ $_var 은 정수여야 합니다 (받은 값: '$_val') — 중단"; exit 0 ;;
+  esac
+done
 echo "[3/4] OpenCode ↔ Ollama provider 설정"
 mkdir -p "$OC_CONFIG_DIR"
 if [ -f "$OC_CONFIG" ] && grep -q '"ollama"' "$OC_CONFIG" 2>/dev/null; then
@@ -90,7 +98,11 @@ import json, os, re, shutil
 from pathlib import Path
 p = Path(os.environ["OC_CONFIG"])
 raw = p.read_text(encoding="utf-8")
-cfg = json.loads(re.sub(r"^\s*//.*$", "", raw, flags=re.MULTILINE))
+# JSONC 관용: 행 시작 주석 + 행끝 `//` + trailing comma 를 벗긴다. 예전엔 행 시작
+# 주석만 처리해, 흔한 JSONC 에 JSONDecodeError 가 나고도 "설정 완료" 를 찍었다.
+stripped = re.sub(r"(^|\s)//[^\n]*", "", raw)
+stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+cfg = json.loads(stripped)
 models = cfg.setdefault("provider", {}).setdefault("ollama", {}).setdefault("models", {})
 limit = {"context": int(os.environ["OLLAMA_CONTEXT"]), "output": int(os.environ["OLLAMA_OUTPUT"])}
 added, fixed = [], []
@@ -100,15 +112,28 @@ for key in (os.environ["OLLAMA_MODEL"], os.environ["OLLAMA_JUDGE_MODEL"]):
     if key not in models:
         models[key] = {"name": key, "limit": dict(limit)}
         added.append(key)
-    elif "limit" not in models[key]:
-        # 추론 모델이 limit 없이 등재돼 있으면 도구 호출이 무산된다 (측정 11 결과 10).
-        models[key]["limit"] = dict(limit)
+        continue
+    # `limit` 은 context·output 을 **모두** 요구한다. 하나만 있으면 OpenCode 가
+    # `Configuration is invalid` 로 전 실행을 거부한다 — ADR-021 이 "배치 2개를
+    # 폐기했다" 고 적은 바로 그 함정이다. 그런데 보정은 `limit` 키가 **통째로
+    # 없을 때만** 돌아서, 반쪽 상태(`{"context": N}` 또는 `null`)는 그대로
+    # "모두 등재됨" 으로 통과했다. 기존 값은 살리고 누락 필드만 채운다.
+    cur = models[key].get("limit")
+    have = cur if isinstance(cur, dict) else {}
+    if not {"context", "output"} <= have.keys():
+        merged = dict(limit)
+        merged.update({k: v for k, v in have.items()
+                       if k in ("context", "output") and isinstance(v, int) and v > 0})
+        models[key]["limit"] = merged
         fixed.append(key)
 if added or fixed:
     bak = p.with_suffix(p.suffix + ".bak-harness")
     if not bak.exists():
         shutil.copy2(p, bak)
-    p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # 직접 덮어쓰면 중간 크래시에 전역 설정이 절단된다 — 원자적 교체.
+    tmp = p.with_suffix(p.suffix + ".tmp-harness")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
     if added:
         print(f"  ✅ 전역 설정에 모델 등재: {added} (limit={limit}, 백업: {bak.name})")
     if fixed:
@@ -116,6 +141,10 @@ if added or fixed:
 else:
     print("  ✅ 필요한 모델이 limit 과 함께 모두 등재됨")
 PYMERGE
+  if [ $? -ne 0 ]; then
+    echo "  ⚠️ 전역 설정 병합 실패 — limit 보정이 적용되지 않았습니다."
+    echo "     $OC_CONFIG 를 확인하십시오 (추론 모델은 limit 없이는 도구 호출이 0건입니다)."
+  fi
 else
   cat > "$OC_CONFIG" << EOFJSON
 {

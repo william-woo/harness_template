@@ -44,6 +44,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from pathlib import Path
@@ -51,8 +52,13 @@ from pathlib import Path
 _BIN = Path(__file__).resolve().parent
 _ROOT = _BIN.parent.parent
 # 실험 공간. 결과·샌드박스가 수 GB 로 늘 수 있어 `AUTORESEARCH_DIR` 로 리포 밖에 둘 수 있다.
+# 기본값을 **리포 밖**에 둔다. 예전 기본값(`.claude/state/autoresearch`)은 리포 내부라
+# 샌드박스(`<exp>/sandboxes-<arm>`)가 `SUITE_TEMPLATE`(=_ROOT) 안쪽이 됐고,
+# `run_suite.py` 의 재귀복사 가드에 **항상** 걸렸다 — 모든 실험이 0 records → INVALID.
+# 그런데 그 판정은 LLM 제안 호출 **뒤**에 나서, 비용만 쓰고 결과는 없었다.
+# `run_suite.py` 가 같은 이유로 기본값을 밖으로 옮긴 것과 같은 수정이다 (F026).
 _AR = Path(os.environ["AUTORESEARCH_DIR"]) if os.environ.get("AUTORESEARCH_DIR") \
-    else _ROOT / ".claude" / "state" / "autoresearch"
+    else Path(tempfile.gettempdir()) / "harness-autoresearch"
 _PROGRAM = _AR / "program.md"
 _BEST = _AR / "best"                      # 현재 챔피언 정책 (실험 공간 — 하네스 본체 아님)
 _LEDGER = _AR / "ledger.jsonl"
@@ -106,14 +112,55 @@ def _log(msg: str) -> None:
     print(msg, flush=True)
 
 
+_MANIFEST_FILE_NAME = "manifest.json"
+
+
 def _manifest() -> dict[str, str]:
-    """불변 파일들의 SHA-256 요약을 반환한다."""
+    """불변 파일들의 SHA-256 요약을 반환한다.
+
+    없는 파일은 `<missing>` 으로 기록한다 — 조용히 빠뜨리면 **불변 파일을 지우는 것**이
+    검사를 통과한다 (예전엔 `is_file()` 인 것만 담았다).
+    """
     out = {}
     for rel in _IMMUTABLE:
-        p = _ROOT / rel
-        if p.is_file():
-            out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+        f = _ROOT / rel
+        out[rel] = (hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+                    if f.is_file() else "<missing>")
     return out
+
+
+def _baseline_manifest() -> dict[str, str]:
+    """실험 공간에 **고정된** 기준 매니페스트. 없으면 지금 상태로 만든다.
+
+    예전엔 매 실험 시작 시 `before = _manifest()` 로 기준선을 다시 잡았다. 그래서
+    한 실험이 게이트를 변조하면 그 실험만 INVALID 가 되고 **변조된 상태가 다음
+    실험의 정상 기준선**이 됐다 — reward hacking 의 2단계 경로다 (실측).
+    기준선은 `init` 시점에 한 번 고정하고 그 뒤로는 비교만 한다.
+    """
+    path = _AR / _MANIFEST_FILE_NAME
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and all(isinstance(v, str) for v in data.values()):
+                return data
+        except ValueError:
+            _log("  ⚠️ 기준 매니페스트 손상 — 현재 상태로 다시 고정한다")
+    current = _manifest()
+    _AR.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
+    return current
+
+
+def _harness_policy_digest() -> dict[str, str]:
+    """하네스 본체 정책(`.claude/policy/`)의 내용 요약.
+
+    `_IMMUTABLE` 목록에 `.claude/policy/` 가 없어서, 후보 구간의 에이전트가
+    (bash 를 가진 채 리포 안쪽 샌드박스에서 돌기 때문에) **본체 정책을 직접 고칠 수
+    있었다** — `promote --yes` 없이. 실측으로 재현됐고 그 실험은 KEEP 으로 기록됐다.
+    실험 전후를 비교해 달라지면 무효 처리하고 루프를 멈춘다.
+    """
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+            for p in _policy_files(_PROMOTED)}
 
 
 def _policy_files(d: Path) -> list[Path]:
@@ -131,12 +178,20 @@ def _read_ledger() -> list[dict]:
     if not _LEDGER.is_file():
         return []
     out = []
-    for line in _LEDGER.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            try:
-                out.append(json.loads(line))
-            except ValueError:
-                pass
+    for n, line in enumerate(_LEDGER.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            _log(f"  ⚠️ 원장 {n}행 파싱 실패 — 건너뜀")
+            continue
+        # 파싱은 막았는데 타입은 안 막았다. 숫자 한 줄(`5`)이 섞이면 `r.get` 이
+        # AttributeError 로 죽어 status·run·promote **셋 다 영구 정지**했다.
+        if not isinstance(rec, dict):
+            _log(f"  ⚠️ 원장 {n}행이 객체가 아님({type(rec).__name__}) — 건너뜀")
+            continue
+        out.append(rec)
     return out
 
 
@@ -179,8 +234,13 @@ def _suite_arm(exp_dir: Path, arm: str, policy_dir: Path,
         cmd = [sys.executable, "tests/suite/run_suite.py", "--round", str(r), *scenarios]
         _log(f"    [{arm}] 반복 {r}/{repeats} — {' '.join(scenarios)}")
         try:
-            subprocess.run(cmd, cwd=_ROOT, env=env, timeout=timeout,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # rc·stderr 를 버리면 실패가 "0 records → INVALID" 로만 보인다. M1 의
+            # 재귀가드 충돌이 몇 달 안 보였던 이유가 정확히 이것이다.
+            proc = subprocess.run(cmd, cwd=_ROOT, env=env, timeout=timeout,
+                                  capture_output=True, text=True)
+            if proc.returncode != 0:
+                tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+                _log(f"    [{arm}] 반복 {r} 실패 rc={proc.returncode}: " + " / ".join(tail))
         except subprocess.TimeoutExpired:
             _log(f"    [{arm}] 반복 {r} 제한시간 초과 — 부분 결과로 채점")
 
@@ -286,7 +346,11 @@ def cmd_run(args) -> int:
     scenarios = [s.strip() for s in args.scenarios.split(",") if s.strip()]
     program = _PROGRAM.read_text(encoding="utf-8")
     started = time.time()
-    n_done = len({r["exp"] for r in _read_ledger() if "exp" in r})
+    # 고유 id **개수**로 매기면 원장 한 줄이 손상됐을 때 id 가 충돌해 옛 결과가
+    # 새 점수에 섞인다 (실측: [exp-001, exp-003] → 다음이 exp-003).
+    used = {r["exp"] for r in _read_ledger() if isinstance(r.get("exp"), str)}
+    n_done = max((int(m.group(1)) for e in used
+                  if (m := re.fullmatch(r"exp-(\d+)", e))), default=0)
 
     for i in range(args.experiments):
         if args.budget_min and (time.time() - started) / 60 >= args.budget_min:
@@ -297,7 +361,8 @@ def cmd_run(args) -> int:
         exp_dir.mkdir(parents=True, exist_ok=True)
         _log(f"\n=== {exp} — 시나리오 {','.join(scenarios)} × {args.repeats}회 ===")
 
-        before = _manifest()
+        before = _baseline_manifest()
+        body_before = _harness_policy_digest()
         current = _policy_snapshot(_BEST)
 
         # 1. 베이스라인 측정 (같은 배치 — 낡은 기준선 대비 비교를 하지 않는다)
@@ -324,14 +389,25 @@ def cmd_run(args) -> int:
         _log("  ③ 후보 측정")
         cand = _suite_arm(exp_dir, "cand", cand_dir, scenarios, args.repeats, args.timeout)
 
-        # 4. 무결성 검사 — 게이트가 바뀌었으면 점수는 의미가 없다
+        # 4. 무결성 검사 — 게이트가 바뀌었으면 점수는 의미가 없다.
+        #    위반이면 **루프를 멈춘다**. 예전엔 `continue` 라 변조 상태로 실험이
+        #    계속됐고, 다음 회차의 `before` 가 그 변조본이었다.
         after = _manifest()
         if after != before:
-            changed = [k for k in before if after.get(k) != before[k]]
-            _log(f"  ❌ 불변 파일 변경 감지 {changed} — 실험 무효")
+            changed = [k for k in set(before) | set(after) if after.get(k) != before.get(k)]
+            _log(f"  ❌ 불변 파일 변경 감지 {changed} — 실험 무효, 루프 중단")
+            _log("     원본을 복구한 뒤 재실행하십시오 (git checkout -- <파일>).")
             _append_ledger({"exp": exp, "outcome": "INVALID", "reason": "immutable-changed",
-                            "changed": changed})
-            continue
+                            "changed": sorted(changed)})
+            return 1
+        body_after = _harness_policy_digest()
+        if body_after != body_before:
+            touched = sorted(set(body_before) | set(body_after))
+            _log(f"  ❌ 하네스 본체 정책이 실험 중 변경됐다 {touched} — 무효, 루프 중단")
+            _log("     실험 공간은 .claude/policy 를 건드리지 않는다 — promote --yes 만이 경로다.")
+            _append_ledger({"exp": exp, "outcome": "INVALID", "reason": "harness-body-changed",
+                            "changed": touched})
+            return 1
 
         # 5. 판정
         b_rate = base["pass"] / base["total"] if base["total"] else 0.0
@@ -339,13 +415,27 @@ def cmd_run(args) -> int:
         rec = {
             "exp": exp, "role": role, "scenarios": scenarios, "repeats": args.repeats,
             "base": f"{base['pass']}/{base['total']}", "cand": f"{cand['pass']}/{cand['total']}",
-            "delta": round(c_rate - b_rate, 3), "cand_accuracy": cand["accuracy"],
+            "delta": round(c_rate - b_rate, 3),
+            "cand_accuracy": cand["accuracy"], "base_accuracy": base["accuracy"],
             "policy": directives, "secs": round(time.time() - started),
         }
         if cand["accuracy"] > 0:
             rec["outcome"] = "DISQUALIFIED"
             rec["reason"] = "candidate produced false results"
             _log(f"  ⛔ 실격 — 후보 구간에서 거짓 결과 {cand['accuracy']}건")
+        elif base["accuracy"] > 0:
+            # 챔피언이 거짓 결과를 내면 기준선이 깎여 **어떤 후보든 유리해진다**.
+            # 예전엔 후보 구간만 봤다 — 비대칭이었다.
+            rec["outcome"] = "INVALID"
+            rec["reason"] = "baseline produced false results (champion contaminated)"
+            _log(f"  ⚠️ 베이스라인 구간에서 거짓 결과 {base['accuracy']}건 — 챔피언 오염, 무효")
+        elif cand["total"] != base["total"]:
+            # paired 비교의 전제가 깨졌다. 절대 PASS 수로 비교하면 base 1/2 vs
+            # cand 2/4 가 delta 0.0 인데 KEEP 이 된다 (실측). 타임아웃 시 "부분
+            # 결과로 채점" 이 바로 이 상황을 만든다.
+            rec["outcome"] = "INVALID"
+            rec["reason"] = f"unpaired arms (base={base['total']}, cand={cand['total']})"
+            _log(f"  ⚠️ 구간 실행 수 불일치 (base {base['total']}, cand {cand['total']}) — 비교 불가")
         elif cand["total"] == 0 or base["total"] == 0:
             rec["outcome"] = "INVALID"
             rec["reason"] = "no records"
@@ -411,6 +501,10 @@ def cmd_promote(args) -> int:
 
     src = _AR / args.exp / "policy"
     files = _policy_files(src)
+    if not files:
+        # 예전엔 아무것도 복사하지 않고 PROMOTED 를 기록했다 — 원장이 거짓말을 한다.
+        _log(f"❌ {args.exp} 의 정책 파일이 없다 ({_rel(src)}) — 승격할 내용이 없다")
+        return 1
     _log(f"=== {args.exp} 승격 검토 ===")
     _log(f"  근거: {rec['base']} → {rec['cand']} (delta {rec['delta']}), 거짓 결과 {rec['cand_accuracy']}건")
     _log(f"  대상: {rec['role']}, 시나리오 {','.join(rec['scenarios'])} × {rec['repeats']}회")

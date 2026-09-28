@@ -4,7 +4,7 @@ cycle_driver.py — 로컬 결정론 supervisor: SDLC 사이클 상태 기계 (l
 
 측정 05/06 의 결론을 코드화한다 (ADR-018):
   - LLM 이 문맥으로 흐름을 조율(G5)하는 것은 32B 도 실패 → **흐름은 코드가 소유**
-  - 로컬 LLM 은 역할 단위로만 호출: developer(생성, 14B) / reviewer·qa(판정, 32B)
+  - 로컬 LLM 은 역할 단위로만 호출: developer(생성, 32B) / reviewer·qa(판정, 32B)
   - 값 전달은 전부 드라이버가 파일·인자로 주입 (LLM 문맥 전달 배제)
   - grader 는 결정론 (테스트 실행 + 기대 출력 확인 — 공허 통과 차단)
   - 재작업 지시는 전체 파일 재작성 + 실패 출력 + 현재 파일 내용 주입 (AGENTS.md 규칙 6)
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tempfile
 import os
 import re
 import shutil
@@ -143,9 +144,21 @@ def _lean(prompt: str) -> str:
     return out
 
 
+_DRIVER_HOSTS = ("opencode", "claude-code")
+
+
 def _driver_host() -> str:
-    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11)."""
-    return os.environ.get("HARNESS_DRIVER_HOST", "opencode")
+    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11).
+
+    모르는 값은 **즉시 실패**한다. 예전엔 `claude`·`Claude-Code` 같은 오타가 조용히
+    opencode 로 떨어져서, 호스트를 바꾸는 비교 실험이 **틀린 호스트를 측정**하고도
+    아무 표시가 없었다.
+    """
+    host = os.environ.get("HARNESS_DRIVER_HOST", "opencode").strip()
+    if host not in _DRIVER_HOSTS:
+        _log(f"[cycle] ❌ 알 수 없는 HARNESS_DRIVER_HOST: {host!r} — {list(_DRIVER_HOSTS)}")
+        raise SystemExit(2)
+    return host
 
 
 _CLAUDE_CALLS = 0   # 호스트 비교 측정의 비용 귀속용 호출 카운터
@@ -364,12 +377,36 @@ def _agent_call(role: str, task: str) -> tuple[int, str]:
     return _opencode_run(None, combined, model=model)
 
 
-def _vl(args: list[str]) -> str:
-    """verify_loop.py 서브커맨드를 실행하고 출력을 반환한다."""
+def _vl(args: list[str], strict: bool = False) -> str:
+    """verify_loop.py 서브커맨드를 실행하고 출력을 반환한다.
+
+    `strict=True` 면 rc≠0 을 치명으로 본다. 예전에는 rc 를 **버렸기** 때문에
+    verify_loop 가 feature id 를 거부(exit 2)해도 드라이버가 계속 진행해 judge 를
+    3회 호출하고(LLM 비용) "응답했으나 판정 미기록" 이라는 **오진**으로 끝났다.
+    """
     r = subprocess.run(
         [sys.executable, str(_VL)] + args, cwd=_ROOT, capture_output=True, text=True
     )
-    return (r.stdout or "") + (r.stderr or "")
+    out = (r.stdout or "") + (r.stderr or "")
+    if strict and r.returncode != 0:
+        print(f"[cycle] ❌ verify_loop 실패 (rc={r.returncode}) — 중단합니다:")
+        print(out.rstrip())
+        raise SystemExit(1)
+    return out
+
+
+def _vl_norm(loop: dict) -> dict:
+    """루프 상태를 소비 전에 정규화한다 — `attempts` 원소가 dict 가 아니면 걸러낸다.
+
+    `{"attempts":[1,2]}` 하나에 `a.get(...)` 이 AttributeError 로 사이클을 중단시켰다.
+    verify_loop 의 `_read_loop` 와 같은 규율을 드라이버 쪽에서도 지킨다.
+    """
+    if not isinstance(loop, dict):
+        return {"attempts": [], "revision_count": 0, "status": "?"}
+    loop["attempts"] = [a for a in loop.get("attempts", []) if isinstance(a, dict)]
+    rc = loop.get("revision_count")
+    loop["revision_count"] = rc if isinstance(rc, int) and not isinstance(rc, bool) else 0
+    return loop
 
 
 def _vl_state(feature: str) -> dict:
@@ -378,7 +415,7 @@ def _vl_state(feature: str) -> dict:
     if not p.is_file():
         return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return _vl_norm(json.loads(p.read_text(encoding="utf-8")))
     except ValueError:
         return {}
 
@@ -391,21 +428,77 @@ def _judge_recorded(feature: str, grader: str, before_n: int) -> str | None:
     return None
 
 
+def _bookkeep_feature(fl_path: Path, feature: str) -> bool:
+    """feature_list 를 **다시 읽어** 대상 feature 만 갱신하고 원자적으로 쓴다.
+
+    통째 덮어쓰기는 그 사이의 다른 변경(새 feature 추가 등)을 잃는다.
+    이 파일은 여러 에이전트가 만지는 공유 상태다.
+    """
+    try:
+        fresh = json.loads(fl_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — 공유 상태 파일은 경계다
+        print(f"[cycle] ❌ feature_list.json 읽기 실패: {type(exc).__name__}: {exc}")
+        return False
+    items = fresh.get("features") if isinstance(fresh, dict) else fresh
+    if not isinstance(items, list):
+        print("[cycle] ❌ feature_list.json 형태 오류 — features 배열이 없습니다")
+        return False
+    target = next((f for f in items
+                   if isinstance(f, dict) and f.get("id") == feature), None)
+    if target is None:
+        return False
+    target["passes"] = True
+    target["status"] = "done"
+    fd, tmp = tempfile.mkstemp(dir=str(fl_path.parent), prefix=".tmp-fl-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(fresh, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, fl_path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return True
+
+
 def _grade(test_cmd: str, expect: str | None) -> tuple[bool, str]:
     """결정론 grader: 테스트 명령 실행 — exit 0 + 기대 출력 확인 (공허 통과 차단)."""
-    r = subprocess.run(
-        test_cmd, shell=True, cwd=_ROOT, capture_output=True, text=True, timeout=120
-    )
+    try:
+        r = subprocess.run(
+            test_cmd, shell=True, cwd=_ROOT, capture_output=True, text=True, timeout=120
+        )
+    except subprocess.TimeoutExpired:
+        # 생성 코드가 무한 루프면 예전에는 드라이버가 traceback 으로 죽고
+        # revision 기록도 남지 않았다 — 판정을 남기고 재작업으로 보낸다.
+        return False, "grader timeout 120s — 무한 루프 의심"
     out = (r.stdout or "") + (r.stderr or "")
     ok = r.returncode == 0 and (expect is None or expect in out)
     return ok, out.strip()[-800:]
+
+
+def _safe_rel(rel: str) -> Path | None:
+    """`--files/--require/--protect` 경로를 **프로젝트 루트 안으로 구속**한다.
+
+    운영자 입력이지만 F020·F023 과 같은 클래스다 — 예전에는 `../outside.py` 를
+    `_normalize_tabs` 가 실제로 재작성했고 `/etc/hostname` 이 프롬프트에 주입됐다.
+    """
+    resolved = (_ROOT / rel).resolve() if not Path(rel).is_absolute() else Path(rel).resolve()
+    root = _ROOT.resolve()
+    if resolved != root and root not in resolved.parents:
+        print(f"[cycle] ⚠️ 프로젝트 루트를 벗어난 경로는 무시합니다: {rel}")
+        return None
+    return resolved
 
 
 def _files_context(files: list[str]) -> str:
     """재작업 프롬프트에 주입할 현재 파일 내용을 구성한다 (드라이버가 값 주입 — LLM 문맥 전달 배제)."""
     chunks = []
     for f in files:
-        p = _ROOT / f
+        p = _safe_rel(f)
+        if p is None:
+            continue
         body = p.read_text(encoding="utf-8") if p.is_file() else "(파일 없음)"
         chunks.append(f"--- current content of {f} ---\n{body}")
     return "\n".join(chunks)
@@ -697,12 +790,28 @@ _ECHO_PATTERNS = (
 )
 
 
+def _is_placeholder_note(notes: str) -> bool:
+    """노트가 `<...>` 자리표시자를 그대로 베낀 것인지 — **일반 규칙**.
+
+    예전에는 문구를 하나씩 `_ECHO_PATTERNS` 에 등재했는데, 프롬프트의 자리표시자를
+    바꾸면 검사기가 그걸 모른다(실제로 어긋났다). 프롬프트가 무엇을 쓰든 `<...>` 는
+    채워 넣으라는 표시이므로, 그게 남아 있으면 판정이 아니다.
+    """
+    stripped = (notes or "").strip()
+    if not stripped:
+        return True
+    import re as _re
+    without = _re.sub(r"<[^<>]{0,80}>", "", stripped).strip()
+    # 자리표시자를 걷어내고 남는 게 거의 없으면 채우지 않은 것이다.
+    return len(without) < max(8, len(stripped) // 4)
+
+
 def _is_echo_note(notes: str) -> bool:
     """판정 노트가 지시문 되풀이/placeholder 인지 판별한다 (근거 부재)."""
     low = (notes or "").strip().lower()
     if not low:
         return True
-    return any(p in low for p in _ECHO_PATTERNS)
+    return _is_placeholder_note(notes) or any(p in low for p in _ECHO_PATTERNS)
 
 def _docstring_evidence(files: list[str]) -> list[str]:
     """
@@ -834,11 +943,40 @@ def _artifact_problems(files: list[str]) -> list[str]:
 
 
 def _tool_schema() -> dict:
-    """도구 스키마 스냅샷을 읽는다 (ADR-022 결정 1). 없으면 빈 dict."""
+    """도구 스키마 스냅샷을 읽는다 (ADR-022 결정 1). 없거나 이상하면 빈 dict.
+
+    docstring 이 "없으면 물러난다" 고 적었지만 **손상 ≠ 부재**였다. 잘린 JSON 이면
+    `_ensure_files` 가 JSONDecodeError 로 중단됐고, `required` 가 리스트가 아니라
+    문자열이면 파생기가 그 문자열을 **한 글자씩** 인자 이름으로 읽어 성립 불가능한
+    지시를 스스로 만들어 냈다 — 이 기능이 없애려던 바로 그것이다.
+    스냅샷은 파일 I/O 경계이므로 여기서 막는다.
+
+    (이 설명에 결함 예시를 그대로 적었더니 `schema_check` 가 그걸 실제 지시로
+     보고 BLOCK 을 냈다. 검사기가 옳았다 — 문구를 바꿨다.)
+    """
     p = _ROOT / ".claude" / "schema" / "opencode-tools.json"
     if not p.is_file():
         return {}
-    return json.loads(p.read_text(encoding="utf-8")).get("tools") or {}
+    try:
+        snap = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError, RecursionError) as exc:
+        _log(f"  ⚠️ 도구 스키마 스냅샷 손상 — 기본 문구로 진행: {type(exc).__name__}")
+        return {}
+    tools = snap.get("tools") if isinstance(snap, dict) else None
+    if not isinstance(tools, dict):
+        _log("  ⚠️ 도구 스키마 스냅샷 형태 오류(tools 가 객체가 아님) — 기본 문구로 진행")
+        return {}
+    # spec 의 `required` 가 비어 있거나 문자열이면 파생이 쓰레기를 낸다. 그런 spec 은 버린다.
+    clean = {}
+    for name, spec in tools.items():
+        if not isinstance(spec, dict):
+            continue
+        req = spec.get("required")
+        if not isinstance(req, list) or not req or not all(isinstance(k, str) and k for k in req):
+            _log(f"  ⚠️ 스냅샷의 '{name}' required 가 비정상 — 그 항목만 무시")
+            continue
+        clean[name] = spec
+    return clean
 
 
 def _write_instruction(rel: str) -> str:
@@ -942,12 +1080,28 @@ def _record_from_prose(role: str, feature: str, out: str, before: int) -> str | 
     Returns:
         str | None: 기록한 verdict, 줄이 없으면 None
     """
-    m = _VERDICT_LINE.search(out or "")
-    if not m:
+    # 프롬프트는 "end your reply with exactly one line" 이다 — **마지막**이 권위다.
+    # 첫 매치를 취하면 모델이 스스로 고친 판정이 버려진다 (실측: `pass` 초안 뒤
+    # `revision` 정정 → pass 가 기록됨). 게다가 프롬프트를 인용한 뒤 실판정을 낸
+    # 경우엔 첫 매치가 에코라 실판정까지 통째로 버려졌다.
+    text = out or ""
+    matches = list(_VERDICT_LINE.finditer(text))
+    if not matches:
+        return None
+    m = matches[-1]
+    # 그 줄이 **마지막 비공백 줄**일 때만 인정한다. judge 가 `cat` 한 파일 안에
+    # `VERDICT:` 가 들어 있어도 기록되지 않게 한다.
+    if text[m.end():].strip():
+        _log(f"  ⚠️ {role} VERDICT 줄이 응답 끝이 아님 — 기록하지 않음")
         return None
     verdict, note = m.group(1).lower(), (m.group(2) or "").strip()
-    if not note or _is_echo_note(note):
+    if not note or _is_echo_note(note) or _is_placeholder_note(note):
         _log(f"  ⚠️ {role} VERDICT 줄에 근거가 없음 — 기록하지 않음")
+        return None
+    # 초기 경로의 `_contradicts` 게이트가 이 경로엔 없었다 — "pass 인데 본문은
+    # 미충족을 말한다" 가 그대로 pass 로 기록됐다.
+    if _contradicts(verdict, note):
+        _log(f"  ⚠️ {role} pass 인데 근거가 미충족을 말한다 — 기록하지 않음")
         return None
     _vl(["record", feature, "--grader", role, "--verdict", verdict, "--notes", note[:300]])
     _log(f"  ⓘ {role} 가 도구를 부르지 않아 드라이버가 VERDICT 줄을 대신 기록: {verdict}")
@@ -971,7 +1125,7 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
             "The judgement is only valid once recorded.\n"
             "Run this bash command now (use revision instead of pass if a criterion is unmet):\n"
             f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
-            f"--verdict pass --notes '<your concrete finding>'\n"
+            f"--verdict <pass|revision> --notes '<name the criterion and the evidence>'\n"
             "The bash tool needs both arguments: command and description.\n"
             "If the bash call fails, end your reply with: VERDICT: pass|revision — <finding>"
         )
@@ -993,6 +1147,12 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
 
 def cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
+    # 모듈 docstring 의 "미설치 시 안내 후 exit 0" 은 `self` 에만 참이었다 —
+    # `run` 은 FileNotFoundError traceback 으로 죽었다. 진입에서 확인한다.
+    if _driver_host() != "claude-code" and shutil.which("opencode") is None:
+        print("[cycle] ❌ `opencode` 를 찾을 수 없습니다 — d-2 하네스의 실행 전제입니다.")
+        print("  설치: bash .claude/bin/opencode-setup.sh  (또는 PATH 확인)")
+        return 1
     feature = args.feature
     files = [f.strip() for f in args.files.split(",")] if args.files else []
 
@@ -1170,7 +1330,7 @@ def cmd_run(args) -> int:
               "when every criterion is satisfied.\n"
             + f"Step 3: record your verdict via bash (notes must state a concrete finding):\n"
               f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
-              f"--verdict pass --notes '<your concrete finding>'\n"
+              f"--verdict <pass|revision> --notes '<name the criterion and the evidence>'\n"
               f"(replace pass with revision per the VERDICT RULE)\n"
               f"The bash tool needs both arguments: command and description.\n"
               "Your notes must name the specific unmet acceptance criterion and the evidence "
@@ -1197,13 +1357,30 @@ def cmd_run(args) -> int:
                     "Run this bash command now (fill notes with your concrete finding, and use "
                     "--verdict revision instead of pass if you found a must-fix issue):\n"
                     f"python3 .claude/bin/verify_loop.py record {feature} --grader {role} "
-                    f"--verdict pass --notes '<your concrete finding>'\n"
+                    f"--verdict <pass|revision> --notes '<name the criterion and the evidence>'\n"
                     "Remember the bash tool needs both arguments: command and description.\n"
                     "Then reply with PASS or NEEDS REVISION."
                 )
             rc, _out = _agent_call(role, prompt)
             verdict = _judge_recorded(feature, role, before_n)
+            if not verdict:
+                # 폴백이 **재판정 경로에만** 배선돼 있었다 (`_judge_with_retry`).
+                # 초기 라운드에서 judge 가 VERDICT 줄을 정확히 내도 기회조차 없어
+                # 3회 재시도 후 exit 2 였다 — 측정 11 의 "폴백 발동 0회" 는
+                # 그 배선 결함 위에서 나온 수치다 (결과 14 각주 참조).
+                verdict = _record_from_prose(role, feature, _out, before_n)
             if verdict:
+                # 기록됐다고 끝이 아니다 — 프롬프트의 `<your concrete finding>` 를
+                # 그대로 베껴 넣으면 판정이 아니라 **메아리**다. 그 상태로 pass 를
+                # 받으면 `passes:true` 까지 그대로 간다(실측). 재판정 경로에는 이
+                # 검사가 있었는데 **초기 루프에만 빠져 있었다** — 같은 규약을 두 곳에
+                # 두면 한쪽만 고치게 된다는 이 리포의 반복 결함이다.
+                last = next((a for a in reversed(_vl_state(feature).get("attempts", []))
+                             if a.get("grader") == role), {})
+                if _is_echo_note(last.get("notes") or ""):
+                    verdict = None
+                    _log(f"  ⚠️ {role} 노트가 placeholder — 판정으로 인정하지 않음")
+                    continue
                 break
             tail = "재시도" if attempt < 3 else "중단"
             if rc == 124:
@@ -1333,9 +1510,11 @@ def cmd_run(args) -> int:
             _log(f"  {role} 재판정: {verdict}")
 
     # ── BOOKKEEP (supervisor 북키핑 — QA pass 근거로 상태 반영) ──
-    feat["passes"] = True
-    feat["status"] = "done"
-    fl_path.write_text(json.dumps(fl, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 사이클 시작에 읽은 `fl` 을 수십 분 뒤 통째로 덮어쓰면, 그 사이 다른 에이전트가
+    # 추가한 feature 가 사라진다 (실측: judge 호출 중 추가한 F999 소실).
+    # **여기서 다시 읽고 대상 feature 만** 갱신하며, 쓰기는 원자적으로 한다.
+    if not _bookkeep_feature(fl_path, feature):
+        _log(f"  ⚠️ feature_list 에서 {feature} 를 찾지 못해 상태를 반영하지 못했습니다")
     prog = _ROOT / "claude-progress.txt"
     with prog.open("a", encoding="utf-8") as fh:
         fh.write(f"\n## cycle-driver | {feature} PASSED — dev(14B)+judge(32B) 로컬 무인 사이클, "

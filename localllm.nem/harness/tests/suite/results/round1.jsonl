@@ -1,0 +1,7 @@
+{"_note": "측정 11 결과 14 의 A/B 배치 요약 (F030 AC7 / 리뷰 MUST-5). 스위트 러너가 직접 쓴 원본이 아니라 **문서에서 옮긴 요약**이다 — 원본 실행 로그는 .claude/state/ 에만 있었고 gitignore 라 보존되지 않았다. 다음 배치부터는 러너 산출물을 그대로 커밋한다.", "_date": "2026-09-2x (측정 11 결과 14)", "s1_완주율": {"nemotron": "0/3", "qwen": "3/3", "판정": "❌ 미달"}, "s2_파일생성": {"nemotron": "4/5 (격리 5/5)", "판정": "⚠️ 목표 ≥90% 미달"}, "s3_지시스키마": {"결함": 0, "판정": "✅"}, "s4_판정기록": {"기록": 3, "미기록재시도": 11, "비율": "21%", "판정": "❌ 목표 ≥90% 미달"}, "총소요": {"nemotron": "4096s", "qwen": "630s", "배수": 6.5}, "원인": "품질이 아니라 예산 구조 — 호출당 150~220s × 최소 7~10회 > 1500s"}
+{"round": 1, "id": "S01", "arm": "nemotron", "verdict": "TIMEOUT", "findings": [{"o": "O1", "sev": "BUG", "msg": "1500s 예산 초과 — 호출당 150~220s × 최소 7~10회"}]}
+{"round": 1, "id": "S03", "arm": "nemotron", "verdict": "TIMEOUT", "findings": [{"o": "O1", "sev": "BUG", "msg": "동일 — 예산 구조상 완주 불가"}]}
+{"round": 1, "id": "S06", "arm": "nemotron", "verdict": "TIMEOUT", "findings": [{"o": "O1", "sev": "BUG", "msg": "동일"}]}
+{"round": 1, "id": "S01", "arm": "qwen", "verdict": "PASS", "findings": []}
+{"round": 1, "id": "S03", "arm": "qwen", "verdict": "PASS", "findings": []}
+{"round": 1, "id": "S06", "arm": "qwen", "verdict": "PASS", "findings": []}

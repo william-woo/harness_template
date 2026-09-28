@@ -1,0 +1,17 @@
+{
+  "_doc": "Atlassian 쓰기 허용 목록 — 여기 없는 대상에는 발행하지 않는다 (철칙).",
+  "_rule": [
+    "이 파일이 없거나, 비어 있거나, 손상이면 **모든 쓰기를 거부**한다 (fail-closed).",
+    "허용 목록에 넣는 것은 사람의 결정이다. 에이전트가 스스로 추가하지 않는다.",
+    "`permissions.ask` 는 호출마다 사람이 승인하게 할 뿐 대상을 제한하지 않는다.",
+    "대상 제한은 `.claude/hooks/pre-atlassian-write-check.sh` (PreToolUse) 가 강제한다."
+  ],
+  "_how_to_add": [
+    "Confluence: 스페이스 키를 확인한다 — getConfluenceSpaces 또는 페이지 URL 의 /wiki/spaces/<KEY>/",
+    "Jira: 프로젝트 키를 확인한다 — getVisibleJiraProjects 또는 이슈 키 앞부분 (PROJ-123 → PROJ)",
+    "확인한 키를 아래 배열에 넣고, 왜 허용했는지 note 에 적는다."
+  ],
+  "confluence_spaces": [],
+  "jira_projects": [],
+  "notes": {}
+}
