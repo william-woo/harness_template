@@ -89,6 +89,11 @@ class O7HostBiasTest(unittest.TestCase):
         "docstring 미충족됨, 누락",
         # 이건 반대로 **좁힌 표지**를 태운다 — 넓은 `충족` 을 되살리면 삼켜진다.
         "docstring 누락, 충족하지 않음",
+        # (H) 후행 부정 — 긍정형 표지 **뒤에** 부정이 붙는 형태 (QA 3회차)
+        "충족됨이 확인되지 않음, docstring 누락",
+        "docstring 이 존재한다고 볼 수 없음, 누락",
+        "해소됨은 아님, 결함 잔존",
+        "수정됨 아님, 결함",
     )
 
     # 못 잡는 **거짓 부재**. `KNOWN_MISS` 는 오탐 전용이라(assertTrue) 이걸 담지
@@ -100,17 +105,32 @@ class O7HostBiasTest(unittest.TestCase):
     # O7 은 INFO(수동 확인 플래그)이고 측정 11 결과 3 이 이미 "정밀도 0, 키워드
     # 보강으로는 못 고친다" 고 결론냈으므로, 여기서는 **고치지 않고 고정**한다.
     # 고쳐지면 아래 테스트가 깨져서 이 서술을 갱신하게 만든다.
+    # 축별로 적는다 — 2회차엔 "한국어 잔여 = 역접 하나" 라고 적었는데 사실이 아니었고,
+    # 목록이 실제 한계보다 작으면 그 자체가 또 하나의 거짓 부재다 (QA 3회차).
     KNOWN_FALSE_ABSENCE = (
+        # (1) 영어 부정 — 표지 앞에 부정이 붙는다. 한국어처럼 표지를 좁혀 막을 수 없다:
+        #     `not missing`·`nothing is missing` 자체가 정당한 반박이라
+        #     `"not "` 을 부정 표지에 넣으면 그것들이 깨진다 (QA 가 변이로 실증).
         "the function does not raise valueerror as required",
         "the criterion is not actually satisfied, docstring missing",
+        # (2) 영어 표지의 의미 반전 — `is present` 는 "기준이 있다"(반박)와
+        #     "버그가 있다"(결함)를 구별하지 못한다. 키워드로는 못 가른다.
         "the bug is present in divide",
         "the test no longer passes, wrong import",
+        # (3) 영어 등위·양보 접속 — 절 분리자가 `[.;\n—]|but|however` 뿐이라,
+        #     다른 기준의 반박과 이 기준의 결함이 **한 절에 공존**하면 삼킨다.
+        #     and / although / while / yet 이 전부 여기 걸린다.
+        "ac1 is in fact correct and the docstring is missing",
+        "the docstring is present although the test file is missing",
         "no issues except the missing docstring",
-        # 한국어 잔여 — 역접 `하지만` 이 절 분리자에 없다 (영어 but/however 는 있다)
+        # (4) 한국어 역접 — `하지만`·`그러나` 가 절 분리자에 없다 (영어 but/however 는 있다)
         "수정됨, 하지만 테스트 누락",
     )
 
-    # 못 잡는 것. **여기 적힌 만큼만 한계다** — 늘어나면 그때 고친다.
+    # 못 잡는 것 (오탐 축). 이 목록은 **대표 표본**이지 전수가 아니다 — O7 의 정밀도는
+    # 측정 11 결과 3 에서 이미 0 으로 측정됐고, 여기 적히지 않은 오탐도 있다
+    # (`the bug was fixed`, `결함을 수정함` 등). 전수를 적는 것이 목적이 아니라
+    # **고쳐졌을 때 알아차리는 것**이 목적이다.
     KNOWN_MISS = (
         # judge 가 자기 이전 판정을 회고하는 문장. "was wrong" 이 문법적으로는
         # 결함 서술과 구별되지 않는다. O7 은 INFO(수동 확인 플래그)이므로
