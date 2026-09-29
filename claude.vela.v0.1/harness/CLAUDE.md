@@ -9,15 +9,22 @@
 > 자세한 정책은 아래 **🤖 Autonomous Mode** 섹션 참조.
 >
 > 🚀 **이 변형은 `claude.vela.v0.1` — 배포 단위 버전 계보입니다** (F032 / ADR-023).
-> `claude.loope`(SSOT) 1:1 복사 + **Atlassian 오버레이**. 앞으로 배포 단위 변형은
-> `claude.vela.v<major>.<minor>` 로 명명합니다 — 기능 서술 이름(`.aif`·`.nem` 등)은
-> 실험 축 격리용으로 그대로 유지하고 **개명하지 않습니다**.
+> `claude.loope`(SSOT) 를 복사해 만들고 **Atlassian 오버레이**를 얹은 배포 스냅샷입니다.
+> 앞으로 배포 단위 변형은 `claude.vela.v<major>.<minor>` 로 명명합니다 — 기능 서술
+> 이름(`.aif`·`.nem` 등)은 실험 축 격리용으로 그대로 유지하고 **개명하지 않습니다**.
+>
+> ⚠️ **1:1 은 자동으로 유지되지 않습니다.** loope 가 앞서가면 이 스냅샷은 뒤처집니다
+> (실제로 09-10 ~ 09-30 사이에 ADR 2건·테스트 2건이 뒤처져 있었고 QA 가 잡았습니다).
+> 릴리스마다 `diff -rq claude.loope/harness claude.vela.v0.1/harness` 로 확인하고,
+> 오버레이 5파일 외의 차이는 전부 미러 누락으로 봅니다.
 >
 > 🔗 **Atlassian 연동**: Jira 이슈를 `feature_list.json` 초안으로 가져오고(읽기),
 > ADR·체크포인트·판정을 Confluence·Jira 로 발행합니다(쓰기 — **승인 필요**).
 > **우리 리포가 SSOT**이고 Atlassian 은 발행 대상입니다 — 역반영하지 않습니다.
 > 공식 MCP 커넥터를 쓰므로 API 래퍼는 없고, **멱등성만** `atlassian_map.py` 가 담당합니다.
-> 커넥터 미연결 시 안내만 하고 하네스는 정상 동작합니다. → `/project:atlassian`
+> 허용 목록(`atlassian-targets.json`)에 **사람이 등재한 대상에만** 쓰고, 기본값은
+> 빈 목록 = 전면 거부입니다. 커넥터 미연결 시 안내만 하고 하네스는 정상 동작합니다.
+> → `/project:atlassian`
 
 ---
 
@@ -805,6 +812,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 | **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
 | **ⓑ¹⁰ `claude.aif/`** (판정 설계 — RLAIF/CAI 규율) | loope 1:1 + aif 오버레이 (항목형 rubric + 증거강제 + 앙상블 + UNCERTAIN) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속, aif 오버레이는 stdlib/문서) |
 | **ⓑ¹¹ `localllm.aif/`** (d-2 + 판정 설계) | localllm 1:1 + aif 오버레이 — **A/B 수치 비교가 가능한 유일한 aif 변형** | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
+| **ⓑ¹² `localllm.nem/`** (d-2 + nemotron) | localllm 1:1 + 모델 축만 교체 — `nemotron-3-nano:30b` 단일, 추론 예산 자동 등재 | ✅ | ✅ | ✅ | ✅ | **허용** (localllm 상속) |
+| **ⓑ¹³ `claude.vela.v0.1/`** ★ (배포 단위 — vela 계보) | loope 1:1 + **Atlassian 오버레이** (Jira·Confluence 연동, 공식 MCP + 멱등성 코드) | ✅ | ✅ | ✅ | ✅ | **허용** (loope 상속 + Atlassian MCP) |
 | ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 > **claude.loope 변형 (F020)**: productmgr 변형 복사 + loop 오버레이 (ADR-014). LangChain
@@ -899,8 +908,29 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - (localllm.aif 만) `cycle_driver` 의 `_aif_findings` — 항목형 앙상블 결과를 judge 입력에 주입
 - (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
+**모델 축 분기 변형** (F030 신설 — 오버레이가 아니라 **모델만 다른 형제**):
+- `localllm.nem/` — `nemotron-3-nano:30b` 단일 (전 9 역할). 후속 `localllm.gem/` = gemma 기반
+- 부모 `localllm/` 은 qwen2.5 2 티어로 **그대로 유지** — 대조군이 사라지면 측정 01~09 가 해석 불가가 된다
+- **추론 모델 관문** (ADR-021): nemotron·gemma 는 도구 호출 **전에** 추론 토큰을 쓴다. 전역 설정에
+  `limit: {context, output}` 이 없으면 추론 중간에 잘려 도구 호출이 **0건**이 된다 (`finish=length`).
+  `opencode-setup.sh` 가 등재·보정을 자동 처리. `limit` 은 두 필드를 **모두** 요구 — 하나만 넣으면
+  OpenCode 가 `Configuration is invalid` 로 전 실행을 거부한다
+- 오버레이 프로필은 부모와 동일하므로 LINT-MR 의 localllm 등재 지점 6곳에 **함께** 등재한다
+
+**vela 버전 계보** (F032 신설 — ADR-023):
+- **배포 단위 변형은 `claude.vela.v<major>.<minor>`** 로 명명한다. 첫 릴리스는 `claude.vela.v0.1`
+  (`claude.loope` 1:1 복사에서 출발)
+- 기능 서술 이름(`claude.gstack.auto.design.wiki.orch`)은 **계보를 드러내는 축**으로,
+  축 접미사(`.aif` 판정 / `.nem` 모델 / `localllm` 호스트)는 **실험 격리 축**으로 그대로 유지한다.
+  **기존 이름을 개명하지 않는다** — ADR·측정 문서의 참조가 전부 깨진다
+- **v0.1 에서 SSOT 는 여전히 `claude.loope`** 다. vela 는 그 위의 배포 스냅샷이다.
+  둘의 장기 관계(매 릴리스 복사 vs SSOT 이관)는 v0.2 착수 시 재검토한다
+- **Atlassian 오버레이** (vela 전용 — LINT-MR-15): 공식 MCP 커넥터를 쓰므로 **API 래퍼를
+  만들지 않고**, `atlassian_map.py` 가 멱등성(중복 발행 방지)만 결정론으로 담당한다.
+  **우리 리포가 SSOT**, Atlassian 은 발행 대상 — 역반영 금지. 발행은 **PR 과 같은 승인 층위**
+
 회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
-+ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~14 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14 추가).
++ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~15 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14·F030 변형 등재·F032 MR-15 추가).
 
 ---
 

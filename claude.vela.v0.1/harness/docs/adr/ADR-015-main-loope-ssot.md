@@ -22,6 +22,27 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 (완전한 dogfooding). F020 의 "meta-dev 오버레이" 개념은 이 결정으로 **흡수·폐기**된다.
 
 ### 결정 2 — 로컬 파일 3종은 승격에서 제외 (머신/프로젝트 로컬)
+
+> **보강 (2026-09-22, F021 리뷰 MUST-3·4·6)** — 제외 목록을 **5종**으로 확정하고,
+> invariant 를 **코드로 강제**한다.
+>
+> | 제외 대상 | 이유 |
+> |---|---|
+> | `settings.json` / `settings.local.json` | 머신 로컬 권한·훅 배선 |
+> | `host.json` | 프로젝트 로컬 agent_type·백업 설정 |
+> | `.claude/state/` | 런타임 상태 |
+> | `.claude/design/` | `design_pick.py apply` 의 **프로젝트 로컬 산출물**(tokens.json·backup). `references/` 는 `docs/design-references/` 와 중복이라 변형은 후자만 쓴다 |
+> | `.claude/bin/live_status.sh` | 머신 로컬 관측 도구 (tmux·파일 기반) |
+>
+> **왜 코드로 강제하는가**: 원문은 invariant 를 선언하고 가드를 `LINT-MR` 에 맡겼는데,
+> 그 검사기는 **오버레이 파일의 존재만** 본다. 그래서 실제로
+> `coding-standards.md` 내용 drift · `CLAUDE.md` 본문 drift · 한쪽에만 있는 파일 3건이
+> 전부 **0 BLOCK 으로 통과**했다. F010 의 "미러 회귀 2회" 교훈이 겨냥한 결함 —
+> 규칙은 문서에 있고 강제는 존재만 보는 것 — 이 그대로 재발한 것이다.
+>
+> → **`LINT-SSOT`** 검사기를 신설했다. `.claude/`·`docs/adr/` 를 **내용 해시**로
+> 비교하고 `CLAUDE.md` 는 **섹션 단위**로 본다(변형별 헤더 맞춤은 허용). drift 는 BLOCK.
+> `handoff` 전 `lint --strict` 가 이 게이트다.
 `settings.json`(사용자 권한 구성), `settings.local.json`(로컬 권한 누적), `host.json`(호스트 상태),
 `.claude/state/`(프로젝트 로컬 상태)는 loope 템플릿으로 덮지 않는다 — 이들은 SSOT 대상이 아니다.
 

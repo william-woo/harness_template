@@ -39,6 +39,19 @@ opencode 어댑터에 `render_commands()` 를 추가하고 host.py 에 `render-c
 render-agents 와 동일한 멱등 규약(전량 덮어쓰기 + stale 삭제). 30 커맨드 변환 검증 완료.
 
 ### 결정 4 — 역할 → 모델 등급을 opencode.json 으로 코드화
+
+> **개정 4-bis (2026-09-22, F023 리뷰 MUST-5)** — 실제 매핑은 **gatekeeper 만 14B**,
+> 나머지 8 역할은 32B 다. 측정 08 에서 생성 역할을 승급했는데 그 사실이
+> `AGENTS.md` 표 **한 곳에만** 반영되고 ADR·CLAUDE.md·setup.sh·cycle_driver 주석은
+> "32B (gatekeeper 만 14B)" 로 남았다.
+>
+> | 역할 | 모델 | 근거 |
+> |---|---|---|
+> | gatekeeper | 14B (`qwen2.5:14b-instruct-q8_0`) | 경계 판정은 짧은 분류라 14B 로 충분 |
+> | 나머지 8 역할 | 32B (`qwen2.5:32b-instruct-q4_K_M`) | 측정 08 — 생성·판정 모두 14B 에서 완주율 미달 |
+>
+> 원문("32B (gatekeeper 만 14B) / 판정 32B")은 측정 04 시점 판단이었다. 다운스트림이 문서의
+> 사용 예시를 따르면 실제와 다른 모델이 뜨므로, 설정을 SSOT 로 두고 문서를 맞춘다.
 프로젝트 루트 `opencode.json` (전역 설정과 deep-merge, baseURL 은 전역에 위임):
 - 생성형(developer/architect/designer/planner/researcher/gatekeeper) → `qwen2.5:14b-instruct-q8_0`
 - 판정·다홉(reviewer/qa/product-manager) → `qwen2.5:32b-instruct-q4_K_M`
