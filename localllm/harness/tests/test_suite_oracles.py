@@ -23,10 +23,14 @@
 실행:
     python3 tests/test_suite_oracles.py
 """
+import contextlib
 import hashlib
+import io
+import os
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SUITE = Path(__file__).resolve().parent / "suite" / "run_suite.py"
 _DRIVER = Path(__file__).resolve().parents[1] / ".claude" / "bin" / "cycle_driver.py"
@@ -306,6 +310,119 @@ class TriCopyParityTest(unittest.TestCase):
                 self.assertIn(src, (srcs["localllm"], base),
                               f"{name} 의 run_suite 가 모델 축 외의 이유로 갈라졌다")
 
+
+class _FakeProc:
+    """`subprocess.run` 대역 — opencode 경로를 실제 실행 없이 끝낸다."""
+    returncode = 0
+    stdout = "ok"
+    stderr = ""
+
+class DriverBehaviourTest(unittest.TestCase):
+    """드라이버를 **실제로 태워** 배선을 본다 (5차 리뷰 SHOULD-1·2).
+
+    왜 필요한가: 위의 계약 테스트들은 소스 문자열 grep 이라 `def` 가 **있는지**만 본다.
+    리뷰가 그 한계를 실증했다 — `_opencode_run` 안의 호스트 라우팅 3줄만 지우고
+    `_claude_exec` 정의는 남겨두면, MUST-4 가 고친 바로 그 상태("host 를 기록하되
+    제어는 못 한다")가 재생되는데도 grep 테스트는 전부 초록이었다.
+
+    그래서 여기서는 모듈을 import 해 함수를 직접 호출한다. opencode·claude 가 깔려
+    있지 않아도 돈다 — 실행 직전 갈림길만 확인하고 실제 프로세스는 띄우지 않는다.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_cycle_driver_under_test", _DRIVER)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def _routed(self, host: str) -> bool:
+        """`HARNESS_DRIVER_HOST=<host>` 에서 `_opencode_run` 이 claude 경로로 갔는가."""
+        calls = []
+        with mock.patch.dict(os.environ, {"HARNESS_DRIVER_HOST": host}), \
+             mock.patch.object(self.mod, "_claude_exec",
+                               lambda *a, **k: calls.append(a) or (0, "claude")), \
+             mock.patch.object(self.mod.subprocess, "run",
+                               lambda *a, **k: _FakeProc()), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                self.mod._opencode_run(None, "x", attempts=1)
+            except Exception as exc:                       # noqa: BLE001
+                # opencode 경로는 환경에 따라 다르게 죽을 수 있다. 우리가 보는 것은
+                # **claude 로 갔는가** 하나뿐이므로, 안 갔다는 사실만 확정되면 충분하다.
+                if not calls:
+                    return False
+                raise AssertionError(f"claude 로 갔는데 예외: {exc}") from exc
+        return bool(calls)
+
+    def test_host_가_claude_code_면_claude_실행으로_라우팅된다(self):
+        """이 테스트가 리뷰의 변이 M1(라우팅 3줄 삭제)을 잡는다."""
+        self.assertTrue(self._routed("claude-code"),
+                        "HARNESS_DRIVER_HOST=claude-code 인데 claude 로 라우팅되지 않았다 — "
+                        "스위트는 host 를 기록하는데 드라이버가 제어하지 않으면 "
+                        "**틀린 호스트를 측정하고도 맞다고 기록한다**")
+
+    def test_기본_호스트에서는_claude_로_라우팅하지_않는다(self):
+        self.assertFalse(self._routed("opencode"),
+                         "기본 호스트인데 claude 로 샜다")
+
+    def test_알_수_없는_호스트값은_즉시_실패한다(self):
+        with mock.patch.dict(os.environ, {"HARNESS_DRIVER_HOST": "Claude-Code"}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit) as ctx:
+                self.mod._driver_host()
+        self.assertEqual(ctx.exception.code, 2)
+
+    def _cost_line(self, inner) -> str:
+        buf = io.StringIO()
+        with mock.patch.object(self.mod, "_cmd_run", inner), \
+             contextlib.redirect_stdout(buf):
+            try:
+                self.mod.cmd_run(None)
+            except RuntimeError:
+                pass
+        return buf.getvalue()
+
+    def test_비용_줄이_정상_종료에서_나온다(self):
+        self.assertIn("[cost]", self._cost_line(lambda args: 0))
+
+    def test_비용_줄이_예외_경로에서도_나온다(self):
+        """`finally` 가 아니라 반환 직전에 찍으면 여기서 사라진다."""
+        def boom(args):
+            raise RuntimeError("중간에 죽음")
+        self.assertIn("[cost]", self._cost_line(boom))
+
+    def test_비용_줄을_run_suite_정규식이_실제로_읽는다(self):
+        """생산된 줄을 소비자 정규식에 그대로 먹인다 — 포맷이 갈라지면 여기서 깨진다."""
+        line = next((l for l in self._cost_line(lambda args: 0).splitlines()
+                     if "[cost]" in l), "")
+        src = _SUITE.read_text(encoding="utf-8")
+        m = re.search(r'_COST_LINE\s*=\s*re\.compile\(\s*r?["\'](.+?)["\']\s*\)', src)
+        self.assertTrue(m, "run_suite 에서 _COST_LINE 정규식을 못 찾았다")
+        self.assertRegex(line, m.group(1))
+
+    @unittest.skipIf(".aif" not in _DRIVER.parents[3].name, "aif 변형이 아닌 사본")
+    def test_aif_변형이면_오버레이가_반드시_있다(self):
+        """존재 여부를 skip 조건으로 쓰면, 사라졌을 때 조용히 통과한다 (거짓 부재).
+
+        변형 이름으로 기대치를 정하고 **없으면 실패**시킨다 — 드라이버를 재생성하다
+        오버레이를 흘리면 여기서 걸린다.
+        """
+        self.assertTrue(hasattr(self.mod, "_aif_findings"),
+                        f"{_DRIVER.parents[3].name} 는 aif 변형인데 _aif_findings 가 없다")
+
+    @unittest.skipIf(".aif" not in _DRIVER.parents[3].name, "aif 변형이 아닌 사본")
+    def test_aif_킬스위치가_모델을_부르지_않고_빈_결과를_준다(self):
+        """드라이버를 통째로 재생성할 때 오버레이가 사라지면 여기서 잡힌다 (SHOULD-2).
+
+        `CYCLE_AIF=0` 경로만 태운다 — 나머지 경로는 실제로 판정 모델을 호출하므로
+        단위 테스트에 넣으면 환경에 따라 멈춘다 (실제로 한 번 멈춰서 알았다).
+        """
+        with mock.patch.dict(os.environ, {"CYCLE_AIF": "0"}), \
+             mock.patch.object(self.mod.subprocess, "run",
+                               lambda *a, **k: self.fail("킬스위치인데 외부를 호출했다")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.mod._aif_findings("code-review", ["x"]), [])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
