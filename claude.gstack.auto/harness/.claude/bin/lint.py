@@ -1835,6 +1835,12 @@ _SSOT_EXCLUDE_PREFIXES = (
 _SSOT_EXCLUDE_EXACT = {
     "settings.json", "settings.local.json", "host.json",
     "bin/live_status.sh",   # 머신 로컬 관측 도구
+    # 3-C 철칙 — 이 작업 트리가 쓸 수 있는 Atlassian 대상은 `settings.json` 과 같은
+    # 층위의 **머신·프로젝트 로컬** 값이다. 배포본(vela)의 사본은 빈 목록이어야 하고
+    # 그것은 LINT-ATL 이 따로 강제한다. 훅은 코드라 원래 같아야 하므로, 이 제외가
+    # 훅을 고치는 통로가 되지 않도록 LINT-ATL 이 **vela 사본과 바이트 동일**을 본다.
+    "atlassian-targets.json",
+    "hooks/pre-atlassian-write-check.sh",
 }
 
 
@@ -1927,6 +1933,57 @@ def check_atlassian_targets() -> list:
                                   f"{var.name}/…/settings.json",
                                   "PreToolUse 에 Atlassian 훅 배선 OK" if wired
                                   else "훅이 PreToolUse 에 배선되지 않았다 — 선언만 있고 강제가 없다"))
+    results.extend(_check_local_atlassian_guard(checker, variants))
+    return results
+
+
+def _check_local_atlassian_guard(checker: str, variants: list) -> list:
+    """로컬 작업 트리의 가드를 본다 — **목록의 내용이 아니라 가드의 무결성**을.
+
+    로컬 허용 목록은 채우는 것이 정상이라 내용은 검사하지 않는다. 그러나 그 파일과
+    훅을 LINT-SSOT 제외 목록에 넣은 순간, 훅은 **어느 미러 검사도 보지 않는 파일**이
+    된다 — F021 이 고친 밀반입 통로가 같은 모양으로 다시 열린다. 그래서 훅만은
+    배포 사본과 바이트 동일을 요구한다. 목록은 로컬 값이라 비교하지 않고, 대신
+    **읽을 수 있는지**만 본다 (깨진 목록은 훅이 전면 거부하는데, 그 사실을 발행
+    시점이 아니라 lint 에서 알아야 한다).
+    """
+    results = []
+    local_hook = _PROJECT_ROOT / ".claude" / "hooks" / "pre-atlassian-write-check.sh"
+    local_list = _PROJECT_ROOT / ".claude" / "atlassian-targets.json"
+    if not local_hook.is_file() and not local_list.is_file():
+        results.append(_issue(checker, INFO, ".claude/atlassian-targets.json",
+                              "로컬 가드 없음 — 이 작업 트리는 Atlassian 에 쓰지 않는다"))
+        return results
+    # 한쪽만 있으면 반쪽이다. 목록만 있으면 아무것도 막지 않고, 훅만 있으면 전면 거부다.
+    if local_hook.is_file() != local_list.is_file():
+        missing = "훅" if local_list.is_file() else "허용 목록"
+        results.append(_issue(checker, BLOCK, ".claude/ (로컬)",
+                              f"가드가 반쪽이다 — {missing} 이 없다. 둘은 한 쌍이어야 한다"))
+        return results
+    ref = next((v / "harness" / ".claude" / "hooks" / "pre-atlassian-write-check.sh"
+                for v in variants), None)
+    if ref is not None and ref.is_file():
+        same = ref.read_bytes() == local_hook.read_bytes()
+        results.append(_issue(checker, PASS if same else BLOCK,
+                              ".claude/hooks/pre-atlassian-write-check.sh",
+                              "배포 사본과 바이트 동일 OK" if same
+                              else "배포 사본과 다르다 — 로컬 훅은 SSOT 비교에서 빠지므로 "
+                                   "여기서 갈라지면 아무도 못 잡는다"))
+    try:
+        data = json.loads(local_list.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        results.append(_issue(checker, BLOCK, ".claude/atlassian-targets.json",
+                              f"읽을 수 없다 ({type(exc).__name__}) — 훅이 전면 거부한다"))
+        return results
+    if not isinstance(data, dict):
+        results.append(_issue(checker, BLOCK, ".claude/atlassian-targets.json",
+                              "최상위가 객체가 아니다 — 훅이 전면 거부한다"))
+        return results
+    targets = [t for k in ("confluence_spaces", "jira_projects")
+               for t in (data.get(k) or []) if isinstance(data.get(k), list)]
+    results.append(_issue(checker, INFO, ".claude/atlassian-targets.json",
+                          f"로컬 허용 대상 {len(targets)}건: {targets}" if targets
+                          else "로컬 허용 목록 비어 있음 — 모든 쓰기가 거부된다"))
     return results
 
 
