@@ -15,8 +15,19 @@
 >
 > ⚠️ **1:1 은 자동으로 유지되지 않습니다.** loope 가 앞서가면 이 스냅샷은 뒤처집니다
 > (실제로 09-10 ~ 09-30 사이에 ADR 2건·테스트 2건이 뒤처져 있었고 QA 가 잡았습니다).
-> 릴리스마다 `diff -rq claude.loope/harness claude.vela.v0.1/harness` 로 확인하고,
-> 오버레이 5파일 외의 차이는 전부 미러 누락으로 봅니다.
+> 릴리스마다 아래로 확인하십시오 — **로컬 파일을 빼지 않으면 정상 차이까지 섞여**
+> 무엇이 누락인지 안 보입니다:
+>
+> ```bash
+> diff -rq --exclude='__pycache__' --exclude='*.pyc' --exclude='state' \
+>   --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
+>   claude.loope/harness claude.vela.v0.1/harness
+> ```
+>
+> 정상인 차이는 **7건**입니다 — Atlassian 오버레이 5(`atlassian-targets.json`,
+> `atlassian_map.py`, `commands/atlassian.md`, `hooks/pre-atlassian-write-check.sh`,
+> `skills/atlassian/`) + `tests/test_atlassian_guard.py`·`tests/test_atlassian_map.py`,
+> 그리고 이 헤더가 있는 `CLAUDE.md`. 그 밖의 차이는 전부 미러 누락입니다.
 >
 > 🔗 **Atlassian 연동**: Jira 이슈를 `feature_list.json` 초안으로 가져오고(읽기),
 > ADR·체크포인트·판정을 Confluence·Jira 로 발행합니다(쓰기 — **승인 필요**).
