@@ -134,9 +134,29 @@ _WORKAROUNDS: list[tuple[str, str]] = [
 ]
 
 
+_LEAN_VALUES = {"": False, "0": False, "1": True}
+
+
+def _lean_enabled() -> bool:
+    """`HARNESS_LEAN_PROMPT` 를 **엄격히** 읽는다 (0|1 외에는 즉시 실패).
+
+    왜 관대하면 안 되는가: `run_suite` 는 이 값으로 `lean` 필드와 `-lean` 결과
+    파일명을 정한다. 드라이버가 `"true"` 를 무시하고 원본 프롬프트로 도는 동안
+    스위트는 그것을 lean 구간으로 기록하면, **-lean 파일에 비-lean 실행이 거짓
+    라벨로** 남는다. 호스트 축에서 고친 "기록은 하되 제어는 못 한다" 와 같은
+    형태다 — 축 하나만 고치면 나머지로 새어 나간다.
+    """
+    raw = os.environ.get("HARNESS_LEAN_PROMPT", "0").strip()
+    if raw not in _LEAN_VALUES:
+        _log(f"[cycle] ❌ HARNESS_LEAN_PROMPT 는 0 또는 1 이어야 한다: {raw!r} "
+             f"— 구간 라벨이 실행과 어긋나므로 진행하지 않는다")
+        raise SystemExit(2)
+    return _LEAN_VALUES[raw]
+
+
 def _lean(prompt: str) -> str:
-    """`HARNESS_LEAN_PROMPT=1` 이면 32B 우회책 문장을 제거한다 (측정 11 2구간)."""
-    if os.environ.get("HARNESS_LEAN_PROMPT", "0") != "1":
+    """lean 구간이면 32B 우회책 문장을 제거한다 (측정 11 lean 대조 구간)."""
+    if not _lean_enabled():
         return prompt
     out = prompt
     for pat, rep in _WORKAROUNDS:

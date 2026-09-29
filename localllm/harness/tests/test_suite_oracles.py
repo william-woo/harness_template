@@ -71,6 +71,14 @@ class O7HostBiasTest(unittest.TestCase):
         "test_x.py is missing",
         "the function returns the wrong value for n=0",
         "docstring 누락 — 결함",
+        # QA 재판정: 반박 표지 `해소`·`충족` 이 자기 부정형에 부분매칭돼 삼켰던 것들.
+        # `존재`→`존재한다` 와 같은 계열의 거짓 부재이고, `미충족` 은 이 프로젝트의
+        # O6 메시지·AC 문구가 실제로 쓰는 말이라 흔하다.
+        "결함이 해소되지 않음",
+        "docstring 누락으로 ac 충족 실패",
+        "docstring 미충족, 누락",
+        "ac 미충족: docstring 누락",
+        "결함 미해소, 누락 상태",
     )
 
     # 못 잡는 것. **여기 적힌 만큼만 한계다** — 늘어나면 그때 고친다.
@@ -400,6 +408,65 @@ class DriverBehaviourTest(unittest.TestCase):
         m = re.search(r'_COST_LINE\s*=\s*re\.compile\(\s*r?["\'](.+?)["\']\s*\)', src)
         self.assertTrue(m, "run_suite 에서 _COST_LINE 정규식을 못 찾았다")
         self.assertRegex(line, m.group(1))
+
+
+    def test_lean_값이_0_1_이_아니면_즉시_실패한다(self):
+        """host 는 fail-fast 인데 lean 만 관대하면 거짓 라벨이 남는다 (QA 재판정).
+
+        run_suite 가 이 값으로 `lean` 필드와 `-lean` 파일명을 정하므로, 드라이버가
+        `"true"` 를 무시하고 원본으로 도는 동안 스위트는 lean 구간으로 기록한다.
+        """
+        for bad in ("true", "yes", "2", "on"):
+            with self.subTest(value=bad):
+                with mock.patch.dict(os.environ, {"HARNESS_LEAN_PROMPT": bad}), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit) as ctx:
+                        self.mod._lean_enabled()
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_lean_술어가_스위트와_드라이버에서_일치한다(self):
+        """두 술어가 갈라지면 라벨과 실행이 어긋난다 — 같은 입력에 같은 답이어야 한다."""
+        suite_src = _SUITE.read_text(encoding="utf-8")
+        ns: dict = {"os": os}
+        start = suite_src.index("def _lean_arm(")
+        end = suite_src.index("\ndef ", start + 1)
+        exec(compile(suite_src[start:end], "<_lean_arm>", "exec"), ns)   # noqa: S102
+        for raw in ("", "0", "1"):
+            with self.subTest(value=raw), \
+                 mock.patch.dict(os.environ, {"HARNESS_LEAN_PROMPT": raw}), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ns["_lean_arm"](), self.mod._lean_enabled())
+        for bad in ("true", "2"):
+            with self.subTest(value=bad), \
+                 mock.patch.dict(os.environ, {"HARNESS_LEAN_PROMPT": bad}):
+                with self.assertRaises(SystemExit):
+                    ns["_lean_arm"]()
+
+    def test_lean_구간이_호스트_교체보다_먼저_적용된다(self):
+        """변이 M8 — `_lean` 호출이 호스트 교체 뒤로 밀리면 claude 구간은 원본을 받는다.
+
+        그러면 `-lean` 파일에 비-lean 프롬프트로 돈 결과가 쌓인다. 실제로 받은
+        프롬프트를 비교해야 잡힌다 (소스 grep 으로는 순서를 못 본다).
+        """
+        seen = []
+        original = ("write it (a bare relative name: no leading slash, no directory, "
+                    "no placeholder path) now")
+        # 표본이 실제 우회책과 맞물리는지 먼저 확인한다 — 안 맞으면 이 테스트는
+        # 순서를 검사하는 게 아니라 아무것도 검사하지 않는 것이 된다.
+        with mock.patch.dict(os.environ, {"HARNESS_LEAN_PROMPT": "1"}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertNotEqual(self.mod._lean(original), original,
+                                "표본이 _WORKAROUNDS 와 더 이상 매칭되지 않는다 — 표본을 갱신하라")
+        with mock.patch.dict(os.environ, {"HARNESS_DRIVER_HOST": "claude-code",
+                                          "HARNESS_LEAN_PROMPT": "1"}), \
+             mock.patch.object(self.mod, "_claude_exec",
+                               lambda p, *a, **k: seen.append(p) or (0, "ok")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.mod._opencode_run(None, original, attempts=1)
+        self.assertTrue(seen, "claude 로 라우팅되지 않았다")
+        self.assertNotEqual(seen[0], original,
+                            "lean 구간인데 claude 가 원본 프롬프트를 받았다 — "
+                            "우회책 제거가 호스트 교체 뒤로 밀렸다")
 
     @unittest.skipIf(".aif" not in _DRIVER.parents[3].name, "aif 변형이 아닌 사본")
     def test_aif_변형이면_오버레이가_반드시_있다(self):
