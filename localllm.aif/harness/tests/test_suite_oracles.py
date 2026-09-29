@@ -89,6 +89,7 @@ class O7HostBiasTest(unittest.TestCase):
         "docstring 미충족됨, 누락",
         # 이건 반대로 **좁힌 표지**를 태운다 — 넓은 `충족` 을 되살리면 삼켜진다.
         "docstring 누락, 충족하지 않음",
+        "충족됨을 확인하지 못함, 누락",
         # (H) 후행 부정 — 긍정형 표지 **뒤에** 부정이 붙는 형태 (QA 3회차)
         "충족됨이 확인되지 않음, docstring 누락",
         "docstring 이 존재한다고 볼 수 없음, 누락",
@@ -119,7 +120,7 @@ class O7HostBiasTest(unittest.TestCase):
         "the test no longer passes, wrong import",
         # (3) 영어 등위·양보 접속 — 절 분리자가 `[.;\n—]|but|however` 뿐이라,
         #     다른 기준의 반박과 이 기준의 결함이 **한 절에 공존**하면 삼킨다.
-        #     and / although / while / yet 이 전부 여기 걸린다.
+        #     and / although / while / yet / except 가 전부 여기 걸린다.
         "ac1 is in fact correct and the docstring is missing",
         "the docstring is present although the test file is missing",
         "no issues except the missing docstring",
@@ -136,6 +137,10 @@ class O7HostBiasTest(unittest.TestCase):
         # 결함 서술과 구별되지 않는다. O7 은 INFO(수동 확인 플래그)이므로
         # 이 오탐은 판정을 오염시키지 않고 잡음으로만 남는다.
         "my earlier needs revision was wrong; it is now correct",
+        # 후행 부정 표지(`아님`)를 넣은 대가 — `<표지> 아님`(결함)과 `<결함어> 아님`
+        # (반박)은 키워드로 가를 수 없다. 거짓 부재를 막는 쪽을 택했고, 그 값으로
+        # 이 오탐을 받는다. 트레이드오프를 숨기지 않으려고 적어 둔다 (QA 4회차).
+        "모든 기준 충족됨, 결함 아님",
     )
 
     def setUp(self):
