@@ -134,9 +134,29 @@ _WORKAROUNDS: list[tuple[str, str]] = [
 ]
 
 
+_LEAN_VALUES = {"": False, "0": False, "1": True}
+
+
+def _lean_enabled() -> bool:
+    """`HARNESS_LEAN_PROMPT` 를 **엄격히** 읽는다 (0|1 외에는 즉시 실패).
+
+    왜 관대하면 안 되는가: `run_suite` 는 이 값으로 `lean` 필드와 `-lean` 결과
+    파일명을 정한다. 드라이버가 `"true"` 를 무시하고 원본 프롬프트로 도는 동안
+    스위트는 그것을 lean 구간으로 기록하면, **-lean 파일에 비-lean 실행이 거짓
+    라벨로** 남는다. 호스트 축에서 고친 "기록은 하되 제어는 못 한다" 와 같은
+    형태다 — 축 하나만 고치면 나머지로 새어 나간다.
+    """
+    raw = os.environ.get("HARNESS_LEAN_PROMPT", "0").strip()
+    if raw not in _LEAN_VALUES:
+        _log(f"[cycle] ❌ HARNESS_LEAN_PROMPT 는 0 또는 1 이어야 한다: {raw!r} "
+             f"— 구간 라벨이 실행과 어긋나므로 진행하지 않는다")
+        raise SystemExit(2)
+    return _LEAN_VALUES[raw]
+
+
 def _lean(prompt: str) -> str:
-    """`HARNESS_LEAN_PROMPT=1` 이면 32B 우회책 문장을 제거한다 (측정 11 2구간)."""
-    if os.environ.get("HARNESS_LEAN_PROMPT", "0") != "1":
+    """lean 구간이면 32B 우회책 문장을 제거한다 (측정 11 lean 대조 구간)."""
+    if not _lean_enabled():
         return prompt
     out = prompt
     for pat, rep in _WORKAROUNDS:
@@ -182,7 +202,11 @@ def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, st
     cmd = ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"]
     if model:
         cmd += ["--model", model]
-    timeout = int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT)))
+    try:
+        timeout = max(1, int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT))))
+    except ValueError:
+        _log("  ⓘ CYCLE_CLAUDE_TIMEOUT 값이 숫자가 아니다 — 기본값으로 진행")
+        timeout = _OC_TIMEOUT
     backoffs = [10, 30, 60]
     last_out = ""
     for attempt in range(1, attempts + 1):
@@ -193,7 +217,11 @@ def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, st
             rc, out = 124, f"timeout {timeout}s"
         last_out = out
         low = out.lower()
-        transient = rc == 124 or any(s in low for s in ("overloaded", "rate limit", "529", "503"))
+        # `"503"`·`"529"` 는 코드·행번호·테스트 id 에 흔히 나온다. **성공한 실행**의
+        # 출력에 그 문자열이 있다는 이유로 3회 재호출 후 rc=124 로 뒤집던 결함이 있었다
+        # (실측: "All 503 lines reviewed" → transient). rc != 0 일 때만 본다.
+        transient = rc == 124 or (rc != 0 and any(
+            s in low for s in ("overloaded", "rate limit", "529", "503")))
         if not transient:
             _log(f"  ⓘ claude 호출 누계 {_CLAUDE_CALLS}회 (rc={rc})")
             return rc, out
@@ -1146,12 +1174,35 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
     return None
 
 def cmd_run(args) -> int:
+    """`_cmd_run` 을 감싸 **모든 종료 경로에서** 비용을 한 줄로 남긴다.
+
+    예전엔 `_CLAUDE_CALLS` 를 세기만 하고 호출마다 찍었는데, run_suite 가
+    `driver_tail = drv_out[-1200:]` 만 저장하므로 그 로그는 잘려 사라졌다 —
+    측정 11 "비용" 절이 스스로 "테일 1200자만 보관하므로 하한값" 이라 적은 이유다.
+    반환 지점이 여덟 곳이라 각각에 넣는 대신 여기 한 곳에 모은다.
+    """
+    import time as _t
+    started = _t.time()
+    try:
+        return _cmd_run(args)
+    finally:
+        _log(f"[cost] host={os.environ.get('HARNESS_DRIVER_HOST', 'opencode')} "
+             f"claude_calls={_CLAUDE_CALLS} wall={_t.time() - started:.0f}s")
+
+
+def _cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     # 모듈 docstring 의 "미설치 시 안내 후 exit 0" 은 `self` 에만 참이었다 —
     # `run` 은 FileNotFoundError traceback 으로 죽었다. 진입에서 확인한다.
-    if _driver_host() != "claude-code" and shutil.which("opencode") is None:
+    host = _driver_host()
+    if host != "claude-code" and shutil.which("opencode") is None:
         print("[cycle] ❌ `opencode` 를 찾을 수 없습니다 — d-2 하네스의 실행 전제입니다.")
         print("  설치: bash .claude/bin/opencode-setup.sh  (또는 PATH 확인)")
+        return 1
+    # claude-code 분기에도 같은 전제 확인이 필요하다. 주석은 "미설치 시 traceback 으로
+    # 죽던 결함을 고쳤다" 고 적었지만 그 수정이 이 분기에는 가지 않았다.
+    if host == "claude-code" and shutil.which("claude") is None:
+        print("[cycle] ❌ `claude` CLI 를 찾을 수 없습니다 — HARNESS_DRIVER_HOST=claude-code 의 전제입니다.")
         return 1
     feature = args.feature
     files = [f.strip() for f in args.files.split(",")] if args.files else []
@@ -1252,9 +1303,6 @@ def cmd_run(args) -> int:
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
         # 재작업 = 전체 파일 재작성 (규칙 6) — 실패 출력 + 현재 내용을 드라이버가 주입
-        # require 위반(심볼 존재/부재)은 지금까지 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED
-        # 목록에 오르지 못했다 (측정 11 / S09: 동일 진단 3회인데 fmt 가 비어 반복 감지가 불가능).
-        # 명시 목록에 올려 ① 모델이 지적을 분명히 보고 ② 반복 감지가 동작하게 한다.
         # require 위반(심볼 존재/부재)은 원래 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED 목록에
         # 오르지 못했다 (측정 11 / S09) — "고쳐야 할 문제" 목록에서 문제가 빠져 있던 버그다.
         # 효과는 A/B 에서 검증되지 않았으나(3/6→4/6, n=6 노이즈) 논리적으로 옳은 수정이라 유지한다.

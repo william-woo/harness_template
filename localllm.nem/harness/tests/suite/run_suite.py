@@ -227,6 +227,19 @@ SCENARIOS: list[dict] = [
 ]
 
 
+
+def _lean_arm() -> bool:
+    """lean 구간인가 — `cycle_driver._lean_enabled` 와 **같은 규칙**이어야 한다.
+
+    예전엔 여기가 `not in ("", "0")` 이고 드라이버는 `== "1"` 이라, `=true` 면
+    **-lean 파일에 비-lean 실행이 거짓 라벨로** 기록됐다. 두 술어가 갈라지면
+    라벨과 실행이 어긋나므로, 여기서도 0|1 외에는 진행하지 않는다.
+    """
+    raw = os.environ.get("HARNESS_LEAN_PROMPT", "0").strip()
+    if raw not in ("", "0", "1"):
+        raise SystemExit(f"HARNESS_LEAN_PROMPT 는 0 또는 1 이어야 한다: {raw!r}")
+    return raw == "1"
+
 def _preflight_suite() -> None:
     """외부 전제를 **코드로 가드**한다 — 없으면 10/10 INFRA 가 조용히 나온다.
 
@@ -423,13 +436,32 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
                 # "누락 없음" 은 반박이지만 "docstring 없음" 은 결함이다 — `없음` 만으로는
                 # 구별할 수 없으므로 결함어와 짝지어진 형태만 넣는다.
                 "누락 없음", "문제 없음", "이상 없음", "결함 없음",
-                "존재한다", "존재함", "해소", "충족", "수정됨")
+                "존재한다", "존재함", "해소됨", "충족함", "충족됨", "수정됨")
+
+    # 반박을 **무효화**하는 표지. 한국어 부정은 긍정형을 부분문자열로 포함하므로
+    # (`미해소됨` ⊃ `해소됨`) 표지를 조이는 것만으로는 못 막는다 — 부정이 보이면
+    # 그 절은 반박이 아니라 **결함 서술**이다. `존재`→`존재한다` 수정과 같은 계열의
+    # 거짓 부재이고, `미충족` 은 이 프로젝트의 O6 메시지·AC 문구가 실제로 쓰는 말이다.
+    _NEGATED = ("미해소", "미충족", "미수정", "불충족",
+                "해소되지", "충족되지", "수정되지", "해결되지",
+                "충족 실패", "해소 실패", "해소 안", "충족 안",
+                # 후행 부정 (QA 3회차) — 앞의 것들은 **접두**(미/불)나 `되지`만 잡아서
+                # 긍정형 표지 **뒤에** 부정이 붙는 형태를 통과시켰다:
+                #   "충족됨이 확인되지 않음, docstring 누락"  → 삼켜짐
+                #   "docstring 이 존재한다고 볼 수 없음, 누락" → 삼켜짐
+                # 이 표지들이 반박문을 깨지 않는 이유: "결함이 확인되지 않음"·"누락
+                # 아님" 은 애초에 `_REFUTED` 마커가 없어 이미 결함으로 잡힌다.
+                # `없음이 확인` 은 **아무 표본도 고정하지 못하면서** "누락 없음이 확인됨"
+                # 같은 자연스러운 반박을 오탐시켰다 — 값 없는 넓힘이라 뺀다 (QA 4회차).
+                # `지 못` 은 "충족됨을 확인하지 못함" 을 닫는다 (같은 후행 부정 축).
+                "확인되지", "볼 수 없", "아님", "지 못")
 
     def _unresolved_defect_hits(text: str) -> list[str]:
         """결함어가 **반박되지 않은 절**에 나타나는 경우만 모은다."""
         hits = []
         for clause in re.split(r"[.;\n—]|\bbut\b|\bhowever\b", text):
-            if any(m in clause for m in _REFUTED):
+            # 부정이 우선한다 — "미충족" 은 "충족함" 을 포함하므로 순서를 뒤집으면 삼킨다
+            if any(m in clause for m in _REFUTED) and not any(m in clause for m in _NEGATED):
                 continue
             hits += [w for w in _DEFECT_WORDS if w in clause]
         return sorted(set(hits))
@@ -560,7 +592,7 @@ def main() -> None:
     picked = [s for s in SCENARIOS if not args or s["id"] in args]
     RESULTS.mkdir(parents=True, exist_ok=True)
     _arm = os.environ.get("HARNESS_DRIVER_HOST", "opencode")
-    _arm += "-lean" if os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0") else ""
+    _arm += "-lean" if _lean_arm() else ""
     out_path = RESULTS / f"round{rnd}-{_arm}.jsonl"
 
     print(f"=== suite round {rnd} — {len(picked)} 시나리오 ===", flush=True)
@@ -600,7 +632,7 @@ def main() -> None:
             # 구간 식별 — 이게 없으면 산출물이 남아도 **두 구간을 구분할 수 없다**
             # (F029 리뷰 MUST-2: 결과 1·2 의 수치를 재현할 근거가 없던 이유의 절반).
             "host": os.environ.get("HARNESS_DRIVER_HOST", "opencode"),
-            "lean": os.environ.get("HARNESS_LEAN_PROMPT", "0") not in ("", "0"),
+            "lean": _lean_arm(),
             "judges": [{"g": j["grader"], "v": j["verdict"], "notes": (j.get("notes") or "")[:200]} for j in judges],
             # AC4 지표 6종 중 "재작업 라운드" — 결정론 grader 시도 횟수. judge 만
             # 남기고 버려서 호스트 비교 표에 이 열이 없었다 (MUST-6).

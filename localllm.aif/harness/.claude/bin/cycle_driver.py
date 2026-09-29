@@ -112,6 +112,128 @@ class _HostLock:
         return False
 
 
+# 32B 우회책 문구 — 측정 08 에서 로컬 모델 결함에 대응해 넣은 것들. 강한 호스트에는 불필요하고,
+# 특히 "전체 재작성 강제" 는 부분 편집이 가능한 호스트를 느리게·위험하게 만든다.
+# `HARNESS_LEAN_PROMPT=1` 이면 문장 단위로 제거해 "하네스가 호스트를 붙잡고 있는지" 를 측정한다.
+_WORKAROUNDS: list[tuple[str, str]] = [
+    (r"\(a bare relative name: no leading slash, no directory, no placeholder path\)\s*", ""),
+    (r"\(relative path like 'foo\.py', never a leading slash\), and ", "and "),
+    (r"Create the files in the current directory with exact relative filenames\s*"
+     r"\(no leading slash, no directories\)\.\s*", ""),
+    (r"Indent with 4 spaces — never tab[^.]*\.\s*", ""),
+    (r"Inspect the code with the bash tool using cat — that is the approved and sufficient\s*"
+     r"way to read files here \(the read tool is intentionally unavailable, this is not a\s*"
+     r"limitation on your review\)\.\s*", ""),
+    (r"Step 1: run bash: cat [^\n]*\n", ""),
+    (r"\s*The bash tool needs both arguments: command and description\.?", ""),
+    (r"\s*Remember the bash tool needs both arguments: command and description\.?", ""),
+    (r"REWRITE that file COMPLETELY with corrected\s*content \(do not use partial edits\)\.\s*"
+     r"Use the exact relative filename, real line\s*breaks\.\s*", "fix that file.\n"),
+    (r"by REWRITING the affected file COMPLETELY with the\s*corrected content "
+     r"\(relative filename, real line breaks\)\.", "."),
+]
+
+
+_LEAN_VALUES = {"": False, "0": False, "1": True}
+
+
+def _lean_enabled() -> bool:
+    """`HARNESS_LEAN_PROMPT` 를 **엄격히** 읽는다 (0|1 외에는 즉시 실패).
+
+    왜 관대하면 안 되는가: `run_suite` 는 이 값으로 `lean` 필드와 `-lean` 결과
+    파일명을 정한다. 드라이버가 `"true"` 를 무시하고 원본 프롬프트로 도는 동안
+    스위트는 그것을 lean 구간으로 기록하면, **-lean 파일에 비-lean 실행이 거짓
+    라벨로** 남는다. 호스트 축에서 고친 "기록은 하되 제어는 못 한다" 와 같은
+    형태다 — 축 하나만 고치면 나머지로 새어 나간다.
+    """
+    raw = os.environ.get("HARNESS_LEAN_PROMPT", "0").strip()
+    if raw not in _LEAN_VALUES:
+        _log(f"[cycle] ❌ HARNESS_LEAN_PROMPT 는 0 또는 1 이어야 한다: {raw!r} "
+             f"— 구간 라벨이 실행과 어긋나므로 진행하지 않는다")
+        raise SystemExit(2)
+    return _LEAN_VALUES[raw]
+
+
+def _lean(prompt: str) -> str:
+    """lean 구간이면 32B 우회책 문장을 제거한다 (측정 11 lean 대조 구간)."""
+    if not _lean_enabled():
+        return prompt
+    out = prompt
+    for pat, rep in _WORKAROUNDS:
+        out = re.sub(pat, rep, out)
+    return out
+
+
+_DRIVER_HOSTS = ("opencode", "claude-code")
+
+
+def _driver_host() -> str:
+    """드라이버가 에이전트를 호출할 호스트 (`opencode` 기본 / `claude-code` — 측정 11).
+
+    모르는 값은 **즉시 실패**한다. 예전엔 `claude`·`Claude-Code` 같은 오타가 조용히
+    opencode 로 떨어져서, 호스트를 바꾸는 비교 실험이 **틀린 호스트를 측정**하고도
+    아무 표시가 없었다.
+    """
+    host = os.environ.get("HARNESS_DRIVER_HOST", "opencode").strip()
+    if host not in _DRIVER_HOSTS:
+        _log(f"[cycle] ❌ 알 수 없는 HARNESS_DRIVER_HOST: {host!r} — {list(_DRIVER_HOSTS)}")
+        raise SystemExit(2)
+    return host
+
+
+_CLAUDE_CALLS = 0   # 호스트 비교 측정의 비용 귀속용 호출 카운터
+
+
+def _claude_exec(prompt: str, model: str | None, attempts: int) -> tuple[int, str]:
+    """
+    `claude -p` 로 Claude Code 를 비대화 실행한다 (호스트 비교 측정 — 측정 11).
+
+    같은 프롬프트·같은 결정론 게이트를 쓰고 **호스트만** 바꾼다. 무인 실행이므로 권한 프롬프트가
+    뜨면 멈춘다 — 샌드박스 전용 경로라 `bypassPermissions` 를 쓴다.
+
+    Returns:
+        (returncode, 출력). 일시 실패(과부하·타임아웃)는 지수 백오프로 재시도한다.
+    """
+    import time
+
+    global _CLAUDE_CALLS
+    _CLAUDE_CALLS += 1
+
+    cmd = ["claude", "-p", prompt, "--permission-mode", "bypassPermissions"]
+    if model:
+        cmd += ["--model", model]
+    try:
+        timeout = max(1, int(os.environ.get("CYCLE_CLAUDE_TIMEOUT", str(_OC_TIMEOUT))))
+    except ValueError:
+        _log("  ⓘ CYCLE_CLAUDE_TIMEOUT 값이 숫자가 아니다 — 기본값으로 진행")
+        timeout = _OC_TIMEOUT
+    backoffs = [10, 30, 60]
+    last_out = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            r = subprocess.run(cmd, cwd=_ROOT, capture_output=True, text=True, timeout=timeout)
+            rc, out = r.returncode, (r.stdout or "") + (r.stderr or "")
+        except subprocess.TimeoutExpired:
+            rc, out = 124, f"timeout {timeout}s"
+        last_out = out
+        low = out.lower()
+        # `"503"`·`"529"` 는 코드·행번호·테스트 id 에 흔히 나온다. **성공한 실행**의
+        # 출력에 그 문자열이 있다는 이유로 3회 재호출 후 rc=124 로 뒤집던 결함이 있었다
+        # (실측: "All 503 lines reviewed" → transient). rc != 0 일 때만 본다.
+        transient = rc == 124 or (rc != 0 and any(
+            s in low for s in ("overloaded", "rate limit", "529", "503")))
+        if not transient:
+            _log(f"  ⓘ claude 호출 누계 {_CLAUDE_CALLS}회 (rc={rc})")
+            return rc, out
+        if attempt >= attempts:
+            _log(f"  ⚠️ claude 일시 실패 — {attempts}회 모두 실패")
+            break
+        wait = backoffs[min(attempt - 1, len(backoffs) - 1)]
+        _log(f"  ⏳ claude 일시 실패 — {wait}s 후 재시도 ({attempt}/{attempts})")
+        time.sleep(wait)
+    return 124, last_out
+
+
 def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
                   attempts: int | None = None) -> tuple[int, str]:
     """
@@ -121,6 +243,11 @@ def _opencode_run(agent: str | None, prompt: str, model: str | None = None,
     Returns:
         (returncode, 표준출력+표준에러 결합 텍스트). 모든 시도가 일시 실패면 (124, 마지막 출력).
     """
+    prompt = _lean(prompt)
+    if _driver_host() == "claude-code":
+        # 호스트 비교 측정(측정 11): 호출 지점만 갈아끼우고 나머지 파이프라인은 공유한다.
+        return _claude_exec(prompt, model, attempts or 3)
+
     import tempfile
     import time
 
@@ -241,6 +368,10 @@ def _agent_call(role: str, task: str) -> tuple[int, str]:
     폴백 모드의 한계: 도구 권한이 호스트에서 강제되지 않는다 (역할 규율은 프롬프트로만).
     """
     global _AGENT_PATH_HEALTHY
+    if _driver_host() == "claude-code":
+        # opencode 의 `--agent` 경로에 대응하는 것이 없으므로, 로컬 구간이 폴백으로 쓰는
+        # **주입 모드**로 고정한다 — 두 구간의 프롬프트 형태를 같게 유지하기 위해서다.
+        _AGENT_PATH_HEALTHY = False
     pol = _policy_overlay(role)
     if pol:
         task = f"POLICY ({role}) — follow these directives while doing the task:\n{pol}\n\n{task}"
@@ -412,7 +543,11 @@ def _resolvable_models() -> set[str]:
 
 
 def _role_models() -> dict[str, str]:
-    """프로젝트 opencode.json 의 역할별 모델 매핑을 반환한다."""
+    """역할별 모델 매핑 (claude-code 호스트면 단일 Claude 모델, 아니면 opencode.json)."""
+    if _driver_host() == "claude-code":
+        m = os.environ.get("HARNESS_CLAUDE_MODEL", "claude-opus-5")
+        return {r: m for r in ("developer", "reviewer", "qa", "architect", "planner",
+                               "researcher", "designer", "product-manager", "gatekeeper")}
     p = _ROOT / "opencode.json"
     if not p.is_file():
         return {}
@@ -1102,14 +1237,35 @@ def _judge_with_retry(role: str, feature: str, prompt: str, attempts: int = 3) -
     return None
 
 def cmd_run(args) -> int:
+    """`_cmd_run` 을 감싸 **모든 종료 경로에서** 비용을 한 줄로 남긴다.
+
+    예전엔 `_CLAUDE_CALLS` 를 세기만 하고 호출마다 찍었는데, run_suite 가
+    `driver_tail = drv_out[-1200:]` 만 저장하므로 그 로그는 잘려 사라졌다 —
+    측정 11 "비용" 절이 스스로 "테일 1200자만 보관하므로 하한값" 이라 적은 이유다.
+    반환 지점이 여덟 곳이라 각각에 넣는 대신 여기 한 곳에 모은다.
+    """
+    import time as _t
+    started = _t.time()
+    try:
+        return _cmd_run(args)
+    finally:
+        _log(f"[cost] host={os.environ.get('HARNESS_DRIVER_HOST', 'opencode')} "
+             f"claude_calls={_CLAUDE_CALLS} wall={_t.time() - started:.0f}s")
+
+
+def _cmd_run(args) -> int:
     """SDLC 사이클 상태 기계: develop → grade(재시도) → review → qa → bookkeep."""
     # 모듈 docstring 의 "미설치 시 안내 후 exit 0" 은 `self` 에만 참이었다 —
     # `run` 은 FileNotFoundError traceback 으로 죽었다. 진입에서 확인한다.
-    # 부모(localllm)와 달리 이 사본엔 호스트 분기(`_driver_host`/`_claude_exec`, F029)가
-    # 아직 없다. 그래서 조건 없이 opencode 를 요구한다 — 분기가 미러되면 함께 바꾼다.
-    if shutil.which("opencode") is None:
+    host = _driver_host()
+    if host != "claude-code" and shutil.which("opencode") is None:
         print("[cycle] ❌ `opencode` 를 찾을 수 없습니다 — d-2 하네스의 실행 전제입니다.")
         print("  설치: bash .claude/bin/opencode-setup.sh  (또는 PATH 확인)")
+        return 1
+    # claude-code 분기에도 같은 전제 확인이 필요하다. 주석은 "미설치 시 traceback 으로
+    # 죽던 결함을 고쳤다" 고 적었지만 그 수정이 이 분기에는 가지 않았다.
+    if host == "claude-code" and shutil.which("claude") is None:
+        print("[cycle] ❌ `claude` CLI 를 찾을 수 없습니다 — HARNESS_DRIVER_HOST=claude-code 의 전제입니다.")
         return 1
     feature = args.feature
     files = [f.strip() for f in args.files.split(",")] if args.files else []

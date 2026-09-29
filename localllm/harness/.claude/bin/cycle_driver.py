@@ -134,9 +134,29 @@ _WORKAROUNDS: list[tuple[str, str]] = [
 ]
 
 
+_LEAN_VALUES = {"": False, "0": False, "1": True}
+
+
+def _lean_enabled() -> bool:
+    """`HARNESS_LEAN_PROMPT` 를 **엄격히** 읽는다 (0|1 외에는 즉시 실패).
+
+    왜 관대하면 안 되는가: `run_suite` 는 이 값으로 `lean` 필드와 `-lean` 결과
+    파일명을 정한다. 드라이버가 `"true"` 를 무시하고 원본 프롬프트로 도는 동안
+    스위트는 그것을 lean 구간으로 기록하면, **-lean 파일에 비-lean 실행이 거짓
+    라벨로** 남는다. 호스트 축에서 고친 "기록은 하되 제어는 못 한다" 와 같은
+    형태다 — 축 하나만 고치면 나머지로 새어 나간다.
+    """
+    raw = os.environ.get("HARNESS_LEAN_PROMPT", "0").strip()
+    if raw not in _LEAN_VALUES:
+        _log(f"[cycle] ❌ HARNESS_LEAN_PROMPT 는 0 또는 1 이어야 한다: {raw!r} "
+             f"— 구간 라벨이 실행과 어긋나므로 진행하지 않는다")
+        raise SystemExit(2)
+    return _LEAN_VALUES[raw]
+
+
 def _lean(prompt: str) -> str:
-    """`HARNESS_LEAN_PROMPT=1` 이면 32B 우회책 문장을 제거한다 (측정 11 2구간)."""
-    if os.environ.get("HARNESS_LEAN_PROMPT", "0") != "1":
+    """lean 구간이면 32B 우회책 문장을 제거한다 (측정 11 lean 대조 구간)."""
+    if not _lean_enabled():
         return prompt
     out = prompt
     for pat, rep in _WORKAROUNDS:
@@ -1281,9 +1301,6 @@ def _cmd_run(args) -> int:
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
         # 재작업 = 전체 파일 재작성 (규칙 6) — 실패 출력 + 현재 내용을 드라이버가 주입
-        # require 위반(심볼 존재/부재)은 지금까지 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED
-        # 목록에 오르지 못했다 (측정 11 / S09: 동일 진단 3회인데 fmt 가 비어 반복 감지가 불가능).
-        # 명시 목록에 올려 ① 모델이 지적을 분명히 보고 ② 반복 감지가 동작하게 한다.
         # require 위반(심볼 존재/부재)은 원래 `out` 텍스트 안에만 들어가 PROBLEMS DETECTED 목록에
         # 오르지 못했다 (측정 11 / S09) — "고쳐야 할 문제" 목록에서 문제가 빠져 있던 버그다.
         # 효과는 A/B 에서 검증되지 않았으나(3/6→4/6, n=6 노이즈) 논리적으로 옳은 수정이라 유지한다.
