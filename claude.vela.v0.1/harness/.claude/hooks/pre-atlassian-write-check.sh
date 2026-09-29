@@ -112,9 +112,13 @@ for key, val in flat.items():
         m = re.search(r"/wiki/spaces/([^/]+)/", v)
         if m:
             found.add(m.group(1).upper()); where.append(f"{key}(space)={m.group(1)}")
-        m = re.search(r"/browse/([A-Z][A-Z0-9_]+)-\d+", v.upper())
+        # 대문자로 접은 문자열에 소문자 리터럴(`/browse/`)을 찾고 있었다 — 정당한
+        # Jira URL 호출이 "대상 판별 불가" 로 막혔다 (F032 AC9 검증 중 발견).
+        # fail-closed 라 위험하진 않았지만, 막히는 이유가 사실과 달랐다.
+        m = re.search(r"/browse/([A-Za-z][A-Za-z0-9_]*)-\d+", v)
         if m:
-            found.add(m.group(1)); where.append(f"{key}(project)={m.group(1)}")
+            key_up = m.group(1).upper()
+            found.add(key_up); where.append(f"{key}(project)={key_up}")
 
 if not found:
     block(f"'{tool}' 호출에서 대상 스페이스·프로젝트를 판별하지 못함",

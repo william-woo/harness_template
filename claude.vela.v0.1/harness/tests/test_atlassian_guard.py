@@ -112,6 +112,25 @@ class AtlassianWriteGuardTest(unittest.TestCase):
         self.assertBlocked(self._call("addCommentToJiraIssue",
                                       {"link": "https://x.atlassian.net/browse/OTHER-9"}))
 
+    def test_허용된_URL_은_통과한다(self):
+        """차단만 검사하면 **막힌 이유**를 구별하지 못한다.
+
+        실제로 그 구멍으로 결함이 하나 숨어 있었다 — Jira `/browse/` 매칭이
+        대문자로 접은 문자열에 소문자 리터럴을 찾고 있어서, 정당한 URL 호출이
+        "허용 밖" 이 아니라 **"대상 판별 불가"** 로 막혔다. 둘 다 exit 2 라
+        차단 테스트로는 같아 보인다 (F032 AC9 검증 중 발견).
+        """
+        self._allow(spaces=["SD"], projects=["PROJ"])
+        self.assertAllowed(self._call("createConfluenceFooterComment",
+                                      {"url": "https://x.atlassian.net/wiki/spaces/SD/pages/1"}))
+        self.assertAllowed(self._call("addCommentToJiraIssue",
+                                      {"link": "https://x.atlassian.net/browse/PROJ-9"}))
+        # 소문자 스페이스 키·대소문자 섞인 프로젝트 키도 같은 대상이다
+        self.assertAllowed(self._call("updateConfluencePage",
+                                      {"url": "https://x.atlassian.net/wiki/spaces/sd/pages/1"}))
+        self.assertAllowed(self._call("addCommentToJiraIssue",
+                                      {"url": "https://x.atlassian.net/browse/Proj-1349"}))
+
     def test_허용과_비허용이_섞이면_막는다(self):
         """하나라도 허용 밖이면 거부한다 — 부분 통과는 없다."""
         self._allow(spaces=["SD"], projects=["PROJ"])
