@@ -15,8 +15,10 @@
 
 무엇을 고정하나:
   · 반박문·기대동작 서술을 결함으로 읽지 않는다 (호스트 편향)
-  · **진짜 결함은 반드시 검출한다** (거짓 부재 금지)
-  · 남는 한계를 `KNOWN_MISS` 로 **명시**한다 — 못 잡는 것을 잡는다고 적지 않는다
+  · **고정 표본 안에서** 진짜 결함을 검출한다 (한국어 부정형 축)
+  · 남는 한계를 **두 목록으로** 명시한다 — 못 잡는 것을 잡는다고 적지 않는다
+      `KNOWN_MISS`           오탐 (결함이 아닌데 결함으로 읽는다)
+      `KNOWN_FALSE_ABSENCE`  거짓 부재 (진짜 결함을 삼킨다) — 주로 **영어 축**
   · `run_suite` 가 **기록하는 것**을 `cycle_driver` 가 실제로 **내는가** (교차 검증)
   · localllm / .aif / .nem **3 사본이 갈라지지 않았는가**
 
@@ -79,6 +81,33 @@ class O7HostBiasTest(unittest.TestCase):
         "docstring 미충족, 누락",
         "ac 미충족: docstring 누락",
         "결함 미해소, 누락 상태",
+        # QA 2회차: 위 5건은 **좁혀진 표지만으로도** 통과한다 (`미충족` 에는 `충족함`
+        # 이 없다). 그래서 `_NEGATED` 가드를 지워도 테스트가 초록이었다 — 안전장치가
+        # 두 개인데 표본이 하나만 태우면 나머지는 검증되지 않은 채 남는다.
+        # 아래 둘은 긍정형을 **부분문자열로 포함**해 가드가 없으면 반드시 삼켜진다.
+        "결함 미해소됨, 누락 상태",
+        "docstring 미충족됨, 누락",
+        # 이건 반대로 **좁힌 표지**를 태운다 — 넓은 `충족` 을 되살리면 삼켜진다.
+        "docstring 누락, 충족하지 않음",
+    )
+
+    # 못 잡는 **거짓 부재**. `KNOWN_MISS` 는 오탐 전용이라(assertTrue) 이걸 담지
+    # 못한다 — 자리가 없어서 한동안 어디에도 적히지 않았다 (QA 2회차 지적).
+    #
+    # judge 프롬프트는 영어인데, 영어 반박 표지에 대응하는 부정 가드가 없다.
+    # 한국어처럼 표지를 좁히는 방식이 통하지 않는다: `not missing`·`nothing is
+    # missing` 자체가 정당한 반박이라 `not` 을 부정 표지로 넣으면 그것들이 깨진다.
+    # O7 은 INFO(수동 확인 플래그)이고 측정 11 결과 3 이 이미 "정밀도 0, 키워드
+    # 보강으로는 못 고친다" 고 결론냈으므로, 여기서는 **고치지 않고 고정**한다.
+    # 고쳐지면 아래 테스트가 깨져서 이 서술을 갱신하게 만든다.
+    KNOWN_FALSE_ABSENCE = (
+        "the function does not raise valueerror as required",
+        "the criterion is not actually satisfied, docstring missing",
+        "the bug is present in divide",
+        "the test no longer passes, wrong import",
+        "no issues except the missing docstring",
+        # 한국어 잔여 — 역접 `하지만` 이 절 분리자에 없다 (영어 but/however 는 있다)
+        "수정됨, 하지만 테스트 누락",
     )
 
     # 못 잡는 것. **여기 적힌 만큼만 한계다** — 늘어나면 그때 고친다.
@@ -104,6 +133,18 @@ class O7HostBiasTest(unittest.TestCase):
             with self.subTest(note=text[:40]):
                 self.assertTrue(self.hits(text.lower()),
                                 "진짜 결함을 삼켰다 (거짓 부재) — 반박 표지가 너무 넓다")
+
+    def test_거짓_부재를_숨기지_않는다(self):
+        """`KNOWN_FALSE_ABSENCE` 가 실제로 여전히 삼켜지는지 고정한다.
+
+        거짓 부재는 오탐보다 나쁘다 — 오탐은 사람이 보고 넘기지만 거짓 부재는
+        보이지 않는다. 고칠 수 없다면 최소한 **어디가 보이지 않는지**는 보여야 한다.
+        고쳐지면 이 테스트가 깨져서 목록과 한계 서술을 갱신하게 만든다.
+        """
+        for text in self.KNOWN_FALSE_ABSENCE:
+            with self.subTest(note=text[:40]):
+                self.assertEqual(self.hits(text.lower()), [],
+                                 "이제 잡힌다 — KNOWN_FALSE_ABSENCE 와 한계 서술을 갱신하라")
 
     def test_못_잡는_것을_잡는다고_적지_않는다(self):
         """`KNOWN_MISS` 가 실제로 여전히 못 잡히는지 확인한다.
