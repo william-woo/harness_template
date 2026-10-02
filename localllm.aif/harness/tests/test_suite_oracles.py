@@ -534,6 +534,30 @@ class DriverBehaviourTest(unittest.TestCase):
                             "lean 구간인데 claude 가 원본 프롬프트를 받았다 — "
                             "우회책 제거가 호스트 교체 뒤로 밀렸다")
 
+    def test_우회책_패턴이_전부_프롬프트와_맞물린다(self):
+        """lean 구간 정의가 코드와 어긋나면 **lean 이 lean 이 아니다** (F033 AC1).
+
+        측정 11 이 결과 2 를 철회한 사유가 정확히 이것이었다 — 구간 정의가 코드와
+        달라 무효 측정이 됐다. 그런데 그 사유가 수정 뒤에도 살아 있었다: W02·W09 가
+        프롬프트 문구 변경을 따라가지 못해 **매칭 0건**이었고, 그만큼 lean 구간이
+        원본 구간과 같았다.
+
+        패턴이 하나라도 안 맞으면 그 패턴은 아무것도 제거하지 않는다. 조용히.
+        그래서 "없는 것을 지웠다" 가 아니라 **"지웠다고 생각했는데 그대로"** 가 된다.
+        """
+        import ast
+        src = _DRIVER.read_text(encoding="utf-8")
+        hay = "\n".join(n.value for n in ast.walk(ast.parse(src))
+                        if isinstance(n, ast.Constant) and isinstance(n.value, str))
+        dead = []
+        for i, item in enumerate(self.mod._WORKAROUNDS, 1):
+            pat = item[0] if isinstance(item, (list, tuple)) else item
+            if not re.findall(pat, hay):
+                dead.append(f"W{i:02d}: {pat[:60]}")
+        self.assertEqual(dead, [],
+                         "프롬프트와 맞물리지 않는 우회책 패턴 — lean 구간이 "
+                         f"원본과 부분적으로 같아진다:\n  " + "\n  ".join(dead))
+
     @unittest.skipIf(".aif" not in _DRIVER.parents[3].name, "aif 변형이 아닌 사본")
     def test_aif_변형이면_오버레이가_반드시_있다(self):
         """존재 여부를 skip 조건으로 쓰면, 사라졌을 때 조용히 통과한다 (거짓 부재).
