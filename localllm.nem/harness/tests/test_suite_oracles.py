@@ -30,6 +30,7 @@ import hashlib
 import io
 import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -580,6 +581,46 @@ class DriverBehaviourTest(unittest.TestCase):
                                lambda *a, **k: self.fail("킬스위치인데 외부를 호출했다")), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(self.mod._aif_findings("code-review", ["x"]), [])
+
+class SuiteArgvTest(unittest.TestCase):
+    """스위트가 **모르는 인자를 조용히 버리지 않는가** (F033 착수 전 수정).
+
+    예전엔 `[a for a in argv if not a.startswith("--")]` 로 플래그를 통째로 버렸다.
+    그래서 `--help` 가 도움말 대신 **전 시나리오 측정을 시작**했고(수 시간),
+    시나리오 id 오타는 `picked` 가 비어 **0건 실행 후 조용히 성공**했다.
+
+    측정 도구가 조용히 다른 일을 하면 그 수치는 못 믿는다 — 측정 11 에서 이미
+    치른 비용이다. 아래는 전부 **모델을 부르지 않고** 끝나는 경로다 (인자 해석이
+    환경 전제보다 먼저라서 opencode 가 없어도 돈다).
+    """
+
+    def run_suite(self, *argv: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["python3", str(_SUITE), *argv],
+                              capture_output=True, text=True, timeout=30)
+
+    def test_help_은_즉시_도움말을_내고_끝난다(self):
+        r = self.run_suite("--help")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("사용법", r.stdout)
+        self.assertIn("HARNESS_DRIVER_HOST", r.stdout, "구간 지정 방법이 도움말에 없다")
+
+    def test_모르는_옵션은_거부한다(self):
+        r = self.run_suite("--scenarios", "S06")
+        self.assertNotEqual(r.returncode, 0, "모르는 옵션이 통과했다")
+        self.assertIn("알 수 없는 옵션", r.stdout + r.stderr)
+
+    def test_시나리오_오타는_0건_성공이_아니라_실패다(self):
+        r = self.run_suite("S99")
+        self.assertNotEqual(r.returncode, 0, "없는 시나리오로 0건 실행하고 성공했다")
+        self.assertIn("S99", r.stdout + r.stderr)
+
+    def test_round_에_값이_없으면_거부한다(self):
+        r = self.run_suite("--round")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_round_값이_정수가_아니면_거부한다(self):
+        r = self.run_suite("--round", "일")
+        self.assertNotEqual(r.returncode, 0)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
