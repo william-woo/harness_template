@@ -580,16 +580,64 @@ def _oracles(sb: Path, scn: dict, exit_code: int, seed_orig: dict) -> list[dict]
     return findings, gt_ok, judges
 
 
+_USAGE = """사용법: python3 tests/suite/run_suite.py [--round N] [시나리오 id ...]
+
+  --round N      라운드 번호 (기본 1). 결과 파일명에 들어간다
+  -h, --help     이 도움말
+  시나리오 id    생략하면 전부. 예: S01 S06 S09
+
+구간은 환경변수로 정한다 (결과 파일명이 구간별로 갈린다):
+  HARNESS_DRIVER_HOST=opencode|claude-code   기본 opencode
+  HARNESS_LEAN_PROMPT=0|1                    1 이면 32B 우회책 제거 구간
+
+결과: tests/suite/results/round<N>-<구간>.jsonl
+주의: 이 스위트는 모델을 실제로 호출한다 — 전 시나리오는 수 시간이 걸린다."""
+
+
+def _parse_argv(argv: list[str]) -> tuple[int, list[dict]]:
+    """인자를 **엄격히** 해석한다 — 모르는 것은 버리지 않고 거부한다.
+
+    예전엔 `[a for a in argv if not a.startswith("--")]` 로 플래그를 통째로
+    버렸다. `--help` 가 도움말 대신 전 시나리오 측정을 시작했고(수 시간),
+    시나리오 id 오타는 0건 실행 후 조용히 성공했다. 측정 도구가 조용히 다른
+    일을 하면 그 수치는 못 믿는다.
+    """
+    if any(a in ("-h", "--help") for a in argv):
+        print(_USAGE)
+        raise SystemExit(0)
+
+    rnd, ids, i = 1, [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--round":
+            if i + 1 >= len(argv):
+                raise SystemExit("--round 에 값이 없습니다\n\n" + _USAGE)
+            try:
+                rnd = int(argv[i + 1])
+            except ValueError:
+                raise SystemExit(f"--round 값이 정수가 아닙니다: {argv[i + 1]!r}\n\n" + _USAGE)
+            i += 2
+            continue
+        if a.startswith("-"):
+            raise SystemExit(f"알 수 없는 옵션: {a}\n\n" + _USAGE)
+        ids.append(a)
+        i += 1
+
+    known = {s["id"] for s in SCENARIOS}
+    unknown = [x for x in ids if x not in known]
+    if unknown:
+        raise SystemExit(f"알 수 없는 시나리오: {unknown}\n"
+                         f"  가능: {sorted(known)}\n\n" + _USAGE)
+    picked = [s for s in SCENARIOS if not ids or s["id"] in ids]
+    if not picked:
+        raise SystemExit("실행할 시나리오가 없습니다 — 0건 실행을 성공으로 보지 않습니다")
+    return rnd, picked
+
+
 def main() -> None:
+    # 인자를 먼저 본다 — `--help` 가 환경 전제에 걸려 멈추면 안 된다
+    rnd, picked = _parse_argv(sys.argv[1:])
     _preflight_suite()
-    argv = sys.argv[1:]
-    rnd = 1
-    if "--round" in argv:
-        i = argv.index("--round")
-        rnd = int(argv[i + 1])
-        del argv[i:i + 2]
-    args = [a for a in argv if not a.startswith("--")]
-    picked = [s for s in SCENARIOS if not args or s["id"] in args]
     RESULTS.mkdir(parents=True, exist_ok=True)
     _arm = os.environ.get("HARNESS_DRIVER_HOST", "opencode")
     _arm += "-lean" if _lean_arm() else ""
