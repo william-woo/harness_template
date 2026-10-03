@@ -117,7 +117,8 @@ class _HostLock:
 # `HARNESS_LEAN_PROMPT=1` 이면 문장 단위로 제거해 "하네스가 호스트를 붙잡고 있는지" 를 측정한다.
 _WORKAROUNDS: list[tuple[str, str]] = [
     (r"\(a bare relative name: no leading slash, no directory, no placeholder path\)\s*", ""),
-    (r"\(relative path like 'foo\.py', never a leading slash\), and ", "and "),
+    (r"\(arguments: filePath as a relative path like 'foo\.py'\s*"
+     r"with no leading slash, and ", "(arguments: filePath, and "),
     (r"Create the files in the current directory with exact relative filenames\s*"
      r"\(no leading slash, no directories\)\.\s*", ""),
     (r"Indent with 4 spaces — never tab[^.]*\.\s*", ""),
@@ -128,7 +129,8 @@ _WORKAROUNDS: list[tuple[str, str]] = [
     (r"\s*The bash tool needs both arguments: command and description\.?", ""),
     (r"\s*Remember the bash tool needs both arguments: command and description\.?", ""),
     (r"REWRITE that file COMPLETELY with corrected\s*content \(do not use partial edits\)\.\s*"
-     r"Use the exact relative filename, real line\s*breaks\.\s*", "fix that file.\n"),
+     r"Use the exact relative filename, real line\s*breaks, and 4-space indentation\s*"
+     r"\(no tab characters\)\.\s*", "fix that file.\n"),
     (r"by REWRITING the affected file COMPLETELY with the\s*corrected content "
      r"\(relative filename, real line breaks\)\.", "."),
 ]
