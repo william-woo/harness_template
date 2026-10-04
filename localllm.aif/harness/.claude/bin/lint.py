@@ -1002,7 +1002,9 @@ _VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "c
                      "claude.aif", "localllm.aif"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
-# 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + 게이트웨이 stub (ADR-012, d-3)
+# 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + Slack 게이트웨이
+# (ADR-012, d-3). "전송은 stub" 은 2026-09-19 에 폐기된 서술이다 — Slack 은 발신·수신
+# 모두 stdlib 폴링으로 실구현이고, Teams·Telegram 은 2026-09-23 에 제거했다 (ADR-013 5-bis).
 _NW_OVERLAY_FILES = [
     "harness/.claude/bin/consortium.py",
     "harness/.claude/commands/consortium.md",

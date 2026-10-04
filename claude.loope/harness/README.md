@@ -75,7 +75,7 @@ openai/.codex                            Codex 호스트 변형 (정적 stub)
 | `…auto.design.wiki.orch` | 리서치·디자인·코딩 삼각형 오케스트레이션 (d-1) | `researcher.md`, `orchestrate.md` | ADR-008 |
 | `claude.hermes` | 세션 검색(FTS5) + 스킬 자동생성 (**활성화는 승인**) | `session_search.py`, `skill_forge.py` | ADR-010 |
 | `claude.productmgr` | PM 이 성공지표로 각 단계를 게이트하는 통합 사이클 | `product-manager.md`, `product-cycle.md` | ADR-011 |
-| `claude.productnw` | 팀 간 메시지 계약·로스터·큐 (전송은 stub, d-3) | `consortium.py` | ADR-012 (변형 내) |
+| `claude.productnw` | 팀 간 메시지 계약·로스터·큐 + Slack 게이트웨이 실구현 (d-3) | `consortium.py` | ADR-012 (변형 내) |
 | **`claude.loope`** ★ | 검증 루프 명시·유계화 + hill-climbing 신호 | `verify_loop.py`, `hill_climb.py`, `.claude/rubrics/` | ADR-014·015 |
 | **`claude.aif`** | **판정 설계** — 항목형 rubric + 증거 강제 + 앙상블 + UNCERTAIN | `aif_judge.py`, `*.items.md` | ADR-020 |
 | `localllm` | **로컬 LLM 구동** + 결정론 supervisor + 무인 스위트 + 자가 실험 | `cycle_driver.py`, `autoresearch.py`, `tests/suite/` | ADR-009·017·018·019 |
