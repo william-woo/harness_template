@@ -279,6 +279,127 @@ class VerifyLoopReReviewTest(unittest.TestCase):
         self.assertEqual(loop["status"], "failed")
 
 
+class VerifyLoopTerminalStateTest(unittest.TestCase):
+    """F020 3차 리뷰 MUST-1·2 — 종결 상태와 에스컬레이션.
+
+    MUST-1: 결정론 grader 의 `pass` 가 judge 의 판정을 **지웠다**. 09-28 수정이
+      "결정론 pass 가 `passed` 를 만들던 것" 을 고치면서, 만들지 *못하게* 가 아니라
+      **지우게** 됐다. `reviewer pass → passed` 다음 `lint pass` 한 번에 `in-loop`
+      로 떨어지고, `failed`(설계 거부)조차 lint 한 번으로 풀렸다.
+      하필 문서가 권하는 운용(판정 후 게이트 기록)을 따를수록 깨졌다 — 실제로
+      F019·F020·F030 세 루프가 그렇게 강등된 채 남아 있었다.
+
+    MUST-2: 에스컬레이션이 배너만 찍고 **아무것도 막지 않았다**. 3회 revision 뒤
+      다음 pass 가 그냥 통과했고(F019 는 escalated 직후 pass, 재검토 기록 0건),
+      언제 넘었는지도 안 남았다. `architect` 는 `_JUDGE` 에 있어서 reviewer 없이
+      루프를 종결시킬 수 있었다 — 두 번째 fail-open 경로였다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "rubrics").mkdir(parents=True)
+        (self.root / ".claude" / "rubrics" / "code-review.md").write_text("# rubric", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @property
+    def _state(self) -> Path:
+        return self.root / ".claude" / "state" / "verify-loop"
+
+    def rec(self, feature: str, grader: str, verdict: str, *extra):
+        return _run(self.root, _BIN, "record", feature, "--grader", grader,
+                    "--verdict", verdict, "--rubric", "code-review", *extra)
+
+    def loop(self, feature: str) -> dict:
+        return json.loads((self._state / f"{feature}.json").read_text(encoding="utf-8"))
+
+    # ── MUST-1 ───────────────────────────────────────────────────────────
+    def test_결정론_pass_가_passed_를_지우지_않는다(self):
+        self.rec("F001", "reviewer", "pass")
+        self.assertEqual(self.loop("F001")["status"], "passed")
+        self.rec("F001", "lint", "pass")
+        self.assertEqual(self.loop("F001")["status"], "passed",
+                         "판정 뒤 게이트를 기록했더니 통과가 취소됐다")
+
+    def test_결정론_pass_가_failed_를_풀지_않는다(self):
+        """설계 거부(REJECTED)가 lint 한 번으로 풀리면 거부가 거부가 아니다."""
+        self.rec("F002", "reviewer", "fail")
+        self.assertEqual(self.loop("F002")["status"], "failed")
+        self.rec("F002", "lint", "pass")
+        self.assertEqual(self.loop("F002")["status"], "failed")
+
+    def test_결정론_fail_은_종결된_루프를_다시_연다(self):
+        """게이트가 깨졌으면 재작업 신호다 — 통과를 유지하면 그게 거짓이다."""
+        self.rec("F003", "reviewer", "pass")
+        self.rec("F003", "lint", "fail")
+        self.assertEqual(self.loop("F003")["status"], "in-loop")
+
+    def test_결정론_pass_는_게이트_목록에_남는다(self):
+        self.rec("F004", "lint", "pass")
+        self.assertIn("lint", self.loop("F004").get("gates_passed", []))
+
+    # ── MUST-2 ───────────────────────────────────────────────────────────
+    def _escalate(self, feature: str) -> None:
+        for _ in range(3):
+            self.rec(feature, "reviewer", "revision")
+
+    def test_에스컬레이션_진입_시각이_남는다(self):
+        self._escalate("F010")
+        d = self.loop("F010")
+        self.assertEqual(d["status"], "escalated")
+        self.assertTrue(d.get("escalated_at"),
+                        "언제 넘었는지 없으면 '재검토 대기' 인지 '끝나고 계속' 인지 모른다")
+
+    def test_에스컬레이션_상태에서_ack_없는_pass_는_거부된다(self):
+        self._escalate("F011")
+        res = self.rec("F011", "reviewer", "pass")
+        self.assertNotEqual(res.returncode, 0, "에스컬레이션이 아무것도 막지 않았다")
+        self.assertEqual(self.loop("F011")["status"], "escalated", "거부됐는데 상태가 바뀌었다")
+
+    def test_ack_를_붙이면_통과하고_누가_왜가_남는다(self):
+        self._escalate("F012")
+        res = self.rec("F012", "reviewer", "pass", "--ack-escalation", "architect: 범위 축소")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        d = self.loop("F012")
+        self.assertEqual(d["status"], "passed")
+        self.assertIn("범위 축소", d.get("escalation_acked", {}).get("note", ""))
+
+    def test_에스컬레이션_아닐_때는_ack_가_필요없다(self):
+        """경계 — revision 2회면 아직 유계 안이다."""
+        for _ in range(2):
+            self.rec("F013", "reviewer", "revision")
+        self.assertEqual(self.rec("F013", "reviewer", "pass").returncode, 0)
+        self.assertEqual(self.loop("F013")["status"], "passed")
+
+    # ── architect ────────────────────────────────────────────────────────
+    def test_architect_단독으로는_루프가_통과되지_않는다(self):
+        res = self.rec("F020", "architect", "pass")
+        self.assertNotEqual(res.returncode, 0,
+                            "architect 가 reviewer 없이 루프를 종결시켰다")
+        self.assertNotEqual(self.loop("F020")["status"], "passed")
+
+    def test_architect_는_에스컬레이션을_받아_재무장한다(self):
+        self._escalate("F021")
+        res = self.rec("F021", "architect", "pass", "--notes", "feature 분해 결정")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        d = self.loop("F021")
+        self.assertEqual(d["status"], "in-loop", "재검토 뒤에는 루프를 다시 돌아야 한다")
+        self.assertEqual(d.get("escalation_acked", {}).get("by"), "architect")
+
+    def test_architect_도_등록부에_있어_미등록으로_거부되지_않는다(self):
+        """`_JUDGE` 에서 빼면서 등록부 검사에 안 넣으면 '미등록' 으로 막힌다 (실제로 그랬다)."""
+        self._escalate("F022")
+        res = self.rec("F022", "architect", "pass")
+        self.assertNotIn("미등록", res.stdout + res.stderr)
+
+    def test_오타_grader_는_여전히_거부된다(self):
+        """등록부를 넓히면서 fail-closed 가 풀리지 않았는지 — 09-28 수정의 회귀 검사."""
+        for bad in ("Lint", "lnt", "Architect", "reviewr"):
+            with self.subTest(grader=bad):
+                self.assertNotEqual(self.rec("F023", bad, "pass").returncode, 0)
+
 class HillClimbResilienceTest(unittest.TestCase):
     """비정형 트레이스 소스가 Loop 4 집계를 죽이지 않는지 (F020 MUST-5)."""
 
