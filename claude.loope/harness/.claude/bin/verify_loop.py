@@ -56,7 +56,9 @@ _ESCALATION_THRESHOLD = 3  # NEEDS REVISION N회 → 에스컬레이션 (reviewe
 # grader 종류 (LangChain: 결정론 grader vs LLM-judge grader).
 # 결정론 = 프로그램이 pass/fail 판정 / judge = 에이전트가 판단.
 _DETERMINISTIC = {"lint", "design-review", "qa-browser", "test"}
-_JUDGE = {"reviewer", "qa", "architect"}
+_JUDGE = {"reviewer", "qa"}
+# 에스컬레이션 처리자 — judge 로 세지만 **루프를 닫지는 못한다** (MUST-2).
+_ESCALATION_HANDLER = {"architect"}
 
 _VERDICTS = ("pass", "revision", "fail")
 _STATUSES = ("in-loop", "passed", "failed", "escalated")
@@ -78,6 +80,8 @@ def _grader_kind(grader: str) -> str:
     두는 것이 fail-open 이다.
     """
     return "deterministic" if grader in _DETERMINISTIC else "judge"
+    # NOTE: _ESCALATION_HANDLER(architect)도 judge 로 센다 — 판단하는 쪽이다.
+    #       다만 루프를 **닫지는 못한다** (cmd_record 가 따로 가른다).
 
 
 # feature id·rubric 이름은 **파일 경로 성분**이 된다. 검증 없이 쓰면 상태 디렉토리를
@@ -262,7 +266,7 @@ def cmd_record(args) -> int:
         if val is not None and val < 0:
             print(f"[verify-loop] ❌ {label} 는 0 이상이어야 합니다: {val}")
             return 1
-    if args.grader not in _DETERMINISTIC | _JUDGE:
+    if args.grader not in _DETERMINISTIC | _JUDGE | _ESCALATION_HANDLER:
         # 예전엔 경고만 하고 **judge 로 기록**했다. judge 의 pass 는 루프를 통과시키므로
         # `--grader Lint`(대소문자)·`lnt`(오타) 하나로 게이트를 건너뛸 수 있었다.
         # 등록부가 곧 계약이다 — 새 grader 가 필요하면 등록부에 추가한다.
@@ -336,14 +340,48 @@ def _record_locked(args, feature: str) -> int:
             gates = loop.setdefault("gates_passed", [])
             if args.grader not in gates:
                 gates.append(args.grader)
-        loop["status"] = ("escalated"
-                          if loop["revision_count"] >= loop["escalation_threshold"]
-                          else "in-loop")
-    elif args.verdict == "pass":
-        loop["status"] = "passed"
-    elif args.verdict == "fail":
-        loop["status"] = "failed"
+            # **status 를 건드리지 않는다.** 예전엔 이 재계산이 if 문 밖에 있어서
+            # 결정론 pass 가 judge 의 판정을 지웠다 — `reviewer pass → passed` 다음
+            # `lint pass` 한 번에 `in-loop` 로 떨어졌고, `failed`(설계 거부)조차
+            # lint 한 번으로 풀렸다. 하필 문서가 권하는 운용(승인 후 게이트 기록)을
+            # 따를수록 상태가 깨졌다 (F019·F020·F030 실측).
+        else:
+            # fail/revision 은 재작업 신호다 — 종결됐던 루프도 다시 연다.
+            loop["status"] = ("escalated"
+                              if loop["revision_count"] >= loop["escalation_threshold"]
+                              else "in-loop")
+    elif args.grader in _ESCALATION_HANDLER:
+        # architect 는 루프를 **닫지 않는다**. 에스컬레이션을 받아 재무장할 뿐이다.
+        # 예전엔 `_JUDGE` 에 있어서 `--grader architect --verdict pass` 한 번으로
+        # 코드 리뷰 루프가 reviewer 없이 종결됐다 — 두 번째 fail-open 경로였다.
+        if loop["status"] != "escalated":
+            print(f"[verify-loop] ❌ {args.grader} 는 에스컬레이션 처리자다 — "
+                  f"현재 상태 {loop['status']!r} 에서는 기록하지 않는다.", file=sys.stderr)
+            print("   루프를 닫으려면 reviewer/qa 판정을 기록하십시오.", file=sys.stderr)
+            return 1
+        loop["escalation_acked"] = {"by": args.grader, "at": _now(),
+                                    "note": attempt.get("notes", "")}
+        loop["status"] = "in-loop"
+    elif args.verdict in ("pass", "fail"):
+        # 에스컬레이션 상태에서 판정을 닫으려면 **누가 왜 재검토했는지**를 받는다.
+        # 예전엔 3회 revision → escalated → 다음 pass 로 그냥 통과했다. 배너만
+        # 찍히고 아무것도 막지 않아, ADR-014 가 선언한 "유계" 에 대응물이 없었다
+        # (F019 는 escalated 직후 pass, 재검토 기록 0건).
+        if loop["status"] == "escalated" and not getattr(args, "ack_escalation", None):
+            print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
+                  f"(revision {loop['revision_count']}/{loop['escalation_threshold']}).",
+                  file=sys.stderr)
+            print("   Planner+Architect 재검토 없이 닫지 않는다. 재검토를 마쳤으면:",
+                  file=sys.stderr)
+            print(f"   --ack-escalation \"<누가/무엇을 결정했는지>\"", file=sys.stderr)
+            return 1
+        if getattr(args, "ack_escalation", None):
+            loop["escalation_acked"] = {"by": args.grader, "at": _now(),
+                                        "note": args.ack_escalation[:500]}
+        loop["status"] = "passed" if args.verdict == "pass" else "failed"
     elif loop["revision_count"] >= loop["escalation_threshold"]:
+        if loop["status"] != "escalated":
+            loop["escalated_at"] = _now()   # 언제 넘었는지 — 없으면 "재검토 대기" 인지 알 수 없다
         loop["status"] = "escalated"
     else:
         loop["status"] = "in-loop"
@@ -355,8 +393,11 @@ def _record_locked(args, feature: str) -> int:
     icon = {"pass": "✅", "revision": "🔄", "fail": "❌"}[args.verdict]
     print(f"[verify-loop] {icon} {feature} #{attempt['n']} — {args.grader}({kind}) → {args.verdict}{grade_note}")
     if loop["status"] == "escalated":
-        print(f"  🚨 ESCALATION — NEEDS REVISION {loop['revision_count']}회 도달 (임계 {loop['escalation_threshold']}).")
-        print("     Planner+Architect 재검토 권장 · Feature 분해 검토 · /project:learn add (pitfall).")
+        since = loop.get("escalated_at", "?")
+        print(f"  🚨 ESCALATION — NEEDS REVISION {loop['revision_count']}회 도달 "
+              f"(임계 {loop['escalation_threshold']}, {since} 부터).")
+        print("     Planner+Architect 재검토 필요 · Feature 분해 검토 · /project:learn add (pitfall).")
+        print("     재검토를 마쳤으면 판정에 --ack-escalation \"<누가/무엇을>\" 을 붙이십시오.")
     elif loop["status"] == "passed":
         print(f"  통과 — 총 {attempt['n']}회 시도, revision {loop['revision_count']}회.")
     elif loop["status"] == "failed":
@@ -458,6 +499,8 @@ def main() -> None:
     p_rec.add_argument("--should", type=int, help="SHOULD 건수 (judge grader)")
     p_rec.add_argument("--notes", help="판정 메모")
     p_rec.add_argument("--rubric", help="루프 미개시 시 자동 개시할 rubric")
+    p_rec.add_argument("--ack-escalation", metavar="WHO/WHAT",
+                       help="에스컬레이션 재검토 완료 표시 (escalated 상태에서 pass|fail 에 필요)")
 
     p_st = sub.add_parser("status", help="특정 feature 루프 상태")
     p_st.add_argument("feature", help="Feature ID")
