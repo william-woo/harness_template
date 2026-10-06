@@ -16,6 +16,7 @@ python3 .claude/bin/verify_loop.py start <F> --rubric code-review    # 루프 �
 python3 .claude/bin/verify_loop.py record <F> --grader lint --verdict pass
 python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict revision --must 1 --should 2 --notes "docstring 누락"
 python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict pass
+python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass --notes "<결정>"  # 에스컬레이션 해제
 python3 .claude/bin/verify_loop.py status <F>                        # 루프 상태·이력
 python3 .claude/bin/verify_loop.py list                             # 진행중/완료 루프
 python3 .claude/bin/verify_loop.py rubric [<name>]                  # rubric 표시/목록
@@ -26,19 +27,67 @@ python3 .claude/bin/verify_loop.py self                             # 점검
 
 | 종류 | grader | 특성 |
 |---|---|---|
-| **결정론(deterministic)** | lint · design-review · qa-browser · test | 프로그램이 pass/fail — 빠르고 값쌈, 먼저 게이트 |
-| **judge (LLM-as-judge)** | reviewer · qa · architect | 에이전트가 rubric 으로 판단 |
+| **결정론(deterministic)** | lint · design-review · qa-browser · test | 프로그램이 pass/fail — 빠르고 값쌈 |
+| **judge (LLM-as-judge)** | reviewer · qa | 에이전트가 rubric 으로 판단. **판정은 이쪽만** 낸다 |
+| **에스컬레이션 처리자** | architect | 재검토를 수행하고 예산을 갱신한다. 루프를 닫지는 못한다 |
 
 → 권장 순서: **결정론 grader 먼저 → judge 나중** (값싼 실패를 앞에서 걸러 judge 비용 절감).
+단, 먼저 돌리든 나중에 기록하든 **결론은 같다** — 게이트 결과는 순서가 아니라 grader 별
+마지막 verdict 로 집계되기 때문이다 (아래).
 
-## verdict → 상태 전이
+## 상태는 전이하지 않고 **파생**한다 (ADR-024)
 
-| verdict | 의미 | 상태 |
+`status` 는 저장된 값이 아니라 `attempts` 이력의 **순수 함수**다. 독립인 세 차원을 각각
+전체 이력에서 집계한다:
+
+| 차원 | 파생식 |
+|---|---|
+| **판정** | 마지막 판정 이벤트 — judge(reviewer·qa) 전부 + architect 의 `fail`(설계 거부) |
+| **게이트** | 결정론 grader **별 마지막** verdict. `pass` 가 아닌 것이 하나라도 있으면 broken |
+| **예산** | **마지막 architect 이벤트 이후**의 judge `revision` 수 (임계 3회) |
+
+```
+failed     ← 판정 == fail
+passed     ← 판정 == pass  그리고  broken 없음  그리고  예산 미소진
+escalated  ← 예산 소진
+in-loop    ← 그 외
+```
+
+요약 필드(`status`/`revision_count`/`gates_passed`/`gates_broken`)는 저장되지만 **신뢰되지
+않는다** — 매 읽기마다 이력에서 다시 계산하므로 상태 파일을 손으로 고쳐도 다음 `record` 가
+바로잡는다.
+
+### 이력 → 상태 (각 행을 테스트가 실제로 실행해 대조한다)
+
+| 이력 | 상태 | 왜 |
 |---|---|---|
-| `pass` | rubric 충족 | `passed` |
-| `revision` | MUST 미해결 → 재작업 | `in-loop` (revision_count++) |
-| `fail` | 설계/방향 오류 | `failed` |
-| revision **3회** 누적 | — | `escalated` (자동 — Planner+Architect 재검토 안내) |
+| `reviewer:pass` | `passed` | 판정 pass · 게이트 기록 없음 · 예산 여유 |
+| `lint:pass` | `in-loop` | 게이트 하나 통과는 판정이 아니다 |
+| `lint:fail` → `reviewer:pass` | `in-loop` | 게이트가 깨져 있다 |
+| `reviewer:pass` → `lint:fail` | `in-loop` | 위와 **같은 결론** — 순서 의존 없음 |
+| `lint:fail` → `lint:pass` → `reviewer:pass` | `passed` | 게이트는 그 grader 의 **마지막** verdict 만 본다 |
+| `reviewer:fail` | `failed` | judge 의 설계 거부 |
+| `reviewer:fail` → `lint:pass` | `failed` | 게이트 통과가 판정을 지우지 않는다 |
+| `reviewer:revision` ×3 | `escalated` | 예산 소진 |
+| `test:revision` ×3 | `in-loop` | 결정론 재작업은 judge 예산을 쓰지 않는다 |
+| `reviewer:revision` ×3 → `architect:pass` | `in-loop` | architect 재검토가 예산을 갱신 |
+| `reviewer:revision` ×3 → `architect:pass` → `reviewer:revision` ×2 → `test:pass` → `reviewer:pass` | `passed` | 갱신 뒤 예산은 다시 3회 |
+| `architect:fail` | `failed` | 설계자의 설계 거부 (architect 의 고유 권한) |
+
+## 에스컬레이션을 푸는 법
+
+judge revision 이 임계(3회)에 닿으면 `escalated` 가 되고, 그 상태에서 **judge 의 `pass` 는
+거부된다**(exit 1). 푸는 수단은 하나뿐이다:
+
+```bash
+python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass --notes "<무엇을 결정했는지>"
+```
+
+- 재검토를 **수행한** 역할이어야 하고, 판정을 낸 역할과 **달라야** 한다. reviewer·qa 는 둘 다 위반이므로
+  자기 에스컬레이션을 승인할 수 없다. (`--ack-escalation` 플래그는 그래서 삭제됐다 — ADR-024 결정 3)
+- `revision`·`fail` 기록과 결정론 grader 는 에스컬레이션 중에도 막히지 않는다. 전부 "아직 안 됐다" 는
+  증거이고, 증거 기록을 막은 것이 무인 드라이버를 세운 원인이었다.
+- `architect --verdict fail` 은 **설계 거부**(`failed`)다 — 설계자의 고유 권한.
 
 ## rubric
 

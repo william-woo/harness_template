@@ -1298,7 +1298,11 @@ def _cmd_run(args) -> int:
         revisions = sum(1 for a in state.get("attempts", [])
                         if a.get("verdict") == "revision" and a.get("grader") == "test")
         _log(f"② grader FAIL (revision {revisions}) — 출력: {out[:100]}")
-        if state.get("escalated") or revisions >= args.max_revisions:
+        # `state.get("escalated")` 를 읽었으나 상태 파일에 **그런 키는 없다** —
+        # 에스컬레이션 신호가 드라이버에 닿은 적이 없었다 (ADR-024 실측 8).
+        # 실제 표현은 파생된 `status` 다. verify_loop 의 예산은 judge revision 만
+        # 세므로(ADR-024 결정 1), 위 `test` 재작업이 이 신호를 거짓 발화시키지 않는다.
+        if state.get("status") == "escalated" or revisions >= args.max_revisions:
             _log(f"🚨 에스컬레이션 — 상위 호스트(사람/Claude Code) 인계 필요. "
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2

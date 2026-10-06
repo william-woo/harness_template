@@ -7,17 +7,41 @@ LangChain "loop engineering" 의 Loop 2(Verification Loop)를 하네스에 이�
 갖고 있으나, **rubric 이 암묵적이고 재시도 상태가 코드화돼 있지 않다**. 이 헬퍼가:
 
   ① 명시적 rubric 로드 (.claude/rubrics/<name>.md — MUST/SHOULD 체크리스트)
-  ② grader 판정을 상태로 추적 (.claude/state/verify-loop/<feature>.json)
-  ③ 재시도 횟수 집계 + 에스컬레이션 자동 판정 (기본 3회)
-  ④ grader 종류 구분 — 결정론(lint/design-review/qa-browser) vs LLM-judge(reviewer/qa)
+  ② grader 판정을 **이력**으로 추적 (.claude/state/verify-loop/<feature>.json 의 attempts)
+  ③ 재시도 예산 집계 + 에스컬레이션 자동 판정 (기본 3회)
+  ④ grader 종류 구분 — 결정론(lint/design-review/qa-browser/test) vs LLM-judge(reviewer/qa)
 
 즉 "이미 도는 루프를 명시적·유계(bounded)로 만든다" (프레임워크를 짓지 않음 — Karpathy).
+
+## 상태는 전이하지 않고 **파생**한다 (ADR-024)
+
+`status`·`revision_count`·`gates_*` 는 저장된 값이 아니라 `attempts` 의 **순수 함수**다
+(`_derive`). 이벤트마다 전이시키면 `status` 하나가 서로 독립인 네 사실(판정·게이트·예산·
+종결)을 4값 enum 에 접게 되고, 모든 규칙이 "둘이 어긋나면 누가 이기나" 로만 표현된다 —
+세 라운드의 결함이 전부 거기서 났다. 게다가 직전 1건만 보고 재계산하므로 **같은 두 사실이
+순서에 따라 다른 결론**을 냈다 (`lint fail → reviewer pass` 는 통과, 반대 순서는 아님).
+
+차원을 접지 말고 3개로 나눠 각각 이력에서 집계한다:
+
+  판정   마지막 판정 이벤트 — judge(reviewer·qa) 전부 + architect 의 `fail`(설계 거부)
+  게이트  결정론 grader **별 마지막** verdict. `pass` 가 아닌 것이 하나라도 있으면 broken
+  예산   **마지막 architect 이벤트 이후**의 judge `revision` 수
+
+  failed     ← 판정 == fail
+  passed     ← 판정 == pass  그리고  broken 없음  그리고  예산 미소진
+  escalated  ← 예산 소진
+  in-loop    ← 그 외
+
+저장은 소비자 호환을 위해 유지하되(`hill_climb.py` 가 `status`/`revision_count` 를 읽는다)
+**신뢰하지 않는다** — 읽을 때마다 이력에서 다시 계산한다. 그래서 상태 파일을 손으로 고쳐도
+다음 `record` 가 바로잡는다.
 
 사용법:
   python3 .claude/bin/verify_loop.py start F001 --rubric code-review
   python3 .claude/bin/verify_loop.py record F001 --grader lint --verdict pass
   python3 .claude/bin/verify_loop.py record F001 --grader reviewer --verdict revision --must 1 --should 2 --notes "docstring 누락"
   python3 .claude/bin/verify_loop.py record F001 --grader reviewer --verdict pass
+  python3 .claude/bin/verify_loop.py record F001 --grader architect --verdict pass --notes "범위 축소 결정"  # 에스컬레이션 해제
   python3 .claude/bin/verify_loop.py status F001
   python3 .claude/bin/verify_loop.py rubric code-review     # rubric 표시
   python3 .claude/bin/verify_loop.py list                   # 진행중 루프
@@ -57,12 +81,13 @@ _ESCALATION_THRESHOLD = 3  # NEEDS REVISION N회 → 에스컬레이션 (reviewe
 # 결정론 = 프로그램이 pass/fail 판정 / judge = 에이전트가 판단.
 _DETERMINISTIC = {"lint", "design-review", "qa-browser", "test"}
 _JUDGE = {"reviewer", "qa"}
-# 에스컬레이션 처리자 — judge 로 세지만 **루프를 닫지는 못한다** (MUST-2).
+# 에스컬레이션 처리자 — 재검토를 **수행한** 역할이고, 판정을 낸 역할과 달라야 한다.
+# 루프를 닫지는 못한다 (판정은 judge 의 몫) — 예산을 갱신할 뿐이다 (ADR-024 결정 3).
 _ESCALATION_HANDLER = {"architect"}
 
 _VERDICTS = ("pass", "revision", "fail")
-_STATUSES = ("in-loop", "passed", "failed", "escalated")
 # `_print_loop` 가 직접 첨자하는 키들 — 없으면 목록 전체가 죽는다.
+# `_derive` 도 grader·verdict 를 읽으므로 같은 필터가 파생 입력까지 보장한다.
 _REQUIRED_ATTEMPT_KEYS = {"n", "grader", "kind", "verdict"}
 
 
@@ -72,16 +97,21 @@ def _now() -> str:
 
 
 def _grader_kind(grader: str) -> str:
-    """grader 이름 → 종류(deterministic|judge).
+    """grader 이름 → 표시용 종류(deterministic|judge|handler).
 
     미등록 이름은 여기 오지 않는다 — `cmd_record` 가 먼저 거부한다 (MUST-2).
     예전엔 미등록을 **judge 로 승격**시켰고, judge 의 pass 는 루프를 통과시키므로
     `--grader Lint` 오타 하나가 게이트를 통째로 건너뛰었다. 권한이 큰 쪽을 기본값으로
     두는 것이 fail-open 이다.
+
+    이 값은 attempt 에 **라벨**로만 남는다. `_derive` 는 저장된 `kind` 가 아니라 grader
+    이름으로 분류한다 — 저장된 라벨을 믿으면 손으로 고친 `kind` 하나가 판정을 바꾼다.
     """
-    return "deterministic" if grader in _DETERMINISTIC else "judge"
-    # NOTE: _ESCALATION_HANDLER(architect)도 judge 로 센다 — 판단하는 쪽이다.
-    #       다만 루프를 **닫지는 못한다** (cmd_record 가 따로 가른다).
+    if grader in _DETERMINISTIC:
+        return "deterministic"
+    if grader in _ESCALATION_HANDLER:
+        return "handler"
+    return "judge"
 
 
 # feature id·rubric 이름은 **파일 경로 성분**이 된다. 검증 없이 쓰면 상태 디렉토리를
@@ -106,6 +136,87 @@ def _safe_name(value: str, what: str) -> str:
 def _loop_path(feature: str) -> Path:
     """feature 의 루프 상태 파일 경로."""
     return _STATE / f"{_safe_name(feature, 'feature id')}.json"
+
+
+def _derive(attempts: list, threshold: int) -> dict:
+    """판정 이력 → 요약 필드. **순수 함수** — 변이도 I/O 도 없다 (ADR-024 결정 1).
+
+    전이 사슬(현재 상태 × 이벤트 → 다음 상태)을 쓰지 않는 이유는 모듈 docstring 에 있다.
+    여기서는 독립인 세 차원을 각각 **전체 이력**에서 집계하고, 넷째로 그 셋을 합친다.
+
+    Args:
+        attempts: append-only 판정 이력 (`_read_loop` 가 필수 키를 보장한 원소들)
+        threshold: 에스컬레이션 임계 — judge revision 몇 회에 멈출 것인가
+
+    Returns:
+        dict: 상태 파일에 그대로 병합할 요약 필드
+            (`status`/`revision_count`/`gates_passed`/`gates_broken`,
+             해당될 때만 `escalated_at`/`escalation_acked`)
+    """
+    verdict = None              # 차원 ① 판정
+    gates: dict[str, str] = {}  # 차원 ② 게이트 (grader → **마지막** verdict)
+    budget, escalated_at, acked = 0, None, None   # 차원 ③ 예산
+    for a in attempts:
+        grader, v, ts = a.get("grader"), a.get("verdict"), a.get("ts")
+        if grader in _ESCALATION_HANDLER:
+            # 재검토가 있었다 — 예산을 **갱신**한다. 이것이 없어서 ack 뒤 예산이 1회뿐이었고
+            # rev 8 짜리 feature 는 architect 왕복 6회를 요구했다 (ADR-024 실측 4).
+            if budget >= threshold:
+                # 실제로 **막혀 있던 것을 푼 경우만** ack 으로 기록한다. 예산이 남아 있는데
+                # 들른 architect 까지 ack 으로 적으면, 있지도 않은 에스컬레이션이 해제된
+                # 것처럼 보인다 — 이 ADR 이 없애려는 종류의 조용한 거짓이다.
+                acked = {"by": grader, "at": ts, "note": a.get("notes", "")}
+            budget, escalated_at = 0, None
+            if v == "fail":
+                # 설계 거부는 설계자의 고유 권한이다. 예전엔 architect 의 verdict 가
+                # pass·revision·fail 모두 같은 결과였다 — 필수 인자인데 의미가 없었다.
+                verdict = "fail"
+        elif grader in _JUDGE:
+            verdict = v
+            if v == "revision":
+                budget += 1
+                if budget == threshold:
+                    escalated_at = ts   # 언제 넘었는지 — 없으면 "재검토 대기" 인지 모른다
+        elif grader in _DETERMINISTIC:
+            # 덮어쓴다 — 게이트는 **마지막** 결과만 유효하다. fail→pass 와 pass→fail 이
+            # 대칭이 되고, 그래서 순서 의존이 사라진다 (ADR-024 실측 1).
+            gates[grader] = v
+    # 결정론 `revision` 도 "아직 통과 못 함" 이다. `fail` 만 broken 으로 보면 드라이버가
+    # 포기한 루프(마지막이 revision)가 통과로 읽힌다.
+    broken = sorted(g for g, v in gates.items() if v != "pass")
+    exhausted = budget >= threshold
+
+    if verdict == "fail":
+        status = "failed"
+    elif verdict == "pass" and not broken and not exhausted:
+        status = "passed"
+    elif exhausted:
+        status = "escalated"
+    else:
+        status = "in-loop"
+
+    summary = {"status": status, "revision_count": budget,
+               "gates_passed": sorted(g for g, v in gates.items() if v == "pass"),
+               "gates_broken": broken}
+    if escalated_at:
+        summary["escalated_at"] = escalated_at
+    if acked:
+        summary["escalation_acked"] = acked
+    return summary
+
+
+def _apply_derived(loop: dict) -> dict:
+    """루프의 요약 필드를 이력에서 다시 계산해 덮어쓴다.
+
+    저장 직전·읽기 직후 양쪽에서 부른다. 요약 필드는 전부 파생이므로 **손으로 고쳐도
+    다음 record 가 바로잡는다** — 실측 7(사람이 `status` 를 직접 교정하고
+    `status_restored` 같은 키를 남긴 것)의 필요 자체를 없앤다.
+    """
+    derived = _derive(loop["attempts"], loop["escalation_threshold"])
+    for key in ("escalated_at", "escalation_acked"):
+        loop.pop(key, None)   # 파생되지 않으면 남아 있으면 안 된다 (ack 으로 해제된 뒤 등)
+    loop.update(derived)
+    return loop
 
 
 def _quarantine(path: Path, why: str) -> None:
@@ -153,26 +264,25 @@ def _read_loop(path: Path) -> dict | None:
     # 믿었고, 내용이 다른 feature 를 가리키면 `_save` 가 **다른 파일에 써서** 원본은
     # 영영 갱신되지 않았다 (락은 F001, 쓰기는 F002 — 교차 lost update).
     data["feature"] = path.stem
-    data["revision_count"] = _as_count(data.get("revision_count"), 0)
     data["escalation_threshold"] = _as_count(
         data.get("escalation_threshold"), _ESCALATION_THRESHOLD, minimum=1)
-    if data.get("status") not in _STATUSES:
-        data["status"] = "in-loop"
     if not isinstance(data.get("rubric"), str) or not data["rubric"].strip():
         data["rubric"] = "code-review"
     # attempt 원소도 소비 지점(`_print_loop` 의 `a['n']`)이 직접 첨자한다 — 필수 키가
     # 없는 원소 하나에 `list` 가 통째로 죽었다. dict 여부만으로는 부족하다.
     data["attempts"] = [a for a in data["attempts"]
                         if isinstance(a, dict) and _REQUIRED_ATTEMPT_KEYS <= a.keys()]
-    return data
+    # 저장된 `status`·`revision_count`·`gates_*` 는 **읽지 않는다** — 이력에서 다시 센다.
+    # 그래서 `revision_count: "3"` 같은 타입 오염이 방어 대상이 아니라 아예 없는 상태가 된다
+    # (예전엔 `+= 1` 이 TypeError 로 매 record 마다 같은 자리에서 죽는 영구 wedge 였다).
+    return _apply_derived(data)
 
 
 def _as_count(value: object, default: int, minimum: int = 0) -> int:
-    """정수 카운터를 안전하게 읽는다 (bool 은 정수가 아니다).
+    """정수 입력을 안전하게 읽는다 (bool 은 정수가 아니다).
 
-    `revision_count` 가 문자열 `"3"` 이면 `+= 1` 이 TypeError 를 내고 **매 record 마다**
-    같은 자리에서 죽었다 — 영구 wedge. `escalation_threshold` 가 None 이면 `>=` 비교가
-    터진다. 값을 못 믿으면 기본값으로 갈아끼운다.
+    `escalation_threshold` 는 파생이 아니라 **입력**이라 여전히 검증이 필요하다 —
+    None 이면 `>=` 비교가 터지고 0 이면 모든 루프가 즉시 에스컬레이션한다.
     """
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         return default
@@ -286,11 +396,10 @@ def _start_locked(feature: str, rubric: str) -> dict:
         "feature": feature,
         "rubric": rubric,
         "attempts": [],
-        "revision_count": 0,
-        "status": "in-loop",
         "escalation_threshold": _ESCALATION_THRESHOLD,
         "started": _now(),
     }
+    _apply_derived(loop)      # 빈 이력의 파생 = in-loop / revision 0 / 게이트 없음
     _save(loop)
     return loop
 
@@ -304,6 +413,24 @@ def _record_locked(args, feature: str) -> int:
         # 재진입되지만 의존하지 않는다). 락 안에서 쓰는 경로를 따로 둔다.
         loop = _start_locked(feature, _safe_name(args.rubric or "code-review", "rubric 이름"))
     kind = _grader_kind(args.grader)
+    # 에스컬레이션 게이트 — 예산이 소진된 동안 judge 의 `pass` 로는 루프를 닫지 못한다.
+    # 파생만으로도 상태는 `escalated` 로 남지만, 기록을 받아 두면 이후 architect 재검토가
+    # 예산을 갱신하는 순간 **judge 가 다시 보지 않은 pass** 가 루프를 통과시킨다. 그래서
+    # 받지 않는다.
+    #
+    # `revision`·`fail` 과 결정론 grader 는 막지 않는다 — 전부 "아직 안 됐다" 는 증거이고,
+    # 증거 기록을 막은 것이 바로 무인 드라이버를 세운 원인이었다 (ADR-024 실측 9).
+    if loop["status"] == "escalated" and args.grader in _JUDGE and args.verdict == "pass":
+        print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
+              f"(revision {loop['revision_count']}/{loop['escalation_threshold']}).",
+              file=sys.stderr)
+        print("   Planner+Architect 재검토 없이 닫지 않는다. 재검토를 마쳤으면 "
+              "재검토를 **수행한** 역할이 기록한다:", file=sys.stderr)
+        print(f"   verify_loop.py record {feature} --grader architect "
+              f"--verdict pass --notes \"<무엇을 결정했는지>\"", file=sys.stderr)
+        print("   (판정을 낸 당사자가 자기 에스컬레이션을 승인할 수는 없다 — ADR-024 결정 3)",
+              file=sys.stderr)
+        return 1
     attempt = {
         "n": len(loop["attempts"]) + 1,
         "grader": args.grader,
@@ -323,68 +450,8 @@ def _record_locked(args, feature: str) -> int:
         clean = re.sub(r"[\x00-\x1f\x7f]", " ", args.notes)
         attempt["notes"] = clean[:2000] + ("…(절단)" if len(clean) > 2000 else "")
     loop["attempts"].append(attempt)
-
-    if args.verdict == "revision":
-        loop["revision_count"] += 1
-
-    # 상태 전이 — **judge 의 pass 만** 루프를 통과시킨다.
-    # 결정론 grader(lint/design-review/qa-browser)의 pass 는 게이트 하나를 통과한
-    # 것이지 판정이 아니다. 예전에는 `record F002 --grader lint --verdict pass` 한 번에
-    # `passed` 가 됐는데, 그게 하필 verify-loop.md·reviewer.md 가 권하는 **첫 단계**였다.
-    if kind == "deterministic":
-        # 결정론 grader 는 **게이트**다 — 통과도 실패도 판정이 아니다.
-        # pass: 게이트 하나를 통과한 것이지 루프를 통과한 게 아니다.
-        # fail: lint 가 깨진 것을 `failed`(REJECTED — Planner·Architect 재설계)로
-        #       올리는 건 과하다. 재작업 신호이므로 revision 과 같은 층에 둔다.
-        if args.verdict == "pass":
-            gates = loop.setdefault("gates_passed", [])
-            if args.grader not in gates:
-                gates.append(args.grader)
-            # **status 를 건드리지 않는다.** 예전엔 이 재계산이 if 문 밖에 있어서
-            # 결정론 pass 가 judge 의 판정을 지웠다 — `reviewer pass → passed` 다음
-            # `lint pass` 한 번에 `in-loop` 로 떨어졌고, `failed`(설계 거부)조차
-            # lint 한 번으로 풀렸다. 하필 문서가 권하는 운용(승인 후 게이트 기록)을
-            # 따를수록 상태가 깨졌다 (F019·F020·F030 실측).
-        else:
-            # fail/revision 은 재작업 신호다 — 종결됐던 루프도 다시 연다.
-            loop["status"] = ("escalated"
-                              if loop["revision_count"] >= loop["escalation_threshold"]
-                              else "in-loop")
-    elif args.grader in _ESCALATION_HANDLER:
-        # architect 는 루프를 **닫지 않는다**. 에스컬레이션을 받아 재무장할 뿐이다.
-        # 예전엔 `_JUDGE` 에 있어서 `--grader architect --verdict pass` 한 번으로
-        # 코드 리뷰 루프가 reviewer 없이 종결됐다 — 두 번째 fail-open 경로였다.
-        if loop["status"] != "escalated":
-            print(f"[verify-loop] ❌ {args.grader} 는 에스컬레이션 처리자다 — "
-                  f"현재 상태 {loop['status']!r} 에서는 기록하지 않는다.", file=sys.stderr)
-            print("   루프를 닫으려면 reviewer/qa 판정을 기록하십시오.", file=sys.stderr)
-            return 1
-        loop["escalation_acked"] = {"by": args.grader, "at": _now(),
-                                    "note": attempt.get("notes", "")}
-        loop["status"] = "in-loop"
-    elif args.verdict in ("pass", "fail"):
-        # 에스컬레이션 상태에서 판정을 닫으려면 **누가 왜 재검토했는지**를 받는다.
-        # 예전엔 3회 revision → escalated → 다음 pass 로 그냥 통과했다. 배너만
-        # 찍히고 아무것도 막지 않아, ADR-014 가 선언한 "유계" 에 대응물이 없었다
-        # (F019 는 escalated 직후 pass, 재검토 기록 0건).
-        if loop["status"] == "escalated" and not getattr(args, "ack_escalation", None):
-            print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
-                  f"(revision {loop['revision_count']}/{loop['escalation_threshold']}).",
-                  file=sys.stderr)
-            print("   Planner+Architect 재검토 없이 닫지 않는다. 재검토를 마쳤으면:",
-                  file=sys.stderr)
-            print(f"   --ack-escalation \"<누가/무엇을 결정했는지>\"", file=sys.stderr)
-            return 1
-        if getattr(args, "ack_escalation", None):
-            loop["escalation_acked"] = {"by": args.grader, "at": _now(),
-                                        "note": args.ack_escalation[:500]}
-        loop["status"] = "passed" if args.verdict == "pass" else "failed"
-    elif loop["revision_count"] >= loop["escalation_threshold"]:
-        if loop["status"] != "escalated":
-            loop["escalated_at"] = _now()   # 언제 넘었는지 — 없으면 "재검토 대기" 인지 알 수 없다
-        loop["status"] = "escalated"
-    else:
-        loop["status"] = "in-loop"
+    # 전이 분기는 없다 — 기록은 append, 결론은 이력 전체에서 다시 센다 (ADR-024 결정 1).
+    _apply_derived(loop)
     _save(loop)
 
     grade_note = ""
@@ -397,26 +464,36 @@ def _record_locked(args, feature: str) -> int:
         print(f"  🚨 ESCALATION — NEEDS REVISION {loop['revision_count']}회 도달 "
               f"(임계 {loop['escalation_threshold']}, {since} 부터).")
         print("     Planner+Architect 재검토 필요 · Feature 분해 검토 · /project:learn add (pitfall).")
-        print("     재검토를 마쳤으면 판정에 --ack-escalation \"<누가/무엇을>\" 을 붙이십시오.")
+        print(f"     재검토를 **수행한** 역할이 기록해야 풀린다: "
+              f"record {feature} --grader architect --verdict pass --notes \"<결정 내용>\"")
     elif loop["status"] == "passed":
         print(f"  통과 — 총 {attempt['n']}회 시도, revision {loop['revision_count']}회.")
     elif loop["status"] == "failed":
         print("  REJECTED — 재작업 필요.")
     else:
-        print(f"  진행중 — revision {loop['revision_count']}/{loop['escalation_threshold']}.")
+        broken = loop.get("gates_broken") or []
+        gate_note = f" · 미통과 게이트 {', '.join(broken)}" if broken else ""
+        print(f"  진행중 — revision {loop['revision_count']}/{loop['escalation_threshold']}{gate_note}.")
     return 0
 
 
 def _print_loop(loop: dict) -> None:
-    """루프 상태를 사람이 읽게 출력한다."""
+    """루프 상태를 사람이 읽게 출력한다 (요약 필드는 전부 이력에서 파생된 값)."""
     st = loop["status"]
     badge = {"passed": "✅ PASSED", "failed": "❌ FAILED",
              "escalated": "🚨 ESCALATED", "in-loop": "🔄 IN-LOOP"}.get(st, st)
+    # 예산은 "마지막 architect 재검토 이후" 다 — ack 가 있었으면 그 사실을 함께 보여야
+    # `attempts` 의 revision 개수와 이 숫자가 달라 보이는 것이 오해가 되지 않는다.
+    acks = sum(1 for a in loop["attempts"] if a.get("grader") in _ESCALATION_HANDLER)
+    since = f" (architect 재검토 {acks}회 이후)" if acks else ""
     print(f"  {loop['feature']}  [{badge}]  rubric={loop['rubric']}  "
-          f"revision {loop['revision_count']}/{loop['escalation_threshold']}")
+          f"revision {loop['revision_count']}/{loop['escalation_threshold']}{since}")
     gates = loop.get("gates_passed")
     if gates:
         print(f"    통과한 결정론 게이트: {', '.join(gates)}")
+    broken = loop.get("gates_broken")
+    if broken:
+        print(f"    ❌ 미통과 결정론 게이트: {', '.join(broken)} — 통과 전에는 passed 불가")
     for a in loop["attempts"]:
         extra = ""
         if "must" in a:
@@ -475,8 +552,11 @@ def cmd_self(args) -> int:
     print(f"  rubrics: {', '.join(rubrics) or '(없음 — .claude/rubrics/ 생성 권장)'}")
     n = len(list(_STATE.glob("*.json"))) if _STATE.exists() else 0
     print(f"  진행/완료 루프: {n}개")
-    print(f"  grader 종류: 결정론={sorted(_DETERMINISTIC)} / judge={sorted(_JUDGE)}")
-    print(f"  에스컬레이션 임계: {_ESCALATION_THRESHOLD}회")
+    print(f"  grader 종류: 결정론={sorted(_DETERMINISTIC)} / judge={sorted(_JUDGE)}"
+          f" / 에스컬레이션 처리자={sorted(_ESCALATION_HANDLER)}")
+    print(f"  에스컬레이션 임계: judge revision {_ESCALATION_THRESHOLD}회 "
+          f"(결정론 grader 의 revision 은 예산을 쓰지 않는다)")
+    print("  상태 모델: 파생 — status/revision_count/gates_* 는 attempts 의 순수 함수 (ADR-024)")
     return 0
 
 
@@ -499,8 +579,9 @@ def main() -> None:
     p_rec.add_argument("--should", type=int, help="SHOULD 건수 (judge grader)")
     p_rec.add_argument("--notes", help="판정 메모")
     p_rec.add_argument("--rubric", help="루프 미개시 시 자동 개시할 rubric")
-    p_rec.add_argument("--ack-escalation", metavar="WHO/WHAT",
-                       help="에스컬레이션 재검토 완료 표시 (escalated 상태에서 pass|fail 에 필요)")
+    # `--ack-escalation` 은 삭제했다 (ADR-024 결정 3). 플래그는 **자기 주장**이라
+    # 판정을 낸 reviewer 가 임의 문자열 한 줄로 자기 에스컬레이션을 닫을 수 있었다.
+    # 유일한 ack 는 `--grader architect` 기록이고, 그것은 주장이 아니라 **이력**이다.
 
     p_st = sub.add_parser("status", help="특정 feature 루프 상태")
     p_st.add_argument("feature", help="Feature ID")

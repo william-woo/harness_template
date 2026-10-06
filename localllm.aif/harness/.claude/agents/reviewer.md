@@ -128,9 +128,22 @@ python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict revisi
 python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict fail --notes "<설계 사유>"
 ```
 
-> **에스컬레이션 (자동)**: NEEDS REVISION 3회 누적 시 verify-loop 가 `escalated` 로 전환하고
-> Planner+Architect 재검토를 안내한다. 별도 카운팅 불필요 — 산문 규칙이 상태로 코드화됨.
-> 결정론 grader(lint/design-review)를 먼저 `record` 하면 judge 판정 전에 값싼 게이트가 걸린다.
+> **에스컬레이션 (자동)**: NEEDS REVISION 3회 누적 시 verify-loop 가 `escalated` 가 되고
+> 그 상태에서 **reviewer 의 `pass` 는 거부된다**(exit 1). 별도 카운팅 불필요 — 산문 규칙이
+> 상태로 코드화됨. 푸는 수단은 하나뿐이다:
+>
+> ```bash
+> python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass --notes "<결정 내용>"
+> ```
+>
+> 재검토를 **수행한** 역할(architect)이 기록해야 하고, 판정을 낸 reviewer 는 자기 에스컬레이션을
+> 승인할 수 없다 (ADR-024 결정 3). 재검토 뒤 예산은 다시 3회가 된다.
+>
+> **결정론 grader 는 순서와 무관하다**: lint/design-review 를 먼저 기록하든 판정 뒤에 기록하든
+> 결론이 같다 — 게이트는 grader 별 **마지막** verdict 으로 집계된다. 다만 먼저 돌리면 값싼 실패를
+> 먼저 알게 되어 리뷰 품이 덜 든다. (예전 서술 "먼저 record 하면 judge 판정 전에 값싼 게이트가
+> 걸린다" 는 **거짓**이었다 — 실측상 `lint fail → reviewer pass` 가 그대로 `passed` 였다.
+> 지금은 깨진 게이트가 있으면 순서와 무관하게 `passed` 가 되지 않는다.)
 
 ## 금지 사항
 

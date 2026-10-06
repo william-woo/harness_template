@@ -98,7 +98,8 @@ QA 판정을 verify-loop 에 기록한다 (rubric: `.claude/rubrics/qa-acceptanc
 > **AIF 변형**: acceptance_criteria 를 항목 단위로 판정하려면
 > `python3 .claude/bin/aif_judge.py plan qa-acceptance --target <파일들>` (ADR-020).
 > `met` 은 `파일:행` 또는 실행 출력 인용이 있어야 인정된다.
-결정론 grader(qa-browser 등)를 먼저 기록해 값싼 게이트를 통과시킨 뒤 QA judge 판정을 남긴다:
+결정론 grader(qa-browser 등)를 먼저 돌려 값싼 실패를 먼저 알고, 그 뒤 QA judge 판정을 남긴다
+(순서는 결론을 바꾸지 않는다 — 게이트는 grader 별 **마지막** verdict 으로 집계된다):
 
 ```bash
 # (선택) 결정론 grader 먼저
@@ -112,6 +113,14 @@ python3 .claude/bin/verify_loop.py record <F> --grader qa --verdict fail --notes
 ```
 
 > `verify_loop.py status <F>` 로 Reviewer→QA 전 구간의 grader 이력·재시도·에스컬레이션을 한눈에 본다.
+>
+> **깨진 게이트가 있으면 `passed` 가 되지 않는다**: qa-browser 등 결정론 grader 의 마지막 verdict 이
+> `pass` 가 아니면 QA 의 `pass` 를 기록해도 루프는 `in-loop` 로 남는다 (`gates_broken` 에 표시).
+> 게이트를 고쳐 다시 기록하거나, 애초에 기록하지 않는다 — 기록이 없는 게이트는 제약하지 않는다.
+>
+> **에스컬레이션**: revision 3회 누적 시 QA 의 `pass` 도 거부된다(exit 1). 푸는 수단은
+> `record <F> --grader architect --verdict pass --notes "<결정 내용>"` 뿐이다 — 판정을 낸 QA 가
+> 자기 에스컬레이션을 승인할 수는 없다 (ADR-024 결정 3).
 
 ## 회귀 테스트 관리
 
