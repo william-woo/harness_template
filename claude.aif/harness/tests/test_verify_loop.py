@@ -16,6 +16,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -358,13 +359,32 @@ class VerifyLoopTerminalStateTest(unittest.TestCase):
         self.assertNotEqual(res.returncode, 0, "에스컬레이션이 아무것도 막지 않았다")
         self.assertEqual(self.loop("F011")["status"], "escalated", "거부됐는데 상태가 바뀌었다")
 
-    def test_ack_를_붙이면_통과하고_누가_왜가_남는다(self):
-        self._escalate("F012")
-        res = self.rec("F012", "reviewer", "pass", "--ack-escalation", "architect: 범위 축소")
-        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        d = self.loop("F012")
-        self.assertEqual(d["status"], "passed")
-        self.assertIn("범위 축소", d.get("escalation_acked", {}).get("note", ""))
+    def test_판정한_역할은_자기_에스컬레이션을_승인할_수_없다(self):
+        """이 테스트는 **뒤집힌 것**이다 (ADR-024 결정 3 / 실측 2).
+
+        원래 이름은 `test_ack_를_붙이면_통과하고_누가_왜가_남는다` 였고,
+        `reviewer pass --ack-escalation "architect: 범위 축소"` 가 rc=0 으로 `passed` 가
+        되는 것을 **정상 경로로 고정**하고 있었다. 그런데 그 플래그는 검증되지 않는 자유
+        문자열이라, 실제로 기록된 것은 `acked_by=reviewer` 였다 — 판정을 낸 당사자가 자기
+        에스컬레이션을 자기 주장 한 줄로 닫은 것이다. 통과하는 테스트가 그 구멍을 계약으로
+        만들고 있었다.
+
+        ack 는 ① 재검토를 **수행한** 역할이어야 하고 ② 판정을 낸 역할과 **달라야** 한다.
+        reviewer·qa 는 둘 다 위반한다. 그래서 플래그를 삭제하고, 유일한 ack 를
+        `--grader architect` 기록으로 뒀다 (아래 `test_architect_재검토가_예산을_갱신한다`).
+        """
+        for grader in ("reviewer", "qa"):
+            with self.subTest(grader=grader):
+                f = f"F012{grader}"
+                for _ in range(3):
+                    self.rec(f, grader, "revision")
+                # 플래그 자체가 없어졌다 — argparse 가 거부한다 (rc=2)
+                res = self.rec(f, grader, "pass", "--ack-escalation", "architect: 범위 축소")
+                self.assertNotEqual(res.returncode, 0, "self-ack 플래그가 아직 살아 있다")
+                # 플래그 없이도 당연히 닫히지 않는다
+                self.assertNotEqual(self.rec(f, grader, "pass").returncode, 0)
+                self.assertEqual(self.loop(f)["status"], "escalated",
+                                 f"{grader} 가 자기 에스컬레이션을 닫았다")
 
     def test_에스컬레이션_아닐_때는_ack_가_필요없다(self):
         """경계 — revision 2회면 아직 유계 안이다."""
@@ -375,10 +395,17 @@ class VerifyLoopTerminalStateTest(unittest.TestCase):
 
     # ── architect ────────────────────────────────────────────────────────
     def test_architect_단독으로는_루프가_통과되지_않는다(self):
+        """architect 는 예산을 갱신할 뿐 **판정을 내지 않는다**.
+
+        rc 기대가 바뀌었다 (ADR-024 결정 3 / 실측 5): 예전엔 `escalated` 가 아닌 상태의
+        architect 기록을 **전부 거부**해서 rc=1 이었고, 그 바람에 설계자가 설계 거부를
+        낼 수단이 이 도구에 없었다. 지금은 기록은 받되 `passed` 가 되지 않는 것으로
+        같은 불변식을 지킨다 — 막아야 하는 것은 기록이 아니라 **종결**이다.
+        """
         res = self.rec("F020", "architect", "pass")
-        self.assertNotEqual(res.returncode, 0,
-                            "architect 가 reviewer 없이 루프를 종결시켰다")
-        self.assertNotEqual(self.loop("F020")["status"], "passed")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.loop("F020")["status"], "in-loop",
+                         "architect 가 reviewer 없이 루프를 종결시켰다")
 
     def test_architect_는_에스컬레이션을_받아_재무장한다(self):
         self._escalate("F021")
@@ -399,6 +426,246 @@ class VerifyLoopTerminalStateTest(unittest.TestCase):
         for bad in ("Lint", "lnt", "Architect", "reviewr"):
             with self.subTest(grader=bad):
                 self.assertNotEqual(self.rec("F023", bad, "pass").returncode, 0)
+
+class VerifyLoopDerivedStateTest(unittest.TestCase):
+    """ADR-024 — `status` 를 전이시키지 않고 이력에서 파생한다.
+
+    3 라운드(09-28 ×2, 10-05)의 결함이 전부 상태 전이 주변에서 났다. 원인은 개별 분기가
+    아니라 모델이었다: `status` 하나가 서로 독립인 네 사실(판정·게이트·예산·종결)을 4값
+    enum 에 접고 있어서, 모든 규칙이 "둘이 어긋나면 누가 이기나" 로만 표현됐다. 게다가
+    결론이 **직전 1건**으로 재계산돼 순서에 의존했다.
+
+    여기 있는 것은 그 모델이 낳은 실측 결함(ADR-024 실측 1·2·4·5·7·9)의 회귀 가드다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "rubrics").mkdir(parents=True)
+        (self.root / ".claude" / "rubrics" / "code-review.md").write_text("# rubric", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @property
+    def _state(self) -> Path:
+        return self.root / ".claude" / "state" / "verify-loop"
+
+    def rec(self, feature: str, grader: str, verdict: str, *extra):
+        return _run(self.root, _BIN, "record", feature, "--grader", grader,
+                    "--verdict", verdict, "--rubric", "code-review", *extra)
+
+    def loop(self, feature: str) -> dict:
+        return json.loads((self._state / f"{feature}.json").read_text(encoding="utf-8"))
+
+    def play(self, feature: str, history) -> None:
+        """`[(grader, verdict), ...]` 를 순서대로 기록한다."""
+        for grader, verdict in history:
+            self.rec(feature, grader, verdict)
+
+    # ── 실측 1: 같은 두 사실이 순서에 따라 다른 결론을 냈다 ──────────────────
+    def test_게이트_결과는_기록_순서에_의존하지_않는다(self):
+        """`lint fail → reviewer pass` 는 **passed**, 반대 순서는 `in-loop` 였다 (실측).
+
+        전이 모델에서는 결론이 직전 1건으로 정해지므로 같은 두 사실이 순서에 따라 갈렸다.
+        파생은 전체 이력을 집계하므로 두 순서가 같은 답을 낸다 — 분기를 더해 맞춘 게 아니다.
+        """
+        self.play("F101", [("lint", "fail"), ("reviewer", "pass")])
+        self.play("F102", [("reviewer", "pass"), ("lint", "fail")])
+        self.assertEqual(self.loop("F101")["status"], self.loop("F102")["status"])
+        self.assertEqual(self.loop("F101")["status"], "in-loop",
+                         "깨진 게이트를 둔 채 통과했다")
+        self.assertIn("lint", self.loop("F101")["gates_broken"])
+
+    def test_게이트는_그_grader_의_마지막_verdict_만_본다(self):
+        """고쳐서 다시 통과시킨 게이트가 영원히 루프를 막으면 아무도 못 닫는다."""
+        self.play("F103", [("lint", "fail"), ("lint", "pass"), ("reviewer", "pass")])
+        self.assertEqual(self.loop("F103")["status"], "passed")
+        self.assertEqual(self.loop("F103")["gates_broken"], [])
+
+    def test_기록이_없는_게이트는_제약하지_않는다(self):
+        """실측: 14 루프 중 7건이 결정론 기록 0건이다. 필수화하면 실무를 깬다."""
+        self.play("F104", [("reviewer", "pass")])
+        self.assertEqual(self.loop("F104")["status"], "passed")
+
+    # ── 실측 9: 결정론 revision 이 judge 예산을 잠식해 무인 드라이버가 멈췄다 ──
+    def test_결정론_revision_은_judge_예산을_쓰지_않는다(self):
+        """cycle_driver 는 `--grader test` 로 재작업을 돈다. 그 revision 이 judge 예산을
+        3회 잠식해 `escalated` 를 만들었고, 이어지는 `reviewer pass` 가 exit 1 로 막혔다.
+        드라이버는 ack 수단이 없으므로 무인 사이클이 **닫히지 않았다** (실측 9).
+        """
+        for _ in range(5):
+            self.rec("F110", "test", "revision")
+        d = self.loop("F110")
+        self.assertEqual(d["revision_count"], 0, "결정론 재작업이 judge 예산을 먹었다")
+        self.assertEqual(d["status"], "in-loop")
+        # 드라이버의 실제 흐름: 결정론 게이트가 끝내 통과한 뒤 judge 가 판정한다
+        self.rec("F110", "test", "pass")
+        res = self.rec("F110", "reviewer", "pass")
+        self.assertEqual(res.returncode, 0, f"무인 사이클이 막혔다: {res.stdout}{res.stderr}")
+        self.assertEqual(self.loop("F110")["status"], "passed")
+
+    def test_에스컬레이션_중에도_증거_기록은_막히지_않는다(self):
+        """막아야 하는 것은 **종결**이지 기록이 아니다. 증거 기록을 막은 것이 실측 9 의 원인."""
+        for _ in range(3):
+            self.rec("F111", "reviewer", "revision")
+        for grader, verdict in (("test", "revision"), ("test", "pass"),
+                                ("reviewer", "revision"), ("qa", "fail")):
+            with self.subTest(grader=grader, verdict=verdict):
+                res = self.rec("F111", grader, verdict)
+                self.assertEqual(res.returncode, 0, f"{grader}:{verdict} 기록이 막혔다")
+
+    # ── 실측 4: ack 뒤 예산이 1회뿐이었다 ───────────────────────────────────
+    def test_architect_재검토가_예산을_갱신한다(self):
+        """예전엔 `revision_count` 를 아무도 되돌리지 않아 ack 직후 revision 1건에 즉시
+        재에스컬레이션했다 — rev 8 짜리 feature 가 architect 왕복 6회를 요구했다 (실측 4).
+        예산 파생식이 "마지막 architect 이후" 이므로 갱신이 공짜로 따라온다.
+        """
+        for _ in range(3):
+            self.rec("F120", "reviewer", "revision")
+        self.assertEqual(self.loop("F120")["status"], "escalated")
+        self.rec("F120", "architect", "pass", "--notes", "범위 축소 결정")
+        d = self.loop("F120")
+        self.assertEqual(d["status"], "in-loop")
+        self.assertEqual(d["revision_count"], 0, "ack 가 예산을 갱신하지 않았다")
+        self.assertEqual(d.get("escalation_acked", {}).get("by"), "architect")
+        self.assertNotIn("escalated_at", d, "해제됐는데 진입 시각이 남아 있다")
+        # 갱신 뒤에도 유계다 — 3회째에 다시 멈춘다
+        for n in (1, 2):
+            self.rec("F120", "reviewer", "revision")
+            self.assertEqual(self.loop("F120")["status"], "in-loop", f"{n}회차에 멈췄다")
+        self.rec("F120", "reviewer", "revision")
+        self.assertEqual(self.loop("F120")["status"], "escalated", "갱신이 유계를 없앴다")
+
+    # ── 실측 5: architect 의 --verdict 가 무시됐다 ─────────────────────────
+    def test_architect_의_verdict_에_의미가_있다(self):
+        """`pass`/`revision`/`fail` 셋 다 결과가 같았다 — 필수 인자인데 의미가 없었다.
+        반대로 `escalated` 가 아니면 architect 기록이 **전부 거부**돼, 설계자가 설계 거부를
+        낼 수단이 이 도구에 없었다 (실측 5).
+        """
+        self.rec("F130", "architect", "fail", "--notes", "접근 자체가 틀렸다")
+        self.assertEqual(self.loop("F130")["status"], "failed",
+                         "설계자의 설계 거부가 반영되지 않았다")
+        for verdict in ("pass", "revision"):
+            with self.subTest(verdict=verdict):
+                f = f"F131{verdict}"
+                for _ in range(3):
+                    self.rec(f, "reviewer", "revision")
+                self.rec(f, "architect", verdict, "--notes", "재무장")
+                self.assertEqual(self.loop(f)["status"], "in-loop")
+
+    # ── 실측 7: 저장된 요약이 이력과 갈라져 사람이 손으로 고쳤다 ──────────────
+    def test_요약_필드를_손으로_고쳐도_다음_record_가_바로잡는다(self):
+        """실측 7: 상태 파일에 사람이 직접 넣은 `status_restored` 키가 있었다. 저장된
+        `status` 가 이력과 어긋났기 때문이다(`--force` 는 이력을 지우므로 쓸 수 없었다).
+        파생이면 그 교정 자체가 불필요해진다 — 저장값은 캐시일 뿐이다.
+        """
+        self._state.mkdir(parents=True, exist_ok=True)
+        (self._state / "F140.json").write_text(json.dumps({
+            "attempts": [{"n": 1, "grader": "reviewer", "kind": "judge", "verdict": "revision"},
+                         {"n": 2, "grader": "reviewer", "kind": "judge", "verdict": "revision"}],
+            "status": "passed",          # 위조: 이력은 revision 2회뿐이다
+            "revision_count": 0,
+            "gates_passed": ["lint", "qa-browser"],   # 위조: 결정론 기록이 없다
+        }), encoding="utf-8")
+        res = _run(self.root, _BIN, "status", "F140")
+        self.assertIn("IN-LOOP", res.stdout, f"위조된 status 를 그대로 믿었다: {res.stdout}")
+        self.rec("F140", "reviewer", "revision")
+        d = self.loop("F140")
+        self.assertEqual(d["status"], "escalated")
+        self.assertEqual(d["revision_count"], 3, "위조된 카운터가 살아남았다")
+        self.assertEqual(d["gates_passed"], [], "기록에 없는 게이트가 통과로 남았다")
+
+    def test_저장된_kind_라벨로는_분류를_바꿀_수_없다(self):
+        """`kind` 를 믿으면 손으로 고친 라벨 하나가 판정 주체를 바꾼다 — 파생은 grader 이름으로 센다."""
+        self._state.mkdir(parents=True, exist_ok=True)
+        (self._state / "F141.json").write_text(json.dumps({
+            "attempts": [{"n": 1, "grader": "lint", "kind": "judge", "verdict": "pass"}],
+        }), encoding="utf-8")
+        res = _run(self.root, _BIN, "status", "F141")
+        self.assertIn("IN-LOOP", res.stdout, "결정론 grader 가 kind 라벨만으로 판정을 냈다")
+
+    # ── 문서 ↔ 코드 (F020 AC5) ──────────────────────────────────────────────
+    def test_문서의_파생_예시가_실제_실행과_일치한다(self):
+        """`verify-loop.md` 의 "이력 → 상태" 표 각 행을 CLI 로 실제 실행해 대조한다.
+
+        문서만 고치면 다시 어긋난다 — 3차 리뷰가 지적한 전이표가 정확히 그랬다
+        (코드가 바뀌는 동안 표는 `pass → passed` 에 머물렀다). 표가 코드와 1:1 임을
+        테스트가 고정한다.
+        """
+        doc = (Path(__file__).resolve().parent.parent
+               / ".claude" / "commands" / "verify-loop.md")
+        rows = _parse_history_table(doc.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(rows), 10,
+                                f"문서의 '이력 → 상태' 표를 찾지 못했다 ({len(rows)}행) — "
+                                "표가 사라졌거나 형식이 바뀌었다면 이 테스트부터 고쳐라")
+        # 행이 맞는지만 보면 표가 **줄어드는** 것은 못 잡는다. 표가 설명해야 할 것을 건다.
+        histories = [h for h, _, _ in rows]
+        self.assertEqual({e for _, e, _ in rows},
+                         {"in-loop", "passed", "failed", "escalated"},
+                         "표가 네 상태를 모두 예시하지 않는다")
+        order_pair = [("lint", "fail"), ("reviewer", "pass")]
+        for h in (order_pair, list(reversed(order_pair))):
+            self.assertIn(h, histories,
+                          "순서 독립성(ADR-024 결정 2)을 보이는 두 행이 표에 모두 있어야 한다")
+        for i, (history, expected, source) in enumerate(rows):
+            with self.subTest(row=source):
+                feature = f"F2{i:02d}"
+                self.play(feature, history)
+                self.assertEqual(self.loop(feature)["status"], expected,
+                                 f"문서와 코드가 어긋난다: {source}")
+
+
+# 표 셀 안의 `grader:verdict` (뒤에 `×N` 반복이 붙을 수 있다)
+_HISTORY_STEP = re.compile(r"`([a-z][a-z-]*):(pass|revision|fail)`(?:\s*×(\d+))?")
+
+
+def _parse_history_table(markdown: str):
+    """`verify-loop.md` 의 "이력 → 상태" 표를 `(history, expected, 원문)` 목록으로 읽는다.
+
+    표 형식에 의존하므로, 못 찾으면 호출부가 **행 수로 실패**한다 (조용한 통과 금지).
+    """
+    rows = []
+    for line in markdown.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        steps = _HISTORY_STEP.findall(cells[0])
+        expected = cells[1].strip("`")
+        if not steps or expected not in ("in-loop", "passed", "failed", "escalated"):
+            continue
+        history = []
+        for grader, verdict, repeat in steps:
+            history.extend([(grader, verdict)] * int(repeat or 1))
+        rows.append((history, expected, cells[0]))
+    return rows
+
+
+class CycleDriverEscalationSignalTest(unittest.TestCase):
+    """ADR-024 결정 6 — 무인 드라이버가 **존재한 적 없는 키**를 읽고 있었다 (실측 8).
+
+    `cycle_driver.py` 는 `state.get("escalated")` 로 에스컬레이션을 감지했는데, 상태
+    파일에 그런 키는 한 번도 없었다 (`status == "escalated"` 가 실제 표현이다). 즉
+    에스컬레이션 신호가 드라이버에 **닿은 적이 없다**. 정적으로 고정한다 — 실제 구동은
+    OpenCode·로컬 모델을 요구하므로 단위 테스트가 태울 수 없다.
+    """
+
+    def test_드라이버가_실존하는_키로_에스컬레이션을_읽는다(self):
+        driver = (Path(__file__).resolve().parent.parent
+                  / ".claude" / "bin" / "cycle_driver.py")
+        if not driver.exists():
+            self.skipTest("cycle_driver 는 localllm 계열 변형에만 있다 (d-2 오버레이)")
+        # 주석은 떼고 본다 — 수정 자리의 주석이 "예전엔 이 키를 읽었다" 며 옛 키를 **인용**한다.
+        # 그 인용을 결함으로 잡으면 설명을 지우게 되고, 다음 사람은 왜 고쳤는지 모른다.
+        src = driver.read_text(encoding="utf-8")
+        code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
+        self.assertNotIn('state.get("escalated")', code,
+                         "상태 파일에 없는 키를 읽는다 — 신호가 영영 닿지 않는다")
+        self.assertIn('state.get("status") == "escalated"', code,
+                      "에스컬레이션 감지 자체가 사라졌다")
+
 
 class HillClimbResilienceTest(unittest.TestCase):
     """비정형 트레이스 소스가 Loop 4 집계를 죽이지 않는지 (F020 MUST-5)."""
