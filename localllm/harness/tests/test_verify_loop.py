@@ -404,8 +404,11 @@ class VerifyLoopTerminalStateTest(unittest.TestCase):
         """
         res = self.rec("F020", "architect", "pass")
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertEqual(self.loop("F020")["status"], "in-loop",
+        d = self.loop("F020")
+        self.assertEqual(d["status"], "in-loop",
                          "architect 가 reviewer 없이 루프를 종결시켰다")
+        self.assertNotIn("escalation_acked", d,
+                         "에스컬레이션이 없었는데 해제 기록이 생겼다")
 
     def test_architect_는_에스컬레이션을_받아_재무장한다(self):
         self._escalate("F021")

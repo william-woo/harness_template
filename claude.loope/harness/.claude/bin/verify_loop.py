@@ -161,8 +161,12 @@ def _derive(attempts: list, threshold: int) -> dict:
         if grader in _ESCALATION_HANDLER:
             # 재검토가 있었다 — 예산을 **갱신**한다. 이것이 없어서 ack 뒤 예산이 1회뿐이었고
             # rev 8 짜리 feature 는 architect 왕복 6회를 요구했다 (ADR-024 실측 4).
+            if budget >= threshold:
+                # 실제로 **막혀 있던 것을 푼 경우만** ack 으로 기록한다. 예산이 남아 있는데
+                # 들른 architect 까지 ack 으로 적으면, 있지도 않은 에스컬레이션이 해제된
+                # 것처럼 보인다 — 이 ADR 이 없애려는 종류의 조용한 거짓이다.
+                acked = {"by": grader, "at": ts, "note": a.get("notes", "")}
             budget, escalated_at = 0, None
-            acked = {"by": grader, "at": ts, "note": a.get("notes", "")}
             if v == "fail":
                 # 설계 거부는 설계자의 고유 권한이다. 예전엔 architect 의 verdict 가
                 # pass·revision·fail 모두 같은 결과였다 — 필수 인자인데 의미가 없었다.
