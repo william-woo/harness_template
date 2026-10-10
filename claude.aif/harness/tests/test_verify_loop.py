@@ -508,6 +508,34 @@ class VerifyLoopDerivedStateTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"무인 사이클이 막혔다: {res.stdout}{res.stderr}")
         self.assertEqual(self.loop("F110")["status"], "passed")
 
+    def test_결정론_revision_도_게이트를_깬_것으로_본다(self):
+        """`fail` 만 broken 으로 보면 **드라이버가 포기한 루프가 통과로 읽힌다**.
+
+        `cycle_driver` 는 재작업을 `--grader test --verdict revision` 으로 돈다.
+        한도까지 고치고도 못 고치면 마지막 기록이 `revision` 인 채 끝난다 — 그 상태가
+        `passed` 로 읽히면 "테스트가 깨진 채 통과" 가 된다.
+
+        이 규칙은 ADR-024 가 적은 "마지막 verdict 이 fail 일 때" 보다 한 칸 넓다.
+        넓힌 근거가 코드 주석에만 있고 **테스트가 없어서**, `v != "pass"` 를
+        `v == "fail"` 로 좁히는 변이가 41건 전부를 통과했다 (Planner 실측).
+        """
+        self.rec("F120", "test", "revision")
+        self.rec("F120", "reviewer", "pass")
+        d = self.loop("F120")
+        self.assertIn("test", d.get("gates_broken", []),
+                      "결정론 revision 이 broken 으로 안 잡혔다")
+        self.assertNotEqual(d["status"], "passed",
+                            "마지막 테스트 기록이 revision 인데 통과로 읽혔다")
+
+    def test_게이트가_다시_통과하면_broken_에서_빠진다(self):
+        """broken 이 누적이면 한 번 깨진 게이트가 영영 통과를 막는다 — 마지막 결과만 유효하다."""
+        self.rec("F121", "test", "revision")
+        self.rec("F121", "test", "pass")
+        self.rec("F121", "reviewer", "pass")
+        d = self.loop("F121")
+        self.assertEqual(d.get("gates_broken"), [])
+        self.assertEqual(d["status"], "passed")
+
     def test_에스컬레이션_중에도_증거_기록은_막히지_않는다(self):
         """막아야 하는 것은 **종결**이지 기록이 아니다. 증거 기록을 막은 것이 실측 9 의 원인."""
         for _ in range(3):
