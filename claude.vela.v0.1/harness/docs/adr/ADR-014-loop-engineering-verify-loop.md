@@ -1,8 +1,9 @@
 # ADR-014: `claude.loope` 변형 — Loop 2(검증 루프) 정형화
 
 > Feature: F020 — Phase 15 `claude.loope` 변형
-> 상태: `Accepted` (구현 — verify_loop.py + rubrics + reviewer/qa/product-cycle 연동)
-> 관련: ADR-011(productmgr/product-cycle), LangChain "The Art of Loop Engineering"
+> 상태: `Accepted` — 단 **결정 3 의 상태 모델과 결정 5 의 순서 서술은 [ADR-024](./ADR-024-verify-loop-derived-state.md) 로 대체**됐다 (2026-10-05).
+>   상태는 전이시키지 않고 이력에서 파생하며, "결정론 먼저" 는 게이트로 동작하지 않는다.
+> 관련: ADR-011(productmgr/product-cycle), **ADR-024(파생 상태 — 결정 3·5 대체)**, LangChain "The Art of Loop Engineering"
 
 ## 맥락
 
@@ -32,7 +33,9 @@ LangSmith(SaaS) 의존. **"루프를 명시적·유계로 만든다"는 규율�
 ### 결정 3 — `verify_loop.py` (stdlib): rubric + 재시도 상태 + 에스컬레이션
 - `start/record/status/list/rubric/self`. 상태: `.claude/state/verify-loop/<F>.json` (런타임 gitignore).
 - **grader 종류 구분** (LangChain 차용): 결정론(lint/design-review/qa-browser/test) vs judge(reviewer/qa).
-- verdict `pass|revision|fail` → 상태 전이. **revision 3회 누적 → 자동 `escalated`** (산문 규칙의 코드화).
+- verdict `pass|revision|fail` 을 기록한다. **revision 3회 누적 → `escalated`** (산문 규칙의 코드화).
+  > ~~상태 전이~~ → **ADR-024 로 대체**: 상태는 전이시키지 않고 `_derive` 가 이력 전체에서
+  > 파생한다. 전이 모델은 `status` 하나에 독립인 네 사실을 접어 세 라운드 연속으로 결함을 냈다.
 - 과잉 추상화 금지(Karpathy): 클래스 프레임워크 아님 — 함수 + JSON 상태.
 
 ### 결정 4 — rubric 을 명시 파일로 (`.claude/rubrics/*.md`)
@@ -41,7 +44,10 @@ reviewer.md/qa.md 의 암묵 체크리스트를 **명시 rubric** 으로 승격 
 
 ### 결정 5 — 기존 흐름에 연동 (대체 아님)
 reviewer.md/qa.md 의 "판정 후 액션" 에 `verify_loop record` 를 추가하고, product-cycle 검증 단계에
-verify-loop 훅을 단다. **결정론 grader 먼저 → judge 나중** (값싼 실패를 앞에서 게이트).
+verify-loop 훅을 단다.
+> ~~**결정론 grader 먼저 → judge 나중** (값싼 실패를 앞에서 게이트)~~ — **ADR-024 로 대체**.
+> 실측 결과 게이트로 **걸리지 않았다**: `lint fail → reviewer pass` 가 `passed` 였다.
+> 지금은 순서와 무관하다 — grader 별 **마지막** verdict 이 `pass` 가 아니면 `passed` 불가.
 
 ### 결정 6 — 격리: LINT-MR-13
 loop 오버레이(`verify_loop.py`, `verify-loop.md`, `.claude/rubrics/`)는 **claude.loope 에만**.
@@ -74,7 +80,12 @@ Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→ha
   `.claude/state/verify-loop/`.
 - 신규(Loop 4): `hill_climb.py`, `hill-climb.md` (결정 7).
 - 변경: reviewer.md/qa.md(record 연동), product-cycle.md(검증 단계 훅). 이 ADR, LINT-MR-13(6파일).
+  > 변형 수 서술 주의: 이 ADR 작성 시점엔 loope 1곳이었으나, 계보 승격으로 지금은 **7곳**이
+  > loop 오버레이를 보유한다 (loope·localllm×3·aif·vela). 전체 매트릭스는 15 변형이다.
 - 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn/analytics 로 대체).
-- 검증: mock E2E — (Loop 2) 결정론→judge, revision→재시도→pass, revision 3회→escalation.
-  (Loop 4) 합성 트레이스로 5개 개선 후보 heuristic(에스컬레이션·revision율·big handoff·반복·learnings0)
-  모두 발화 확인.
+- 검증 (테스트 이름으로 — 2026-10-14 기준 `tests/test_verify_loop.py` 46건):
+  - Loop 2 계약·파생: `VerifyLoopContractTest` · `VerifyLoopDerivedStateTest` ·
+    `VerifyLoopTerminalStateTest` · `VerifyLoopFourthReviewTest`
+  - Loop 4 heuristic 5종 발화: `HillClimbHeuristicTest`
+  > 이 줄은 원래 "mock E2E 로 모두 발화 확인" 이라고만 적었고 인용하는 테스트가 **없었다**.
+  > 실제로 heuristic 을 하나 죽여도 스위트가 통과했다 (F020 4차 MUST-1). 이름을 적는다.

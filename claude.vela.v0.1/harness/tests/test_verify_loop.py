@@ -674,6 +674,133 @@ def _parse_history_table(markdown: str):
     return rows
 
 
+class VerifyLoopFourthReviewTest(unittest.TestCase):
+    """F020 4차 리뷰 — 변이 18건 중 **생존한** 3건을 고정한다.
+
+    리뷰가 변이를 하나씩 걸어 15건 검출·3건 생존을 확인했다. 생존한 것들의 공통점은
+    테스트가 **CLI 경로만** 태웠다는 데 있다:
+
+    - `_derive` 의 "예산 미소진" 절 — 그 이력(예산 소진 뒤의 judge `pass`)은 `record`
+      게이트가 막아서 CLI 로 만들 수 없다. 그런데 **F019 상태 파일에 실존한다**.
+    - `escalated_at` 의 `== threshold` — CLI 타임스탬프가 초 단위라 연속 기록이 같은
+      값이 되어 `>=` 변이를 가린다.
+    - `start --force` — 게이트가 `record` 한쪽에만 걸려 있었다 (옆으로 난 길).
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "rubrics").mkdir(parents=True)
+        (self.root / ".claude" / "rubrics" / "code-review.md").write_text("# rubric", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @property
+    def _state(self) -> Path:
+        return self.root / ".claude" / "state" / "verify-loop"
+
+    def rec(self, feature: str, grader: str, verdict: str, *extra):
+        return _run(self.root, _BIN, "record", feature, "--grader", grader,
+                    "--verdict", verdict, "--rubric", "code-review", *extra)
+
+    def loop(self, feature: str) -> dict:
+        return json.loads((self._state / f"{feature}.json").read_text(encoding="utf-8"))
+
+    def _write_history(self, feature: str, attempts: list, **extra) -> None:
+        """이력을 **직접** 쓴다 — 게이트가 막아 CLI 로 만들 수 없는 형태를 재현한다.
+
+        손으로 고친 파일을 파생이 바로잡는다는 것이 AC1 의 계약이고, 실제로 그런
+        파일이 리포에 있다(F019/F029). 그 입력을 테스트가 안 태우면 파생식의 절반은
+        고정되지 않는다.
+        """
+        self._state.mkdir(parents=True, exist_ok=True)
+        body = {"attempts": attempts}
+        body.update(extra)
+        (self._state / f"{feature}.json").write_text(json.dumps(body), encoding="utf-8")
+
+    @staticmethod
+    def _judge_attempts(verdicts: list) -> list:
+        """`verdict` 목록 → reviewer attempts (초 단위로 **서로 다른** ts)."""
+        return [{"n": i, "grader": "reviewer", "kind": "judge", "verdict": v,
+                 "ts": f"2026-01-01T00:00:{i:02d}+00:00"}
+                for i, v in enumerate(verdicts, start=1)]
+
+    # ── MUST-3 ───────────────────────────────────────────────────────────
+    def test_예산이_소진된_이력은_judge_pass_가_있어도_escalated_다(self):
+        """`_derive` 의 `and not exhausted` 를 고정한다 — 지우면 43건이 **전부** 통과했다.
+
+        그 변이에서 실제 **F019 가 `ESCALATED` → `PASSED`** 로 읽힌다 (rev 8 / 임계 3,
+        마지막 judge 기록이 `pass`). 즉 "아무도 재검토하지 않은 에스컬레이션" 이
+        통과로 보인다.
+
+        CLI 로는 이 이력을 만들 수 없다 — `record` 게이트가 escalated 상태의 judge
+        `pass` 를 거부한다. **F019 형태 — 게이트가 못 만들지만 이력에 실존**하므로
+        상태 파일을 직접 써서 파생만 검사한다.
+        """
+        self._write_history("F301", self._judge_attempts(["revision"] * 3 + ["pass"]),
+                            status="passed", revision_count=0)   # 저장값은 위조다
+        res = _run(self.root, _BIN, "status", "F301")
+        self.assertIn("ESCALATED", res.stdout,
+                      f"예산이 소진됐는데 judge 의 pass 가 루프를 닫았다: {res.stdout}")
+        # 결정론 게이트를 뒤늦게 통과시켜도 마찬가지다 — 예산은 게이트와 독립 차원이다
+        self.assertEqual(self.rec("F301", "lint", "pass").returncode, 0)
+        d = self.loop("F301")
+        self.assertEqual(d["status"], "escalated", "게이트가 다 통과하자 pass 로 읽혔다")
+        self.assertEqual(d["revision_count"], 3)
+
+    # ── MUST-4 ───────────────────────────────────────────────────────────
+    def test_에스컬레이션_루프는_force_로도_리셋되지_않는다(self):
+        """게이트가 `record` 한쪽에만 있어서 `start --force` 가 우회로였다 (실측).
+
+            reviewer revision ×3  → escalated
+            reviewer pass         → rc=1   (게이트 동작)
+            start --force         → rc=0   ← 여기로 빠져나갔다
+            reviewer pass         → rc=0 → passed
+
+        `--force` 는 이력을 지우고, 예산은 이력에서 파생되므로 에스컬레이션도 함께
+        사라진다. 그래서 "architect 기록이 **유일한** 해제 수단"(ADR-024 결정 3 ·
+        verify-loop.md)이 참이 되려면 이쪽도 막아야 한다.
+        """
+        for _ in range(3):
+            self.rec("F300", "reviewer", "revision")
+        self.assertEqual(self.loop("F300")["status"], "escalated")
+        self.assertNotEqual(self.rec("F300", "reviewer", "pass").returncode, 0)
+
+        res = _run(self.root, _BIN, "start", "F300", "--force")
+        self.assertNotEqual(res.returncode, 0, "--force 가 에스컬레이션을 우회했다")
+        self.assertIn("architect", res.stdout + res.stderr,
+                      "거부만 하고 푸는 법을 알려주지 않으면 다음 사람은 또 --force 를 찾는다")
+        d = self.loop("F300")
+        self.assertEqual(d["status"], "escalated", "거부됐는데 상태가 바뀌었다")
+        self.assertEqual(len(d["attempts"]), 3, "거부됐는데 이력이 지워졌다")
+
+        # 경계: 막는 것은 **에스컬레이션된 루프 하나**다. 해제 뒤에는 다시 허용된다 —
+        # 그러지 않으면 `--force` 가 사실상 사라져 경계가 과해진다.
+        self.assertEqual(
+            self.rec("F300", "architect", "pass", "--notes", "범위 축소 결정").returncode, 0)
+        self.assertEqual(_run(self.root, _BIN, "start", "F300", "--force").returncode, 0)
+        self.assertEqual(self.loop("F300")["attempts"], [], "--force 가 리셋하지 않았다")
+
+    # ── CONSIDER-2 ───────────────────────────────────────────────────────
+    def test_에스컬레이션_진입_시각은_임계를_넘은_그_순간이다(self):
+        """`escalated_at` 의 `== threshold` 를 `>= threshold` 로 넓히는 변이가 생존했다.
+
+        기존 테스트는 값이 **있는지**(truthy)만 봤다. `>=` 면 revision 이 더 쌓일 때마다
+        갱신돼 "언제 넘었는가" 가 **마지막 revision 시각**으로 바뀐다 — `status` 출력의
+        "… 부터" 가 거짓이 되고, 재검토 대기가 얼마나 길었는지 알 수 없게 된다.
+
+        CLI 타임스탬프는 초 단위라 연속 기록이 같은 값이 될 수 있어(그러면 변이가
+        가려진다) 이력을 직접 쓴다.
+        """
+        self._write_history("F302", self._judge_attempts(["revision"] * 4))
+        self.assertEqual(self.rec("F302", "lint", "pass").returncode, 0)
+        d = self.loop("F302")
+        self.assertEqual(d["status"], "escalated")
+        self.assertEqual(d["escalated_at"], "2026-01-01T00:00:03+00:00",
+                         "임계를 넘은 순간이 아니라 마지막 revision 시각이 남았다")
+
+
 class CycleDriverEscalationSignalTest(unittest.TestCase):
     """ADR-024 결정 6 — 무인 드라이버가 **존재한 적 없는 키**를 읽고 있었다 (실측 8).
 
@@ -696,6 +823,120 @@ class CycleDriverEscalationSignalTest(unittest.TestCase):
                          "상태 파일에 없는 키를 읽는다 — 신호가 영영 닿지 않는다")
         self.assertIn('state.get("status") == "escalated"', code,
                       "에스컬레이션 감지 자체가 사라졌다")
+
+
+class HillClimbHeuristicTest(unittest.TestCase):
+    """`_candidates` 의 개선후보 heuristic 5종이 **각각** 발화하는지 (F020 AC6).
+
+    `HillClimbResilienceTest` 는 **내성**만 본다("비정형 입력에 안 죽는다"). 그래서
+    heuristic 을 통째로 죽여도(`:174` 에스컬레이션, `:184` learnings-0 을 `if False:` 로)
+    전 테스트가 통과했다 — ADR-014 가 "5개 발화 확인" 이라 적은 그 검증이 리포에 없었다.
+
+    **후보 문구를 본다 — 신호 출력이 아니라.** 예를 들어 `escalated_features` 는
+    후보 생성(`_candidates:174`)과 신호 출력(`cmd_analyze:205`) 두 곳에서 쓰이므로,
+    `analyze` 사람용 출력에서 feature 이름만 찾으면 후보 생성을 지워도 테스트가 통과한다
+    (4차 리뷰가 짚은 함정). `--json` 의 `candidates` 배열이 곧 `_candidates` 의 산출이다.
+
+    임계가 있는 heuristic 은 **임계와 같은 값**으로 건다 — `>=` 를 `>` 로 좁히는
+    off-by-one 변이까지 함께 잡힌다.
+    """
+
+    # 그 heuristic 에만 있는 후보 문구 조각 (문구를 고치면 여기도 같이 고친다 — 계약이다)
+    MARKERS = {
+        "escalation": "Architect 선행 검토/Feature 분해 후보",
+        "revision-rate": "rubric 항목·Developer 가이드 재점검 후보",
+        "big-handoff": "Surgical Changes 위반 후보",
+        "repeat-feature": "반복 재작업",
+        "no-learnings": "pitfall 축적 습관 후보",
+    }
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fresh_root(self, label: str) -> Path:
+        """케이스마다 **새 루트**를 쓴다 (트레이스가 서로 새지 않게)."""
+        root = Path(self.tmp.name) / label
+        (root / ".claude" / "rubrics").mkdir(parents=True)
+        (root / ".claude" / "rubrics" / "code-review.md").write_text("# rubric", encoding="utf-8")
+        (root / ".claude" / "state" / "verify-loop").mkdir(parents=True)
+        return root
+
+    def _candidates(self, root: Path) -> list:
+        res = _run(root, _HILL, "analyze", "--json")
+        self.assertEqual(res.returncode, 0, f"analyze 가 죽었다: {res.stderr[:300]}")
+        return json.loads(res.stdout)["candidates"]
+
+    def _jsonl(self, root: Path, name: str, rows: list) -> None:
+        (root / ".claude" / "state" / name).write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+    def _loop(self, root: Path, feature: str, history: list) -> None:
+        """verify_loop CLI 로 **실제** 루프를 만든다.
+
+        hill_climb 은 `status`·`revision_count` 를 읽는데, 그 둘은 파생값이다.
+        손으로 써 넣으면 "이 heuristic 이 실제 트레이스에서 발화하는가" 를 못 본다.
+        """
+        for grader, verdict in history:
+            _run(root, _BIN, "record", feature, "--grader", grader, "--verdict", verdict,
+                 "--rubric", "code-review")
+
+    def _handoffs(self, feature: str, n: int, files_changed: int) -> list:
+        return [{"event": "handoff", "feature_id": feature, "files_changed": files_changed}] * n
+
+    def _build(self, label: str, root: Path, *, positive: bool) -> None:
+        """케이스별 합성 트레이스. positive 는 임계와 같은 값, negative 는 한 칸 아래."""
+        if label == "escalation":
+            # 임계 3회 = escalated / 2회 = 아직 유계 안
+            self._loop(root, "F500", [("reviewer", "revision")] * (3 if positive else 2))
+        elif label == "revision-rate":
+            # revision율 1/2 = 0.50 (임계와 같음) vs 2/5 = 0.40
+            verdicts = ["revision", "pass"] if positive else \
+                       ["revision", "revision", "pass", "pass", "pass"]
+            self._loop(root, "F501", [("reviewer", v) for v in verdicts])
+        elif label == "big-handoff":
+            self._jsonl(root, "analytics.jsonl",
+                        self._handoffs("F502", 1, 30 if positive else 29))
+        elif label == "repeat-feature":
+            self._jsonl(root, "analytics.jsonl",
+                        self._handoffs("F503", 3 if positive else 2, 1))
+        elif label == "no-learnings":
+            # 루프가 있어야 발화한다 ("검증 루프는 도는데 learnings 0건")
+            self._loop(root, "F504", [("reviewer", "pass")])
+            if not positive:
+                self._jsonl(root, "learnings.jsonl", [{"type": "pitfall", "text": "한 건 있다"}])
+        else:
+            self.fail(f"케이스 정의 누락: {label}")
+
+    def test_개선후보_heuristic_5종이_각각_발화한다(self):
+        """5종 중 **어느 하나를 제거해도** 이 테스트가 실패하고, 어느 것이 죽었는지
+        subTest 이름(`heuristic=…`)으로 드러난다."""
+        for label, marker in self.MARKERS.items():
+            with self.subTest(heuristic=label):
+                root = self._fresh_root(f"pos-{label}")
+                self._build(label, root, positive=True)
+                cands = self._candidates(root)
+                self.assertIn(marker, "\n".join(cands),
+                              f"{label} heuristic 이 발화하지 않았다 — 후보: {cands}")
+
+    def test_임계_아래에서는_그_후보가_발화하지_않는다(self):
+        """경계 한 칸 아래. 조건을 상수 `True` 로 바꾸거나 임계를 없애는 변이를 잡는다 —
+        긍정 테스트만 있으면 "항상 발화" 도 통과한다."""
+        for label, marker in self.MARKERS.items():
+            with self.subTest(heuristic=label):
+                root = self._fresh_root(f"neg-{label}")
+                self._build(label, root, positive=False)
+                cands = self._candidates(root)
+                self.assertNotIn(marker, "\n".join(cands),
+                                 f"{label} heuristic 이 임계 아래에서 발화했다 — 후보: {cands}")
+
+    def test_신호가_없으면_유지_후보만_남는다(self):
+        """전부 조용한 트레이스. 5종이 한꺼번에 상시 발화하는 변이의 역방향 가드다."""
+        root = self._fresh_root("quiet")
+        self.assertEqual(self._candidates(root),
+                         ["(임계 초과 신호 없음 — 현재 harness config 유지 가능)"])
 
 
 class HillClimbResilienceTest(unittest.TestCase):

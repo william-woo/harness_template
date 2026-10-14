@@ -3,7 +3,7 @@
 LangChain "loop engineering" 의 **Loop 2(Verification Loop)** 를 하네스에 이식한 정형화 도구.
 "Agent runs → output scored against a rubric → retried with feedback" 를 상태로 추적한다.
 
-**claude.loope · localllm 변형 전용** (ADR-014 / ADR-017 loope 계보 승격). 다른 변형엔 verify_loop.py / rubrics 가 없어 미인식.
+**loop 오버레이 보유 7 변형 전용** — `claude.loope` · `localllm` · `localllm.aif` · `localllm.nem` · `claude.aif` · `claude.vela.v0.1` (+ 메인 하네스). (ADR-014 / ADR-017 loope 계보 승격 / ADR-020 aif / ADR-023 vela). 나머지 변형엔 `verify_loop.py` / rubrics 가 없어 미인식.
 
 > 하네스는 이미 Reviewer→NEEDS REVISION→재시도 + 3회 에스컬레이션 규칙을 갖고 있었으나,
 > **rubric 이 암묵적이고 재시도 상태가 코드화되지 않았다.** 이 도구가 그 둘을 명시적·유계로 만든다.
