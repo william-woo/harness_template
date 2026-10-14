@@ -341,12 +341,27 @@ def cmd_start(args) -> int:
 
     이미 루프가 있으면 **거부**한다 (`--force` 로만 리셋). 예전엔 조용히 덮어써서
     에스컬레이션 직전의 revision 카운터를 0 으로 되돌릴 수 있었다 — 판정 위조 경로다.
+    그리고 **에스컬레이션된 루프는 `--force` 로도** 리셋되지 않는다 (아래).
     """
     feature = _safe_name(args.feature, "feature id")
     # rubric 도 `_RUBRICS / f"{rubric}.md"` 로 **경로 성분**이 된다. 커밋 1731d3e 는
     # "rubric 이름도 같은 검증" 이라 적었지만 실제로는 feature 에만 걸려 있었다.
     rubric = _safe_name(args.rubric or "code-review", "rubric 이름")
     existing = _load(feature)
+    if existing is not None and existing["status"] == "escalated":
+        # 2차 리뷰가 "조용한 리셋" 을 막으면서 **명시적 리셋**은 열어 뒀고, 그 바람에
+        # `start --force` 가 에스컬레이션 우회로가 됐다 (실측: revision ×3 → pass 는 exit 1,
+        # 그러나 `start --force` → pass 는 exit 0 으로 `passed`). 이력을 지우면 예산도
+        # 함께 지워지므로, `record` 쪽 게이트만 막는 것으로는 "architect 기록이 유일한
+        # 해제 수단" 이 성립하지 않는다.
+        print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
+              f"(revision {existing['revision_count']}/{existing['escalation_threshold']}) — "
+              "`--force` 로도 리셋되지 않는다.", file=sys.stderr)
+        print("   이력을 지워 에스컬레이션을 없애는 것은 재검토가 아니다. "
+              "재검토를 **수행한** 역할이 기록한다:", file=sys.stderr)
+        print(f"   verify_loop.py record {feature} --grader architect "
+              f"--verdict pass --notes \"<무엇을 결정했는지>\"", file=sys.stderr)
+        return 1
     if existing is not None and not getattr(args, "force", False):
         print(f"[verify-loop] ❌ {feature} 루프가 이미 있습니다 "
               f"(시도 {len(existing['attempts'])}회, revision {existing['revision_count']}).")
