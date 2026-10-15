@@ -24,10 +24,16 @@
 >   claude.loope/harness claude.vela.v0.1/harness
 > ```
 >
-> 정상인 차이는 **7건**입니다 — Atlassian 오버레이 5(`atlassian-targets.json`,
-> `atlassian_map.py`, `commands/atlassian.md`, `hooks/pre-atlassian-write-check.sh`,
-> `skills/atlassian/`) + `tests/test_atlassian_guard.py`·`tests/test_atlassian_map.py`,
-> 그리고 이 헤더가 있는 `CLAUDE.md`. 그 밖의 차이는 전부 미러 누락입니다.
+> 위 명령이 내는 **정상인 차이는 9줄**입니다 — Atlassian 오버레이 5
+> (`atlassian-targets.json`, `atlassian_map.py`, `commands/atlassian.md`,
+> `hooks/pre-atlassian-write-check.sh`, `skills/atlassian/`)
+> + `tests/test_atlassian_guard.py` · `tests/test_atlassian_map.py`
+> + `RELEASE.md` + 이 헤더가 있는 `CLAUDE.md`.
+> 그 밖의 차이는 전부 미러 누락입니다.
+>
+> (`git ls-files` 로 세면 vela 전용 파일이 **9개**입니다 — 구성이 다릅니다:
+> 위 명령은 `--exclude='state'` 때문에 `.claude/state/atlassian/.gitkeep` 을 빼고
+> 내용이 다른 `CLAUDE.md` 를 넣는데, `ls-files` 는 그 반대입니다. `RELEASE.md` §2 참조.)
 >
 > 🔗 **Atlassian 연동**: Jira 이슈를 `feature_list.json` 초안으로 가져오고(읽기),
 > ADR·체크포인트·판정을 Confluence·Jira 로 발행합니다(쓰기 — **승인 필요**).
