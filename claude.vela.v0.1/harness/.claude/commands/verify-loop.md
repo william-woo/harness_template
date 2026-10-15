@@ -67,6 +67,9 @@ in-loop    ← 그 외
 | `reviewer:pass` → `lint:fail` | `in-loop` | 위와 **같은 결론** — 순서 의존 없음 |
 | `lint:fail` → `lint:pass` → `reviewer:pass` | `passed` | 게이트는 그 grader 의 **마지막** verdict 만 본다 |
 | `reviewer:fail` | `failed` | judge 의 설계 거부 |
+| `reviewer:pass` → `qa:revision` | `in-loop` | 판정은 **마지막** judge 이벤트 — 뒤의 revision 이 앞의 pass 를 지운다 (Reviewer→QA 사슬의 기본 재오픈 경로) |
+| `reviewer:fail` → `reviewer:pass` | `passed` | 같은 이유로 **반대 방향**도 성립 — 거부가 영구 낙인이 아니다 |
+| `reviewer:revision` ×3 → `qa:fail` | `failed` | 설계 거부가 에스컬레이션보다 **먼저** — 예산이 소진돼도 판정이 `fail` 이면 REJECTED 다 |
 | `reviewer:fail` → `lint:pass` | `failed` | 게이트 통과가 판정을 지우지 않는다 |
 | `reviewer:revision` ×3 | `escalated` | 예산 소진 |
 | `test:revision` ×3 | `in-loop` | 결정론 재작업은 judge 예산을 쓰지 않는다 |

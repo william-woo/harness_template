@@ -67,6 +67,9 @@ in-loop    ← 그 외
 | `reviewer:pass` → `lint:fail` | `in-loop` | 위와 **같은 결론** — 순서 의존 없음 |
 | `lint:fail` → `lint:pass` → `reviewer:pass` | `passed` | 게이트는 그 grader 의 **마지막** verdict 만 본다 |
 | `reviewer:fail` | `failed` | judge 의 설계 거부 |
+| `reviewer:pass` → `qa:revision` | `in-loop` | 판정은 **마지막** judge 이벤트 — 뒤의 revision 이 앞의 pass 를 지운다 (Reviewer→QA 사슬의 기본 재오픈 경로) |
+| `reviewer:fail` → `reviewer:pass` | `passed` | 같은 이유로 **반대 방향**도 성립 — 거부가 영구 낙인이 아니다 |
+| `reviewer:revision` ×3 → `qa:fail` | `failed` | 설계 거부가 에스컬레이션보다 **먼저** — 예산이 소진돼도 판정이 `fail` 이면 REJECTED 다 |
 | `reviewer:fail` → `lint:pass` | `failed` | 게이트 통과가 판정을 지우지 않는다 |
 | `reviewer:revision` ×3 | `escalated` | 예산 소진 |
 | `test:revision` ×3 | `in-loop` | 결정론 재작업은 judge 예산을 쓰지 않는다 |
@@ -95,16 +98,6 @@ python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass 
 - `.claude/rubrics/qa-acceptance.md` — QA 용 (acceptance_criteria 기반)
 - 프로젝트에 맞게 편집/추가 가능 (`.claude/rubrics/<name>.md` → `--rubric <name>`)
 
-## 호출 기준
-
-- Reviewer/QA 가 판정을 내릴 때마다 `record` (reviewer.md/qa.md 에 연동됨)
-- product-cycle 의 **검증(verify) 단계**에서 Reviewer→QA 게이트를 이 루프로 추적
-- 재시도가 반복돼 에스컬레이션 여부를 객관적으로 판단하고 싶을 때
-
-해당 없으면 (단순 1회 통과) 굳이 호출 안 해도 됨 — **옵셔널**. 상태 위치는 `.claude/state/verify-loop/` (런타임 gitignore).
-
----
-
 ## 항목형 판정 (AIF 오버레이 — ADR-020)
 
 이 변형은 산문형 rubric 외에 **항목형 채점표**를 갖는다. 판정이 흔들리거나 게이트가 중요할 때
@@ -120,6 +113,8 @@ python3 .claude/bin/aif_judge.py aggregate <F>-r1
 
 `uncertain` 은 `pass|revision` 중 하나로 기록하지 않는다 — 반복을 늘려 해소하거나 사람이 본다.
 자세한 형식은 [aif-judge 커맨드](aif-judge.md) 와 [항목 스키마](../rubrics/_items-schema.md).
+
+---
 
 ## 호출 기준
 
