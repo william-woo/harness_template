@@ -548,8 +548,15 @@ class DriverBehaviourTest(unittest.TestCase):
         """
         import ast
         src = _DRIVER.read_text(encoding="utf-8")
+        patterns = {item[0] if isinstance(item, (list, tuple)) else item
+                    for item in self.mod._WORKAROUNDS}
+        # **패턴 리터럴 자신을 haystack 에서 뺀다.** 안 빼면 정규식이 자기 소스와
+        # 매칭돼 0건이 될 수 없다 — 실측으로 W04·W07·W08 이 `re.findall(p, p)` 참이고,
+        # W04 를 프롬프트와 어긋나게 바꿔도(4 spaces → 5 spaces) 이 테스트가 통과했다.
+        # 드리프트를 잡겠다는 테스트가 바로 그 드리프트에 눈을 감고 있었다 (F030 리뷰 MUST-4).
         hay = "\n".join(n.value for n in ast.walk(ast.parse(src))
-                        if isinstance(n, ast.Constant) and isinstance(n.value, str))
+                        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and n.value not in patterns)
         dead = []
         for i, item in enumerate(self.mod._WORKAROUNDS, 1):
             pat = item[0] if isinstance(item, (list, tuple)) else item
