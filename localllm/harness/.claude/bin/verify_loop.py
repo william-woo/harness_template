@@ -348,7 +348,11 @@ def cmd_start(args) -> int:
     # "rubric 이름도 같은 검증" 이라 적었지만 실제로는 feature 에만 걸려 있었다.
     rubric = _safe_name(args.rubric or "code-review", "rubric 이름")
     existing = _load(feature)
-    if existing is not None and existing["status"] == "escalated":
+    # 라벨이 아니라 **예산 차원**을 직접 본다. `_derive` 의 분류는 `failed` 를
+    # `escalated` 보다 앞에 두므로(순서는 5차 SHOULD-1 로 표에 고정), 예산이 소진돼도
+    # 마지막 judge 가 `fail` 이면 라벨은 `failed` 가 된다. 라벨을 보던 게이트는 그
+    # 한 번의 `fail` 에 가려 통째로 열렸다 (6차 MUST-1 실측 — 옆문 B).
+    if existing is not None and existing["revision_count"] >= existing["escalation_threshold"]:
         # 2차 리뷰가 "조용한 리셋" 을 막으면서 **명시적 리셋**은 열어 뒀고, 그 바람에
         # `start --force` 가 에스컬레이션 우회로가 됐다 (실측: revision ×3 → pass 는 exit 1,
         # 그러나 `start --force` → pass 는 exit 0 으로 `passed`). 이력을 지우면 예산도
@@ -435,7 +439,11 @@ def _record_locked(args, feature: str) -> int:
     #
     # `revision`·`fail` 과 결정론 grader 는 막지 않는다 — 전부 "아직 안 됐다" 는 증거이고,
     # 증거 기록을 막은 것이 바로 무인 드라이버를 세운 원인이었다 (ADR-024 실측 9).
-    if loop["status"] == "escalated" and args.grader in _JUDGE and args.verdict == "pass":
+    # 게이트 1 과 같은 이유로 라벨이 아니라 예산 필드를 읽는다 — ADR-024 가 진단한
+    # "독립인 사실을 한 enum 에 접으면 둘이 어긋날 때 누가 이기나로만 표현된다" 가
+    # 게이트 자리에서 재현된 것이었다 (6차 MUST-1 실측 — 옆문 A).
+    if (loop["revision_count"] >= loop["escalation_threshold"]
+            and args.grader in _JUDGE and args.verdict == "pass"):
         print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
               f"(revision {loop['revision_count']}/{loop['escalation_threshold']}).",
               file=sys.stderr)

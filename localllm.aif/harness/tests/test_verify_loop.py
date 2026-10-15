@@ -800,6 +800,51 @@ class VerifyLoopFourthReviewTest(unittest.TestCase):
         self.assertEqual(d["escalated_at"], "2026-01-01T00:00:03+00:00",
                          "임계를 넘은 순간이 아니라 마지막 revision 시각이 남았다")
 
+    # ── 6차 MUST-1 ───────────────────────────────────────────────────────
+    # 4차가 닫은 두 게이트가 **접힌 라벨**을 보고 있었다. `_derive` 의 분류는 `failed`
+    # 를 `escalated` 보다 앞에 두므로, 예산이 소진된 뒤 judge `fail` 이 한 번 들어오면
+    # 라벨이 `failed` 로 바뀌고 두 게이트가 **동시에** 열린다. 6차 리뷰가 옆문 A·B 로
+    # 실측했고, 올바른 수정(M25·M26)을 걸어도 49건이 전부 통과했다 — 라벨과 예산의
+    # 구분을 고정하는 테스트가 하나도 없었다는 뜻이다.
+    def _spent_then_failed(self, feature: str, last_grader: str) -> dict:
+        """예산 소진(revision ×3) 뒤 judge `fail` → 라벨은 `failed`, 예산은 3/3."""
+        attempts = self._judge_attempts(["revision", "revision", "revision", "fail"])
+        attempts[-1]["grader"] = last_grader
+        self._write_history(feature, attempts)
+        # 결정론 기록 한 번으로 파생값을 파일에 영속시킨다 (라벨을 눈으로 확인하려고).
+        self.assertEqual(self.rec(feature, "lint", "pass").returncode, 0)
+        d = self.loop(feature)
+        self.assertEqual(d["status"], "failed",
+                         "전제가 깨졌다 — 이 테스트는 라벨이 escalated 가 아닌 상태를 쓴다")
+        self.assertGreaterEqual(d["revision_count"], d["escalation_threshold"],
+                                "전제가 깨졌다 — 예산이 소진돼 있어야 한다")
+        return d
+
+    def test_judge_fail_이_예산_소진을_가리지_않는다(self):
+        """옆문 A — `rev×3 → fail` 뒤 reviewer 가 모르고 `pass` 를 적으면 받아들여졌다.
+
+        그 기록이 남으면 architect 가 예산을 재무장하는 순간 **judge 가 다시 보지 않은
+        pass** 가 루프를 닫는다. 코드 주석이 막겠다고 적은 바로 그 시나리오다.
+        """
+        self._spent_then_failed("F303", "reviewer")
+        res = self.rec("F303", "reviewer", "pass")
+        self.assertNotEqual(res.returncode, 0,
+                            "failed 라벨에 가려 judge pass 가 기록됐다")
+        self.assertEqual(len(self.loop("F303")["attempts"]), 5,
+                         "거부됐는데 이력에 남았다")
+
+    def test_failed_라벨_뒤에서도_force_는_막힌다(self):
+        """옆문 B — reviewer 혼자 두 명령(`fail` → `start --force`)으로 빠져나갔다.
+
+        `--force` 는 이력을 지우고 예산은 이력에서 파생되므로, 통과하면 에스컬레이션이
+        **흔적 없이** 사라진다. 4차가 막은 경로가 라벨 하나로 되살아났다.
+        """
+        self._spent_then_failed("F304", "qa")
+        res = _run(self.root, _BIN, "start", "F304", "--force")
+        self.assertNotEqual(res.returncode, 0, "failed 라벨에 가려 --force 가 통과했다")
+        self.assertEqual(len(self.loop("F304")["attempts"]), 5,
+                         "거부됐는데 이력이 지워졌다")
+
 
 class CycleDriverEscalationSignalTest(unittest.TestCase):
     """ADR-024 결정 6 — 무인 드라이버가 **존재한 적 없는 키**를 읽고 있었다 (실측 8).

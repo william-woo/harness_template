@@ -91,6 +91,9 @@ python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass 
 - `revision`·`fail` 기록과 결정론 grader 는 에스컬레이션 중에도 막히지 않는다. 전부 "아직 안 됐다" 는
   증거이고, 증거 기록을 막은 것이 무인 드라이버를 세운 원인이었다.
 - `architect --verdict fail` 은 **설계 거부**(`failed`)다 — 설계자의 고유 권한.
+- 두 게이트(judge `pass` 거부 · `start --force` 거부)는 **상태 라벨이 아니라 `revision_count ≥ 임계`**
+  를 본다. 라벨을 보던 때는 judge `fail` 한 번이 예산 소진을 가려(`failed` 가 `escalated` 보다 앞서
+  분류된다) 두 게이트가 동시에 열렸다 — 6차 MUST-1 실측.
 
 ## rubric
 
