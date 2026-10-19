@@ -434,7 +434,12 @@ def _vl_norm(loop: dict) -> dict:
     if not isinstance(loop, dict):
         return {"attempts": [], "revision_count": 0, "status": "?",
                 "escalation_threshold": 3, "budget_exhausted": False}
-    loop["attempts"] = [a for a in loop.get("attempts", []) if isinstance(a, dict)]
+    # `{"attempts": null}` 에서 `loop.get("attempts", [])` 는 **기본값을 쓰지 않는다**
+    # (키가 있고 값이 None 이다). 순회가 TypeError 를 내는데 `_vl_state` 는 ValueError
+    # 만 잡아 사이클이 죽었다 — docstring 이 인용하는 `_read_loop` 는 격리하고
+    # `hill_climb` 은 걸러낸다. 여기만 달랐다 (7차 SHOULD-4).
+    raw = loop.get("attempts")
+    loop["attempts"] = [a for a in raw if isinstance(a, dict)] if isinstance(raw, list) else []
     rc = loop.get("revision_count")
     loop["revision_count"] = rc if isinstance(rc, int) and not isinstance(rc, bool) else 0
     # 임계도 정규화한다. 전엔 `revision_count` 만 정규화했는데, 소비 지점이 임계와

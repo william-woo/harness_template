@@ -114,6 +114,14 @@ def _as_int(value: object) -> int | None:
     return value
 
 
+#: judge 역할 grader (verify_loop 의 `_JUDGE` 와 같아야 한다).
+#: **저장된 `kind` 라벨을 믿지 않는다** — `_derive` 는 grader 이름으로 분류하고
+#: `test_저장된_kind_라벨로는_분류를_바꿀_수_없다` 가 그것을 고정하는데, 같은 리포의
+#: 다른 소비자가 그 라벨을 세고 있었다. 손으로 쓴 `kind: "judge"` 하나면 재작업
+#: 통계가 부풀고, 반대로 라벨이 빠지면 0 이 된다 (7차 SHOULD-2).
+_JUDGE_GRADERS = ("reviewer", "qa")
+
+
 def _budget_exhausted(loop: dict) -> bool:
     """예산이 소진됐는가 — `status` 라벨이 아니라 차원을 본다 (ADR-024 결정 8).
 
@@ -144,7 +152,7 @@ def _signals() -> dict:
     # (6차 SHOULD / ADR-024 결정 8). 재작업 횟수는 이력에서 직접 센다.
     reworks = [sum(1 for a in l.get("attempts", [])
                    if str(a.get("verdict")) == "revision"
-                   and str(a.get("kind")) == "judge")
+                   and str(a.get("grader")) in _JUDGE_GRADERS)
                for l in loops]
     escalated = [str(l.get("feature", "?")) for l in loops if _budget_exhausted(l)]
     grader_verdicts: Counter = Counter()   # (grader, verdict) → n

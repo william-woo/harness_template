@@ -50,7 +50,7 @@ ADR·측정 문서의 참조가 전부 깨진다.
 
 | 항목 | 결과 |
 |---|---|
-| 테스트 | `python3 -m unittest discover -s tests -p 'test_*.py'` → **112 OK** (skip 3) |
+| 테스트 | `python3 -m unittest discover -s tests -p 'test_*.py'` → **119 OK** (skip 5) |
 | 거버넌스 (상위 리포) | 메인에서 `lint.py check --strict` → **0 BLOCK / 232 PASS**. vela 의 내용 정합(LINT-MR-15·SSOT·ATL)은 **여기서** 강제된다 |
 | 거버넌스 (단독 실행) | 스냅샷 안에서 같은 명령 → **22 BLOCK / 13 PASS** — 전부 한 클래스이고 `claude.loope` 와 **수치까지 동일**하다. §4 참조 |
 | 미러 | loope 대비 차이 = §2 의 9 파일 + 내용이 다른 `CLAUDE.md` 뿐. **loope 에만 있는 파일 0건** |

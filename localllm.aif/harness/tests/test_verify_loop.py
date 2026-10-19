@@ -850,64 +850,198 @@ class VerifyLoopFourthReviewTest(unittest.TestCase):
 class EscalationEnforcementSiteTest(unittest.TestCase):
     """집행 **지점의 공간**을 고정한다 — 인스턴스가 아니라 (F020 AC3, ADR-024 결정 8).
 
-    이 클래스가 필요한 이유는 같은 결함이 세 번 난 경위에 있다:
+    이 클래스가 필요한 이유는 같은 결함이 **네 번** 난 경위에 있다:
 
       1차: `cycle_driver` 가 존재하지 않는 키 `escalated` 를 읽었다 (ADR-024 실측 8)
       2차: `start --force` 라는 **집행 지점 자체가 없었다** (4차 MUST-4)
       3차: 게이트 2곳이 접힌 라벨을 읽었다 (6차 MUST-1)
+      4차: 이 클래스의 첫 판이 **공회전**했다 (7차 MUST-1·2)
 
-    매번 "그 지점" 에 회귀 테스트를 붙였고, 매번 **다음 지점**에서 다시 났다. 지점별
-    테스트는 인스턴스를 고정할 뿐 공간을 고정하지 못한다. 여기서는 "막혀 있는가" 를
-    묻는 주소가 **하나뿐**임을 소스에서 직접 확인한다.
+    4차가 가장 뼈아프다. "공간을 닫았다" 고 적어 둔 테스트가 `assertIn("budget_exhausted",
+    src)` 라는 **부분문자열 검사**였고, `_vl_norm` 의 정규화 대입 3줄과 `_budget_exhausted`
+    라는 **함수 이름**이 그 문자열을 만족시켰다. 그래서 `cycle_driver` 의 집행 한 줄을
+    통째로 지워도 전원 통과했다. 이 리포가 `_WORKAROUNDS` 로 두 번 겪은 클래스다.
+
+    그래서 여기서는 문자열이 아니라 **결정 위치**를 본다: `if` / `while` / 삼항 / 컴프리
+    헨션 조건 **안**에서 예산 차원을 읽는 노드만 센다. 정규화 대입과 docstring 은 걸리지
+    않고, 집행 분기만 걸린다.
     """
 
     #: 예산 차원을 읽어야 하는 모듈 (ADR-024 결정 8 의 소비자 표와 같아야 한다)
     _CONSUMERS = ("verify_loop.py", "hill_climb.py", "cycle_driver.py")
 
+    #: 저장된 임계와 비교해 **술어를 재계산**해도 되는 함수 → 그 함수를 소유한 파일
+    #: (ADR-024 결정 9 의 폴백). 파생 필드가 없는 옛 파일을 직접 `json.load` 하는
+    #: 소비자만 해당한다. 변형마다 소비자 구성이 다르므로(`cycle_driver` 는 localllm
+    #: 계열에만) 집합이 아니라 **소유 관계**로 적는다 — 고정 집합으로 적었더니 변형
+    #: 사본에서 전부 실패했다.
+    _FALLBACKS = {"_budget_exhausted": "hill_climb.py", "_vl_norm": "cycle_driver.py"}
+
     def _sources(self) -> dict:
-        """스캔 대상 {표시이름: 소스}. 변형 사본에는 템플릿 트리가 없으므로 있는 것만."""
+        """스캔 대상 {표시이름: 소스}.
+
+        **고정 목록이 아니라 디렉토리 전체**를 훑는다. 첫 판은 세 파일 이름을 박아 둬서
+        `.claude/bin/` 에 새 소비자를 하나 더 두면 검사를 아예 받지 않았다 (7차 MUST-2 —
+        변이 M11 로 실증). 3차 결함이 **다른 파일**에서 났으므로 새 파일이 다음 지점의
+        현실적 형태다.
+        """
         root = Path(__file__).resolve().parent.parent
+        bins = [root / ".claude" / "bin"]
+        bins += sorted((root / "src" / "harness_template").glob("*/harness/.claude/bin"))
         found = {}
-        for name in ("verify_loop.py", "hill_climb.py"):
-            q = root / ".claude" / "bin" / name
-            if q.is_file():
-                found[name] = q.read_text(encoding="utf-8")
-        for q in sorted((root / "src" / "harness_template").glob(
-                "*/harness/.claude/bin/cycle_driver.py")):
-            found[f"{q.parents[3].name}/cycle_driver.py"] = q.read_text(encoding="utf-8")
+        for d in bins:
+            for q in sorted(d.glob("*.py")):
+                # 변형 사본 안에서 돌 때도 **그 변형의** bin 이 스캔된다. 첫 판은 루트에서
+                # 두 파일만 집어 와, localllm 사본의 cycle_driver 는 AST 검사를 한 번도
+                # 받지 않았다 (7차 MUST-2 부수 지적).
+                try:
+                    found[str(q.relative_to(root))] = q.read_text(encoding="utf-8")
+                except (OSError, ValueError):
+                    continue
         return found
 
-    def test_판정_지점이_접힌_라벨을_읽지_않는다(self):
-        """`status` 를 `"escalated"` 와 **비교**하는 코드가 0건이어야 한다.
+    @staticmethod
+    def _label_compares(src: str) -> list:
+        """`status` 를 `"escalated"` 와 **비교**하는 노드의 줄번호."""
+        out = []
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Compare):
+                continue
+            flat = []
+            for part in (node.left, *node.comparators):
+                # `in ("escalated", "failed")` 는 "escalated 또는 failed" 를 쓰는 **자연스러운**
+                # 표기다. 첫 판은 직접 피연산자만 봐서 이 형태를 놓쳤다 (7차 SHOULD-3).
+                flat.extend(part.elts if isinstance(part, (ast.Tuple, ast.List, ast.Set))
+                            else [part])
+            if any(isinstance(x, ast.Constant) and x.value == "escalated" for x in flat):
+                out.append(node.lineno)
+        return sorted(set(out))
 
-        `status` 는 표시용 요약이다. 생산(`_derive` 의 대입)과 배지 사전은 비교가
-        아니므로 걸리지 않는다 — 걸리는 것은 라벨로 **분기하는** 코드뿐이다.
+    @staticmethod
+    def _decision_sites(src: str) -> list:
+        """**조건 안**에서 예산 차원을 읽는 노드의 줄번호.
+
+        대입(`loop["budget_exhausted"] = …`)과 함수 정의 이름은 걸리지 않는다 — 그것이
+        첫 판을 공회전시킨 것들이다.
         """
-        offenders = []
-        for label, src in self._sources().items():
-            for node in ast.walk(ast.parse(src)):
-                if not isinstance(node, ast.Compare):
-                    continue
-                parts = [node.left, *node.comparators]
-                if any(isinstance(n, ast.Constant) and n.value == "escalated" for n in parts):
-                    offenders.append(f"{label}:{node.lineno}")
+        def mentions(node) -> bool:
+            for x in ast.walk(node):
+                if isinstance(x, ast.Constant) and x.value == "budget_exhausted":
+                    return True
+                if isinstance(x, ast.Name) and "budget_exhausted" in x.id:
+                    return True
+                if isinstance(x, ast.Attribute) and "budget_exhausted" in x.attr:
+                    return True
+            return False
+
+        out = []
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, (ast.If, ast.IfExp, ast.While, ast.Assert)):
+                tests = [node.test]
+            elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                tests = [i for g in node.generators for i in g.ifs]
+            else:
+                continue
+            out.extend(t.lineno for t in tests if mentions(t))
+        return sorted(set(out))
+
+    @staticmethod
+    def _recompute_funcs(src: str) -> set:
+        """저장된 `escalation_threshold` 를 읽으면서 `>=` 비교를 하는 함수 = 술어 재계산."""
+        out = set()
+        for fn in ast.walk(ast.parse(src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            reads = "'escalation_threshold'" in ast.dump(fn)
+            compares = any(isinstance(op, ast.GtE)
+                           for n in ast.walk(fn) if isinstance(n, ast.Compare)
+                           for op in n.ops)
+            if reads and compares:
+                out.add(fn.name)
+        return out
+
+    # ── 스캔 자체가 성립하는가 ───────────────────────────────────────────
+    def test_스캔_범위가_조용히_줄지_않는다(self):
+        """빈 스캔으로 전부 통과하는 것이 이 클래스의 가장 흔한 고장 방식이다.
+
+        첫 판은 `assertIn("verify_loop.py", srcs)` 한 줄뿐이라 cycle_driver 3건이 glob
+        변경으로 빠져도 조용히 2파일만 보고 통과했다 (7차 MUST-2 ③).
+        """
+        srcs = self._sources()
+        names = {Path(k).name for k in srcs}
+        self.assertIn("verify_loop.py", names, "스캔이 비었다 — 테스트가 공회전한다")
+        self.assertIn("hill_climb.py", names, "hill_climb 이 스캔에서 빠졌다")
+        root = Path(__file__).resolve().parent.parent
+        if (root / "src" / "harness_template").is_dir():
+            drivers = [k for k in srcs if Path(k).name == "cycle_driver.py"]
+            self.assertGreaterEqual(len(drivers), 3,
+                                    f"cycle_driver 3 사본이 스캔에 없다: {drivers}")
+
+    # ── 방향 ①: 라벨로 분기하지 않는다 ───────────────────────────────────
+    def test_판정_지점이_접힌_라벨을_읽지_않는다(self):
+        """`status` 를 `"escalated"` 와 비교하는 코드가 **어디에도** 없어야 한다.
+
+        생산(`_derive` 의 대입)과 배지 사전은 비교가 아니라 걸리지 않는다 — 걸리는 것은
+        라벨로 **분기하는** 코드뿐이다.
+        """
+        offenders = [f"{label}:{ln}" for label, src in self._sources().items()
+                     for ln in self._label_compares(src)]
         self.assertEqual(offenders, [],
                          "라벨로 분기하는 판정 지점이 있다 — 예산이 소진돼도 마지막 판정이 "
                          f"fail 이면 발화하지 않는다: {offenders}")
 
-    def test_모든_소비자가_예산_차원을_읽는다(self):
-        """반대 방향 — 어느 소비자가 차원 읽기를 **잃어도** 드러나야 한다.
+    # ── 방향 ②: 소비자가 차원 읽기를 잃지 않는다 ─────────────────────────
+    def test_모든_소비자가_예산_차원을_조건에서_읽는다(self):
+        """어느 소비자가 집행 분기를 **잃어도** 드러나야 한다.
 
-        위 테스트만 있으면 소비자가 조건을 통째로 지워도 0건이라 통과한다. 거짓 부재는
-        오탐보다 나쁘다 — 오탐은 보이고 거짓 부재는 보이지 않는다.
+        거짓 부재는 오탐보다 나쁘다 — 오탐은 보이고 거짓 부재는 보이지 않는다. 첫 판이
+        정확히 그 거짓 부재였다 (7차 MUST-1): cycle_driver 의 집행 한 줄을 지워도
+        `_vl_norm` 의 정규화 대입이 문자열 검사를 대신 만족시켜 전원 통과했다.
+        """
+        checked = 0
+        for label, src in self._sources().items():
+            if Path(label).name not in self._CONSUMERS:
+                continue
+            checked += 1
+            sites = self._decision_sites(src)
+            self.assertTrue(sites,
+                            f"{label} 이 예산 차원을 **조건에서** 읽지 않는다 — 집행 분기가 "
+                            "사라졌거나 대입만 남았다 (ADR-024 결정 8 의 소비자 표)")
+        self.assertGreaterEqual(checked, 2, "소비자를 하나도 검사하지 않았다")
+
+    # ── 방향 ③: 술어를 재계산하는 자리가 늘지 않는다 ─────────────────────
+    def test_술어_재계산은_문서화된_폴백에만_있다(self):
+        """"막혀 있는가" 를 묻는 **주소가 하나** 라는 것이 AC3 의 요구다.
+
+        폴백 자체는 결정 9 가 정당화한다(파생 필드 없는 옛 파일을 직접 읽는 소비자).
+        문제는 그 수를 **세지 않는 것**이다 — 여섯째가 생기면 여기서 이름으로 드러난다.
         """
         srcs = self._sources()
-        self.assertIn("verify_loop.py", srcs, "스캔 대상이 비었다 — 테스트가 공회전한다")
+        found = {}
         for label, src in srcs.items():
-            if not label.endswith(self._CONSUMERS):
-                continue
-            self.assertIn("budget_exhausted", src,
-                          f"{label} 이 예산 차원을 읽지 않는다 (ADR-024 결정 8 의 소비자 표)")
+            for fn in self._recompute_funcs(src):
+                found.setdefault(fn, set()).add(Path(label).name)
+
+        # ① 늘지 않았는가 — 새 재계산 자리가 곧 다음 결함이다 (임계 정규화를 다시 해야 한다)
+        extra = sorted(set(found) - set(self._FALLBACKS))
+        self.assertEqual(extra, [],
+                         "술어를 재계산하는 함수가 늘었다. 거기서 임계 정규화를 다시 해야 "
+                         f"하고, 그 누락이 다음 라운드의 결함이 된다: {extra} — "
+                         "정당한 폴백이면 ADR-024 결정 9 와 _FALLBACKS 를 함께 갱신하라")
+
+        # ② 엉뚱한 파일로 옮겨 가지 않았는가
+        for fn, owners in found.items():
+            self.assertEqual(owners, {self._FALLBACKS[fn]},
+                             f"{fn} 이 예상 밖 파일에 있다: {sorted(owners)}")
+
+        # ③ 줄지 않았는가 — **스캔된 소유 파일에 대해서만** 요구한다. 변형마다 소비자
+        #    구성이 다르다 (`cycle_driver` 는 localllm 계열에만).
+        scanned = {Path(k).name for k in srcs}
+        for fn, owner in self._FALLBACKS.items():
+            if owner in scanned:
+                self.assertIn(fn, found,
+                              f"{owner} 이 스캔됐는데 폴백 {fn} 이 없다 — 옛 파일을 "
+                              "읽는 소비자가 파생 필드만 믿게 됐다 (ADR-024 결정 9)")
 
 
 class CycleDriverEscalationSignalTest(unittest.TestCase):
@@ -943,6 +1077,53 @@ class CycleDriverEscalationSignalTest(unittest.TestCase):
                       "에스컬레이션 감지가 사라졌거나 다시 라벨을 읽는다")
         self.assertIn("_vl_norm", code,
                       "정규화를 거치지 않으면 임계 결측·오염이 새 결함이 된다")
+
+    def _driver_module(self):
+        """스캔이 아니라 **실제로 태운다** — 정적 검사는 동작을 보지 못한다."""
+        driver = (Path(__file__).resolve().parent.parent
+                  / ".claude" / "bin" / "cycle_driver.py")
+        if not driver.exists():
+            self.skipTest("cycle_driver 는 localllm 계열 변형에만 있다 (d-2 오버레이)")
+        spec = importlib.util.spec_from_file_location("_cd_under_test", driver)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_정규화가_망가진_상태파일에서_죽지_않는다(self):
+        """`{"attempts": null}` 하나에 무인 사이클이 TypeError 로 죽었다 (7차 SHOULD-4).
+
+        `loop.get("attempts", [])` 는 **키가 있고 값이 None 이면 기본값을 쓰지 않는다.**
+        그리고 `_vl_state` 는 `ValueError` 만 잡는다. docstring 은 "`_read_loop` 와 같은
+        규율" 이라 적었지만 `_read_loop` 는 격리하고 `hill_climb` 은 걸러낸다 — 여기만
+        달랐다. 세 구현이 같은 입력에서 같은 규율을 지키는지는 정적으로 안 보인다.
+        """
+        norm = self._driver_module()._vl_norm
+        for bad in ({"attempts": None}, {"attempts": "x"}, {"attempts": 7},
+                    {"attempts": [1, "x", {"grader": "reviewer"}]}, {}, "notadict"):
+            with self.subTest(bad=repr(bad)[:40]):
+                out = norm(bad)
+                self.assertIsInstance(out["attempts"], list)
+                self.assertTrue(all(isinstance(a, dict) for a in out["attempts"]))
+                self.assertIsInstance(out["budget_exhausted"], bool)
+                self.assertGreater(out["escalation_threshold"], 0,
+                                   "임계가 0 이면 `>= 0` 이 항상 참이라 영구 wedge 가 된다")
+
+    def test_정규화가_예산_차원을_라벨에서_만들어내지_않는다(self):
+        """파생 필드가 없는 옛 파일에서도 **이력 기준**으로 센다 (ADR-024 결정 9 폴백).
+
+        라벨에서 유추하면 6차 결함이 폴백 자리에서 되살아난다 — `status: "failed"` 인데
+        예산이 소진된 파일이 정확히 그 입력이다.
+        """
+        norm = self._driver_module()._vl_norm
+        self.assertTrue(norm({"status": "failed", "revision_count": 3,
+                              "escalation_threshold": 3, "attempts": []})["budget_exhausted"],
+                        "라벨이 failed 라고 예산 소진을 못 본다")
+        self.assertFalse(norm({"status": "escalated", "revision_count": 1,
+                               "escalation_threshold": 3, "attempts": []})["budget_exhausted"],
+                         "라벨이 escalated 라고 예산 소진으로 단정한다")
+        # 저장된 플래그가 있으면 그것을 쓴다 (verify_loop 이 파생해 넣어 준 값)
+        self.assertTrue(norm({"budget_exhausted": True, "revision_count": 0,
+                              "escalation_threshold": 3, "attempts": []})["budget_exhausted"])
 
 
 class HillClimbHeuristicTest(unittest.TestCase):
@@ -1029,6 +1210,70 @@ class HillClimbHeuristicTest(unittest.TestCase):
                 self._jsonl(root, "learnings.jsonl", [{"type": "pitfall", "text": "한 건 있다"}])
         else:
             self.fail(f"케이스 정의 누락: {label}")
+
+    # ── 7차 SHOULD-1·2 ───────────────────────────────────────────────────
+    def test_예산_소진_루프는_라벨이_failed_여도_개선후보다(self):
+        """6차가 고친 결함에 회귀 테스트가 없었다 (변이 M12 생존).
+
+        위 `escalation` 케이스는 `revision×3`(라벨 `escalated`)만 쓴다. 예산이 소진된
+        뒤 judge `fail` 이 들어오면 라벨은 `failed` 가 되는데, **그게 가장 나쁜 루프**다
+        — 재작업을 다 쓰고도 거부당한 것이다. 라벨을 보던 때는 그 루프가 개선 후보에서
+        조용히 빠졌다.
+        """
+        root = self._fresh_root("exhausted-failed")
+        self._loop(root, "F505", [("reviewer", "revision")] * 3 + [("qa", "fail")])
+        data = json.loads(_run(root, _HILL, "analyze", "--json").stdout)
+        self.assertEqual(data["signals"]["verify_loop"]["status"].get("failed"), 1,
+                         "전제가 깨졌다 — 라벨이 failed 인 루프를 쓰는 테스트다")
+        self.assertIn("F505", data["signals"]["verify_loop"]["escalated_features"],
+                      "예산 소진 루프가 라벨에 가려 개선 후보에서 빠졌다")
+        self.assertTrue(any(self.MARKERS["escalation"] in c for c in data["candidates"]),
+                        "Architect 선행 검토 후보가 발화하지 않았다")
+
+    def test_재작업_집계는_architect_체크포인트에_지워지지_않는다(self):
+        """`revision_count` 는 "마지막 architect 이후 예산" 이라 재작업 횟수가 아니다.
+
+        architect 를 많이 쓴 루프일수록 과소보고되는 **역방향 신호**였다. 그리고 분류를
+        저장된 `kind` 라벨로 하면 손으로 쓴 라벨 하나에 통계가 흔들린다 — `_derive` 는
+        grader 이름으로 분류하는데 이 소비자만 라벨을 믿고 있었다 (7차 SHOULD-2).
+        """
+        root = self._fresh_root("reworks")
+        self._loop(root, "F506",
+                   [("reviewer", "revision")] * 3 + [("architect", "pass")]
+                   + [("qa", "revision")] * 3 + [("architect", "pass")]
+                   + [("test", "revision")])   # 결정론 재작업은 judge 재작업이 아니다
+        data = json.loads(_run(root, _HILL, "analyze", "--json").stdout)
+        self.assertEqual(data["signals"]["verify_loop"]["avg_reworks"], 6.0,
+                         "judge 재작업 6회가 architect 재무장에 지워졌거나 "
+                         "결정론 revision 이 섞였다")
+
+    def test_재작업_집계가_손으로_쓴_kind_라벨에_흔들리지_않는다(self):
+        """`_derive` 는 저장된 `kind` 를 믿지 않는데 이 소비자만 믿고 있었다 (7차 SHOULD-2).
+
+        `test_저장된_kind_라벨로는_분류를_바꿀_수_없다` 가 `_derive` 쪽에서 그 규율을
+        고정한다. 같은 리포의 다른 소비자가 반대로 가면 규율이 반쪽이 된다 — 손으로 쓴
+        라벨 하나에 재작업 통계가 부풀거나 0 이 된다.
+
+        CLI 가 만든 이력은 `kind` 가 항상 올바라 이 차이를 **드러내지 못한다**. 그래서
+        이력을 직접 쓴다 (`hill_climb` 은 raw `json.load` 로 읽는다 — ADR-024 결정 9).
+        """
+        root = self._fresh_root("kind-label")
+        (root / ".claude" / "state" / "verify-loop" / "F507.json").write_text(json.dumps({
+            "feature": "F507", "status": "in-loop", "revision_count": 1,
+            "escalation_threshold": 3,
+            "attempts": [
+                # judge 인데 라벨이 **없다** — grader 로 세면 잡히고, 라벨로 세면 빠진다
+                {"n": 1, "grader": "reviewer", "verdict": "revision"},
+                {"n": 2, "grader": "qa", "verdict": "revision"},
+                # 결정론인데 라벨이 **judge 로 적혀 있다** — 라벨로 세면 잘못 더해진다
+                {"n": 3, "grader": "test", "kind": "judge", "verdict": "revision"},
+            ],
+        }), encoding="utf-8")
+        # 두 방식이 **다른 값**을 내도록 비대칭으로 짰다: grader 기준 2, 라벨 기준 1.
+        # 1:1 로 짜면 누락과 오탐이 서로 상쇄돼 테스트가 둘을 구별하지 못한다 (실측).
+        data = json.loads(_run(root, _HILL, "analyze", "--json").stdout)
+        self.assertEqual(data["signals"]["verify_loop"]["avg_reworks"], 2.0,
+                         "저장된 kind 라벨로 재작업을 세고 있다 — grader 이름으로 센다")
 
     def test_개선후보_heuristic_5종이_각각_발화한다(self):
         """5종 중 **어느 하나를 제거해도** 이 테스트가 실패하고, 어느 것이 죽었는지

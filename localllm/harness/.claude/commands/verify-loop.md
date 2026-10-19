@@ -53,9 +53,15 @@ escalated  ← 예산 소진
 in-loop    ← 그 외
 ```
 
-요약 필드(`status`/`revision_count`/`gates_passed`/`gates_broken`)는 저장되지만 **신뢰되지
-않는다** — 매 읽기마다 이력에서 다시 계산하므로 상태 파일을 손으로 고쳐도 다음 `record` 가
-바로잡는다.
+요약 필드(`status`/`revision_count`/`budget_exhausted`/`gates_passed`/`gates_broken`)는
+저장되지만 **신뢰되지 않는다** — `verify_loop.py` 를 거쳐 읽을 때마다 이력에서 다시
+계산하므로 상태 파일을 손으로 고쳐도 다음 `record` 가 바로잡는다. (상태 파일을 직접
+`json.load` 하는 소비자는 저장값을 그대로 믿는다 — ADR-024 결정 9.)
+
+**`status` 는 표시용이다.** 동작을 바꾸는 코드는 `status` 를 비교하지 않고 차원 필드를
+읽는다 — 예산은 `budget_exhausted`, 게이트는 `gates_broken` (ADR-024 결정 8). 라벨은
+`failed` 를 `escalated` 보다 앞서 분류하므로, 라벨로 분기하면 예산이 소진돼도 마지막
+판정이 `fail` 인 루프에서 발화하지 않는다.
 
 ### 이력 → 상태 (각 행을 테스트가 실제로 실행해 대조한다)
 
