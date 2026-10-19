@@ -1125,6 +1125,70 @@ _VARIANTS_NO_ATLASSIAN = [
 # Atlassian 오버레이를 보유해야 하는 변형 (MR-15: vela 계열)
 _VARIANTS_WITH_ATLASSIAN = ["claude.vela.v0.1"]
 
+# ── 내용 오버레이 (LINT-CO — F021 에스컬레이션 / ADR-015 결정 5) ──────────────
+#
+# 오버레이는 **파일로도, 내용으로도** 존재한다. 위 `_*_OVERLAY_FILES` 는 전자만 본다.
+# 2026-10-19 에 `reviewer.md` 를 전 변형에 일괄 복사했을 때 ① loop 서술이 비-loop
+# 5곳에 누수되고 ② 동결 baseline 이 덮이고 ③ aif 의 의도된 차이가 지워졌는데
+# `lint --strict` 는 **0 BLOCK** 이었다. 파일 단위 격리만 실재했기 때문이다.
+#
+# 여기서 **새 표를 만들지 않는다.** 갈래는 임의가 아니라 오버레이 멤버십의 함수이고,
+# 그 멤버십은 위 `_VARIANTS_WITH_*` 가 이미 유지한다. 그래서 파일당 선언은 **축 이름
+# 한 줄**이다 — 값이 아니라 **모양**의 선언이라 정당한 문구 수정에 **불변**이다.
+# (기대 해시 표로 두면 `reviewer.md` 를 한 줄 고칠 때마다 갈래 수만큼 갱신해야 하고,
+#  그 번거로움이 `regenerate` 를 부르며, 그 순간 검사기는 공회전한다.)
+
+#: 모델 축 — `localllm.nem` (F030 / ADR-021). **자기 파일이 하나도 없는 최초의 순수
+#: 내용 오버레이**다. 그래서 파일 기반 정책이 구조적으로 볼 수 없었다 (실측: 부모와
+#: 4 파일에서 갈림). CLAUDE.md 는 "오버레이 프로필이 부모와 동일" 이라 적지만 내용은 다르다.
+_VARIANTS_WITH_MODEL_NEM = ["localllm.nem"]
+
+#: 축 이름 → 그 축을 가진 변형 목록. **기존 상수를 참조한다 — 재나열하지 않는다.**
+#: 재나열하면 두 목록이 갈라지고, 그것이 지금 고치는 결함 그 자체다.
+_CO_AXES = {
+    "design": _VARIANTS_WITH_DESIGN, "wiki": _VARIANTS_WITH_WIKI,
+    "orch": _VARIANTS_WITH_ORCH, "d2": _VARIANTS_WITH_D2,
+    "hermes": _VARIANTS_WITH_HERMES, "pm": _VARIANTS_WITH_PM,
+    "nw": _VARIANTS_WITH_NW, "loop": _VARIANTS_WITH_LOOP,
+    "aif": _VARIANTS_WITH_AIF, "atl": _VARIANTS_WITH_ATLASSIAN,
+    "model_nem": _VARIANTS_WITH_MODEL_NEM,
+}
+
+#: 이 파일의 내용은 이 축들에 대해서**만** 갈라진다.
+#: 없는 파일은 **축 ∅** — 존재하는 모든 곳에서 바이트 동일해야 한다(fail-closed 기본값).
+#: 아래 14종은 트리에서 **도출**한 것이다: 관측 분할을 재현하는 최소 축 집합을 탐색했고
+#: 14/14 가 기존 `_VARIANTS_WITH_*` 조합으로 정확히 재구성됐다.
+_CONTENT_OVERLAY_AXES = {
+    ".claude/agents/reviewer.md": {"loop", "aif"},
+    ".claude/agents/qa.md": {"loop", "aif"},
+    ".claude/commands/retro.md": {"loop"},
+    ".claude/commands/product-cycle.md": {"loop"},
+    ".claude/commands/verify-loop.md": {"aif"},
+    ".claude/commands/init-project.md": {"d2", "model_nem"},
+    ".claude/rules/coding-standards.md": {"loop", "d2", "aif"},
+    ".claude/skills/coding/SKILL.md": {"d2"},
+    ".claude/skills/coding/SKILL.md.template": {"d2"},
+    ".claude/skills/design-review/SKILL.md": {"d2"},
+    ".claude/skills/qa-browser/SKILL.md": {"d2"},
+    ".claude/bin/cycle_driver.py": {"aif", "model_nem"},
+    ".claude/bin/autoresearch.py": {"model_nem"},
+    ".claude/bin/opencode-setup.sh": {"model_nem"},
+}
+
+#: 동결 변형 — `LINT-CO` 에 참여시키지 않는다. "baseline 은 늘 달라야 한다" 로 모델링하면
+#: Karpathy 동기화가 영구 금지된다. 동결은 `LINT-FREEZE` 가 해시로 본다.
+_CO_FROZEN = ("claude", "openai")
+
+#: 변형마다 정당하게 다른 머신·프로젝트 로컬 파일 (`_SSOT_EXCLUDE_*` 와 같은 층위).
+_CO_LOCAL_NAMES = {"settings.json", "settings.local.json", "host.json",
+                   "atlassian-targets.json"}
+
+#: 비교 대상 하위 트리. `docs/adr/` 는 **축 ∅** — 존재하는 모든 곳에서 같아야 한다.
+#: `check_ssot` 이 `docs/adr/` 를 **loope 하고만** 비교해 나머지 변형이 무가드였고,
+#: 실제로 ADR-015·ADR-017 이 2:4 로 갈린 채 0 BLOCK 이었다.
+#: `wiki/` 는 범위 밖 — 생성 vault 이고 변형별 노드 집합 자체가 다르다.
+_CO_ROOTS = (".claude", "docs/adr")
+
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
     "harness/.claude/bin/wiki-setup.sh",
@@ -1885,6 +1949,218 @@ def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     return out
 
 
+def _co_profile(variant: str, axes) -> frozenset:
+    """이 변형이 선언된 축들 중 **어디에 속하는가** — 기대 분할의 좌표.
+
+    `MAIN` 은 `claude.loope` 의 프로필로 환산한다 (ADR-015: main ≡ loope).
+    """
+    src = "claude.loope" if variant == "MAIN" else variant
+    return frozenset(a for a in axes if src in _CO_AXES[a])
+
+
+def _co_collect() -> tuple:
+    """{상대경로: {변형: 해시}} 와 스캔한 루트 수를 모은다."""
+    import hashlib
+    roots = {"MAIN": _PROJECT_ROOT}
+    for d in sorted(_HT.iterdir()):
+        if d.is_dir() and (d / "harness").is_dir() and d.name not in _CO_FROZEN:
+            roots[d.name] = d / "harness"
+    files: dict = {}
+    for name, root in roots.items():
+        for base in _CO_ROOTS:
+            top = root / base
+            if not top.is_dir():
+                continue
+            for q in top.rglob("*"):
+                if not q.is_file() or q.is_symlink():
+                    continue
+                if "__pycache__" in q.parts or q.suffix == ".pyc":
+                    continue
+                rel = str(q.relative_to(root))
+                if Path(rel).name in _CO_LOCAL_NAMES:
+                    continue
+                if rel.startswith(".claude/state/") or rel.startswith(".claude/design/"):
+                    continue
+                try:
+                    digest = hashlib.sha256(q.read_bytes()).hexdigest()[:12]
+                except OSError:
+                    continue
+                files.setdefault(rel, {})[name] = digest
+    return files, len(roots)
+
+
+def check_content_overlay() -> list:
+    """공유 파일 **안의** 오버레이가 선언된 축대로만 갈라지는지 본다 (ADR-015 결정 5).
+
+    `LINT-MR` 은 오버레이 **파일**이 남의 변형에 있는지를 본다. 이 검사기는 모든 변형이
+    **공유하는 파일의 내용**이 선언된 축이 만드는 분할과 **정확히** 일치하는지 본다.
+    양방향이라 조용한 실패 모드가 없다:
+
+      - 같은 프로필인데 바이트가 다르다  → **선언 안 된 분기** (부분 미러·미선언 축)
+      - 다른 프로필인데 바이트가 같다    → **오버레이 소실** (일괄 복사 사고)
+
+    정당한 편집(모든 비동결 사본에 같은 수정)은 분할을 바꾸지 않으므로 **0 BLOCK** 이다 —
+    그것이 기대 해시 표 대신 파생 분할을 고른 이유다.
+    """
+    results = []
+    checker = "LINT-CO"
+    if not _HT.exists():
+        return [_issue(checker, INFO, "src/harness_template/", "템플릿 트리 없음 — 검사 생략")]
+
+    unknown = {a for ax in _CONTENT_OVERLAY_AXES.values() for a in ax} - set(_CO_AXES)
+    if unknown:
+        results.append(_issue(checker, BLOCK, "_CONTENT_OVERLAY_AXES",
+                              f"_CO_AXES 에 없는 축을 선언했다: {sorted(unknown)}"))
+        return results
+
+    files, n_roots = _co_collect()
+    shared = {rel: m for rel, m in files.items() if len(m) >= 2}
+    if not shared:
+        return [_issue(checker, BLOCK, "src/harness_template/",
+                       "공유 파일을 하나도 못 찾았다 — 검사기가 공회전한다")]
+
+    bad = 0
+    for rel in sorted(shared):
+        obs = shared[rel]
+        axes = _CONTENT_OVERLAY_AXES.get(rel, set())
+        groups: dict = {}
+        for variant, digest in obs.items():
+            groups.setdefault(_co_profile(variant, axes), {}) \
+                  .setdefault(digest, []).append(variant)
+
+        def _name(prof):
+            return ",".join(sorted(prof)) or "(base)"
+
+        # ① 같은 프로필인데 갈렸다
+        for prof, by_digest in sorted(groups.items(), key=lambda kv: _name(kv[0])):
+            if len(by_digest) > 1:
+                bad += 1
+                detail = " | ".join(f"{d}:{sorted(vs)}" for d, vs in sorted(by_digest.items()))
+                results.append(_issue(
+                    checker, BLOCK, rel,
+                    f"선언 안 된 분기 — 프로필 '{_name(prof)}' 안에서 내용이 갈렸다: {detail}. "
+                    "부분 미러이거나 선언되지 않은 축이다"))
+
+        # ② 다른 프로필인데 같아졌다
+        seen: dict = {}
+        for prof, by_digest in groups.items():
+            for digest in by_digest:
+                seen.setdefault(digest, []).append(prof)
+        for digest, profs in sorted(seen.items()):
+            if len(profs) < 2:
+                continue
+            bad += 1
+            names = sorted(_name(x) for x in profs)
+            diff = set().union(*profs) - set().intersection(*profs)
+            hint = (f" 선언된 축 {sorted(diff)} 가 실제로는 분할을 만들지 않는다 — "
+                    "죽은 축 선언이거나 오버레이가 지워졌다." if diff else "")
+            results.append(_issue(
+                checker, BLOCK, rel,
+                f"오버레이 소실 — 서로 다른 프로필 {names} 이 같은 내용이 됐다.{hint}"))
+
+    if not bad:
+        results.append(_issue(checker, PASS, f"{len(shared)} 공유 파일",
+                              f"내용 오버레이 정합 OK ({n_roots} 트리 · "
+                              f"선언 {len(_CONTENT_OVERLAY_AXES)} 파일 · 축 {len(_CO_AXES)})"))
+    return results
+
+
+#: 동결 매니페스트 — 경로 → {sha256, reason}. ADR-015 결정 6.
+_FREEZE_MANIFEST = _CLAUDE_DIR / "freeze-manifest.json"
+
+#: `reason` 의 허용값. 다른 값은 사유 날조로 보고 BLOCK 한다.
+_FREEZE_REASONS = ("phase0", "karpathy")
+
+#: Karpathy 4원칙 제목. `reason: "karpathy"` 인 파일은 하나 이상 포함해야 한다 —
+#: 사유가 참인지 보는 `must_contain` 앵커다. 리워딩되면 **시끄럽게** 실패한다
+#: (`must_not_contain` 이었다면 조용히 vacuous 가 된다).
+_KARPATHY_TITLES = ("Think Before Coding", "Simplicity First",
+                    "Surgical Changes", "Goal-Driven Execution")
+
+
+def check_freeze() -> list:
+    """동결 스냅샷(`claude/` baseline · `openai/.codex/`)이 바뀌지 않았는지 본다.
+
+    `LINT-CO` 는 이것을 **못 잡는다**(실측 — baseline 만 덮어쓰면 0 BLOCK). 동결을 축으로
+    모델링하면 "baseline 은 늘 달라야 한다" 가 되어 Karpathy 동기화를 영구 금지하게 된다.
+
+    해시 표가 여기서는 옳다 — 해시 표의 결함("자주 바뀌는 파일에 쓰면 갱신이 번거로워
+    `regenerate` 를 부르고 그 순간 공회전")은 자주 바뀌는 대상에서만 생기는데, 동결
+    대상은 정의상 안 바뀐다. **그래서 `regenerate` 서브커맨드를 만들지 않는다.**
+    Karpathy 동기화는 매니페스트를 거쳐 간다 — 같은 커밋에서 해시와 사유를 갱신하고,
+    그 한 줄이 diff 에 남아 리뷰에서 보인다. 일괄 `cp` 는 매니페스트를 갱신하지 않는다.
+    """
+    import hashlib
+    results = []
+    checker = "LINT-FREEZE"
+    if not _HT.exists():
+        return [_issue(checker, INFO, "src/harness_template/", "템플릿 트리 없음 — 검사 생략")]
+    if not _FREEZE_MANIFEST.is_file():
+        return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
+                       "동결 매니페스트가 없다 — 동결이 강제되지 않는다 (ADR-015 결정 6)")]
+    try:
+        manifest = json.loads(_FREEZE_MANIFEST.read_text(encoding="utf-8")).get("files", {})
+    except (OSError, ValueError) as exc:
+        return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
+                       f"매니페스트를 읽지 못했다 ({type(exc).__name__}) — 손상이면 전면 거부다")]
+    if not manifest:
+        return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
+                       "매니페스트가 비었다 — 검사기가 공회전한다")]
+
+    bad = 0
+    for rel, entry in sorted(manifest.items()):
+        path = _PROJECT_ROOT / rel
+        reason = (entry or {}).get("reason")
+        if reason not in _FREEZE_REASONS:
+            bad += 1
+            results.append(_issue(checker, BLOCK, rel,
+                                  f"사유가 허용값이 아니다: {reason!r} — "
+                                  f"{list(_FREEZE_REASONS)} 중 하나여야 한다"))
+            continue
+        if not path.is_file():
+            bad += 1
+            results.append(_issue(checker, BLOCK, rel, "동결 파일이 사라졌다"))
+            continue
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != (entry or {}).get("sha256"):
+            bad += 1
+            results.append(_issue(checker, BLOCK, rel,
+                                  "동결 파일이 바뀌었다 — 의도적 Karpathy 동기화라면 "
+                                  "같은 커밋에서 매니페스트의 sha256·reason 을 갱신하라"))
+            continue
+        if reason == "karpathy":
+            text = data.decode("utf-8", errors="replace")
+            if not any(t in text for t in _KARPATHY_TITLES):
+                bad += 1
+                results.append(_issue(checker, BLOCK, rel,
+                                      "사유가 'karpathy' 인데 4원칙 제목이 하나도 없다 — "
+                                      "사유가 거짓이거나 동기화가 되돌려졌다"))
+
+    # 매니페스트에 없는 동결 파일 — 새로 들어온 것은 동결 밖이라 가드가 0이 된다
+    tracked = set(manifest)
+    for base in (_HT / "claude" / "harness", _HT / "openai" / "harness"):
+        if not base.is_dir():
+            continue
+        for q in sorted(base.rglob("*")):
+            if not q.is_file() or q.is_symlink():
+                continue
+            if "__pycache__" in q.parts or q.suffix == ".pyc":
+                continue
+            if any(x in q.parts for x in ("state", "node_modules", ".pytest_cache")):
+                continue
+            if str(q.relative_to(_PROJECT_ROOT)) not in tracked:
+                bad += 1
+                results.append(_issue(checker, BLOCK, str(q.relative_to(_PROJECT_ROOT)),
+                                      "동결 트리에 매니페스트에 없는 파일이 있다 — "
+                                      "동결 밖이라 아무 가드도 보지 않는다"))
+
+    if not bad:
+        n_k = sum(1 for e in manifest.values() if (e or {}).get("reason") == "karpathy")
+        results.append(_issue(checker, PASS, f"{len(manifest)} 동결 파일",
+                              f"해시 일치 OK (karpathy {n_k} / phase0 {len(manifest) - n_k})"))
+    return results
+
+
 def check_atlassian_targets() -> list:
     """배포되는 허용 목록이 **비어 있는지** 본다 (3-C 철칙).
 
@@ -2085,7 +2361,9 @@ _CHECKERS = {
     "LINT-MIRROR": ("gstack 표준 변형 대조 (참고용 INFO)", check_mirror),
     "LINT-SSOT": ("main ≡ claude.loope invariant (ADR-015)", check_ssot),
     "LINT-ATL": ("Atlassian 쓰기 대상 제한 — 3-C 철칙 (배포본 fail-closed)", check_atlassian_targets),
-    "LINT-MR": ("변형 오버레이 정합 (12변형 — F018 MR-11, F019 MR-12, F020 MR-13 추가)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 — 파일 단위 (MR-1~15)", check_mirror_regression),
+    "LINT-CO": ("내용 오버레이 정합 — 공유 파일 안의 변형군별 사본 (ADR-015 결정 5)", check_content_overlay),
+    "LINT-FREEZE": ("동결 스냅샷 불변 — baseline · openai/.codex (ADR-015 결정 6)", check_freeze),
 }
 
 

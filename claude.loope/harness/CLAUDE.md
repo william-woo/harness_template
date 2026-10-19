@@ -213,14 +213,32 @@ project-root/
 rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
   --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
   .claude/ src/harness_template/claude.loope/harness/.claude/
-# 하위 변형(productmgr/hermes/orch/...)은 LINT-MR 오버레이 목록 기준으로 제외 미러
 ```
+
+> ### ⚠️ 하위 변형에 **일괄 복사(rsync·cp)를 쓰지 않는다**
+>
+> 오버레이는 **파일로도, 내용으로도** 존재한다 (ADR-015 결정 5). 일괄 복사는 파일 단위
+> 제외만 지키고 **공유 파일 안의 변형군별 문단**을 뭉갠다. 2026-10-19 에 `reviewer.md` 를
+> 그렇게 복사해 ① loop 서술이 비-loop 변형 5곳에 누수 ② 동결 baseline 덮어쓰기
+> ③ aif 2 사본의 의도된 차이 소실이 한 번에 났고, 그때 `lint --strict` 는 **0 BLOCK** 이었다.
+>
+> | 미러할 것 | 방법 |
+> |---|---|
+> | 전 변형 동일 파일 (축 ∅) | 복사해도 된다 |
+> | **내용 오버레이 보유 파일** (`lint.py` 의 `_CONTENT_OVERLAY_AXES` 14종 — `reviewer.md`·`qa.md`·`coding-standards.md`·`retro.md`·`verify-loop.md`·SKILL 4종·`cycle_driver.py` 등) | **복사 금지.** 같은 **삽입/치환**을 변형군마다 적용한다 |
+> | 동결 (`claude/`·`openai/`) | 손대지 않는다. Karpathy 동기화만 예외이고 `freeze-manifest.json` 을 **같은 커밋에서** 갱신한다 |
+>
+> 미러 뒤 `python3 .claude/bin/lint.py check --only=LINT-CO,LINT-FREEZE,LINT-SSOT,LINT-MR --strict`
+> 로 확인한다. 어느 파일이 내용 오버레이인지는 외우지 말고 `_CONTENT_OVERLAY_AXES` 를 본다.
 
 > **F020 meta-dev 오버레이는 폐기** — F021 전면 승격(main≡loope, ADR-015)에 흡수됨.
 
 **`claude/` (baseline)은 의도적으로 동결**: Phase 0 (F001 시작 전) 스냅샷.
 변경 금지. 신규 phase는 `claude.gstack/`에만 반영.
 > **예외**: Karpathy 4원칙(Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution) 같은 phase-agnostic 보편 디시플린은 baseline에도 동기화한다.
+> **단 `.claude/freeze-manifest.json` 의 해시·사유를 같은 커밋에서 갱신**해야 통과한다
+> (`LINT-FREEZE`). 그 한 줄이 diff 에 남아 리뷰에서 보인다 — `regenerate` 서브커맨드는
+> 의도적으로 없다 (만드는 순간 검사기가 공회전한다).
 
 **`openai/` 변형**: F006 세션 2에서 수동 생성된 정적 산출물 (Codex 호스트용 .codex/ 구조).
 직접 손대지 말 것 — codex 어댑터가 실구현되는 후속 phase에서 render-skills로 자동 재생성 가능해진다.
@@ -913,6 +931,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
   **우리 리포가 SSOT**, Atlassian 은 발행 대상 — 역반영 금지. 발행은 **PR 과 같은 승인 층위**
 
 회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
++ `--only=LINT-CO` (**내용** 오버레이 — 공유 파일 안의 변형군별 사본, ADR-015 결정 5)
++ `--only=LINT-FREEZE` (동결 스냅샷 불변 — baseline·openai, ADR-015 결정 6)
 + `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~15 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14·F030 변형 등재·F032 MR-15 추가).
 
 ---
