@@ -11,6 +11,7 @@
 실행:
     python3 tests/test_verify_loop.py
 """
+import ast
 import contextlib
 import importlib.util
 import io
@@ -846,28 +847,102 @@ class VerifyLoopFourthReviewTest(unittest.TestCase):
                          "거부됐는데 이력이 지워졌다")
 
 
-class CycleDriverEscalationSignalTest(unittest.TestCase):
-    """ADR-024 결정 6 — 무인 드라이버가 **존재한 적 없는 키**를 읽고 있었다 (실측 8).
+class EscalationEnforcementSiteTest(unittest.TestCase):
+    """집행 **지점의 공간**을 고정한다 — 인스턴스가 아니라 (F020 AC3, ADR-024 결정 8).
 
-    `cycle_driver.py` 는 `state.get("escalated")` 로 에스컬레이션을 감지했는데, 상태
-    파일에 그런 키는 한 번도 없었다 (`status == "escalated"` 가 실제 표현이다). 즉
-    에스컬레이션 신호가 드라이버에 **닿은 적이 없다**. 정적으로 고정한다 — 실제 구동은
-    OpenCode·로컬 모델을 요구하므로 단위 테스트가 태울 수 없다.
+    이 클래스가 필요한 이유는 같은 결함이 세 번 난 경위에 있다:
+
+      1차: `cycle_driver` 가 존재하지 않는 키 `escalated` 를 읽었다 (ADR-024 실측 8)
+      2차: `start --force` 라는 **집행 지점 자체가 없었다** (4차 MUST-4)
+      3차: 게이트 2곳이 접힌 라벨을 읽었다 (6차 MUST-1)
+
+    매번 "그 지점" 에 회귀 테스트를 붙였고, 매번 **다음 지점**에서 다시 났다. 지점별
+    테스트는 인스턴스를 고정할 뿐 공간을 고정하지 못한다. 여기서는 "막혀 있는가" 를
+    묻는 주소가 **하나뿐**임을 소스에서 직접 확인한다.
     """
 
-    def test_드라이버가_실존하는_키로_에스컬레이션을_읽는다(self):
+    #: 예산 차원을 읽어야 하는 모듈 (ADR-024 결정 8 의 소비자 표와 같아야 한다)
+    _CONSUMERS = ("verify_loop.py", "hill_climb.py", "cycle_driver.py")
+
+    def _sources(self) -> dict:
+        """스캔 대상 {표시이름: 소스}. 변형 사본에는 템플릿 트리가 없으므로 있는 것만."""
+        root = Path(__file__).resolve().parent.parent
+        found = {}
+        for name in ("verify_loop.py", "hill_climb.py"):
+            q = root / ".claude" / "bin" / name
+            if q.is_file():
+                found[name] = q.read_text(encoding="utf-8")
+        for q in sorted((root / "src" / "harness_template").glob(
+                "*/harness/.claude/bin/cycle_driver.py")):
+            found[f"{q.parents[3].name}/cycle_driver.py"] = q.read_text(encoding="utf-8")
+        return found
+
+    def test_판정_지점이_접힌_라벨을_읽지_않는다(self):
+        """`status` 를 `"escalated"` 와 **비교**하는 코드가 0건이어야 한다.
+
+        `status` 는 표시용 요약이다. 생산(`_derive` 의 대입)과 배지 사전은 비교가
+        아니므로 걸리지 않는다 — 걸리는 것은 라벨로 **분기하는** 코드뿐이다.
+        """
+        offenders = []
+        for label, src in self._sources().items():
+            for node in ast.walk(ast.parse(src)):
+                if not isinstance(node, ast.Compare):
+                    continue
+                parts = [node.left, *node.comparators]
+                if any(isinstance(n, ast.Constant) and n.value == "escalated" for n in parts):
+                    offenders.append(f"{label}:{node.lineno}")
+        self.assertEqual(offenders, [],
+                         "라벨로 분기하는 판정 지점이 있다 — 예산이 소진돼도 마지막 판정이 "
+                         f"fail 이면 발화하지 않는다: {offenders}")
+
+    def test_모든_소비자가_예산_차원을_읽는다(self):
+        """반대 방향 — 어느 소비자가 차원 읽기를 **잃어도** 드러나야 한다.
+
+        위 테스트만 있으면 소비자가 조건을 통째로 지워도 0건이라 통과한다. 거짓 부재는
+        오탐보다 나쁘다 — 오탐은 보이고 거짓 부재는 보이지 않는다.
+        """
+        srcs = self._sources()
+        self.assertIn("verify_loop.py", srcs, "스캔 대상이 비었다 — 테스트가 공회전한다")
+        for label, src in srcs.items():
+            if not label.endswith(self._CONSUMERS):
+                continue
+            self.assertIn("budget_exhausted", src,
+                          f"{label} 이 예산 차원을 읽지 않는다 (ADR-024 결정 8 의 소비자 표)")
+
+
+class CycleDriverEscalationSignalTest(unittest.TestCase):
+    """무인 드라이버의 에스컬레이션 감지 — 같은 줄이 **두 번** 틀렸다.
+
+      1차: `state.get("escalated")` — 상태 파일에 **그런 키가 없었다**. 신호가 드라이버에
+           닿은 적이 없다 (ADR-024 실측 8).
+      2차: `state.get("status") == "escalated"` — 키는 실존하지만 **접힌 라벨**이라, 예산이
+           소진돼도 마지막 판정이 `fail` 이면 발화하지 않았다 (6차 MUST-1 / ADR-024 결정 8).
+
+    1차 수정을 고정한 테스트는 그 **리터럴**을 단언했다. 인스턴스를 고정하면 2차가
+    "테스트를 깨는 수정" 으로 보여 손이 멈춘다 — 실제로 이번에 그랬다. 그래서 여기서는
+    리터럴이 아니라 **성질**을 고정한다: 죽은 키를 읽지 않고, 감지가 사라지지 않고,
+    근거가 라벨이 아니라 차원일 것. 라벨 비교 금지는 `EscalationEnforcementSiteTest` 가
+    모든 소비자에 대해 본다 — 여기서는 이 파일에 감지가 **존재**하는지만 본다.
+
+    정적으로 본다 — 실제 구동은 OpenCode·로컬 모델을 요구해 단위 테스트가 태울 수 없다.
+    """
+
+    def test_드라이버가_에스컬레이션을_예산_차원으로_읽는다(self):
         driver = (Path(__file__).resolve().parent.parent
                   / ".claude" / "bin" / "cycle_driver.py")
         if not driver.exists():
             self.skipTest("cycle_driver 는 localllm 계열 변형에만 있다 (d-2 오버레이)")
-        # 주석은 떼고 본다 — 수정 자리의 주석이 "예전엔 이 키를 읽었다" 며 옛 키를 **인용**한다.
-        # 그 인용을 결함으로 잡으면 설명을 지우게 되고, 다음 사람은 왜 고쳤는지 모른다.
+        # 주석은 떼고 본다 — 수정 자리의 주석이 "예전엔 이 키를 읽었다" 며 옛 표현을
+        # **인용**한다. 그 인용을 결함으로 잡으면 설명을 지우게 되고, 다음 사람은 왜
+        # 두 번이나 고쳤는지 모른다.
         src = driver.read_text(encoding="utf-8")
         code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
         self.assertNotIn('state.get("escalated")', code,
                          "상태 파일에 없는 키를 읽는다 — 신호가 영영 닿지 않는다")
-        self.assertIn('state.get("status") == "escalated"', code,
-                      "에스컬레이션 감지 자체가 사라졌다")
+        self.assertIn("budget_exhausted", code,
+                      "에스컬레이션 감지가 사라졌거나 다시 라벨을 읽는다")
+        self.assertIn("_vl_norm", code,
+                      "정규화를 거치지 않으면 임계 결측·오염이 새 결함이 된다")
 
 
 class HillClimbHeuristicTest(unittest.TestCase):

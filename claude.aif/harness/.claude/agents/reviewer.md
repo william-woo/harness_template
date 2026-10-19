@@ -128,9 +128,10 @@ python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict revisi
 python3 .claude/bin/verify_loop.py record <F> --grader reviewer --verdict fail --notes "<설계 사유>"
 ```
 
-> **에스컬레이션 (자동)**: NEEDS REVISION 3회 누적 시 verify-loop 가 `escalated` 가 되고
-> 그 상태에서 **reviewer 의 `pass` 는 거부된다**(exit 1). 별도 카운팅 불필요 — 산문 규칙이
-> 상태로 코드화됨. 푸는 수단은 하나뿐이다:
+> **에스컬레이션 (자동)**: NEEDS REVISION 3회 누적 시 **reviewer 의 `pass` 는 거부된다**(exit 1).
+> 거부 조건은 상태 라벨이 아니라 **누적 횟수**다 — 그 사이에 `fail` 을 내 라벨이 `failed` 가
+> 돼도 거부는 유지된다 (ADR-024 결정 8). 별도 카운팅 불필요 — 산문 규칙이 코드화됨.
+> 푸는 수단은 하나뿐이다:
 >
 > ```bash
 > python3 .claude/bin/verify_loop.py record <F> --grader architect --verdict pass --notes "<결정 내용>"

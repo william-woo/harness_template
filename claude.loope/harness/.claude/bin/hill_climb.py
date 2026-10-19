@@ -114,6 +114,22 @@ def _as_int(value: object) -> int | None:
     return value
 
 
+def _budget_exhausted(loop: dict) -> bool:
+    """예산이 소진됐는가 — `status` 라벨이 아니라 차원을 본다 (ADR-024 결정 8).
+
+    `_collect_verify_loops` 는 `verify_loop.py` 를 거치지 않고 `json.load` 하므로
+    파생 필드가 없는 **옛 파일**이 섞인다. 그래서 필드를 우선 쓰되 없으면 직접 센다.
+    라벨(`status == "escalated"`)로 돌아가면 안 된다 — 예산이 소진돼도 마지막 판정이
+    `fail` 이면 라벨은 `failed` 라, **가장 나쁜 루프가 개선 후보에서 빠진다**.
+    """
+    flag = loop.get("budget_exhausted")
+    if isinstance(flag, bool):
+        return flag
+    count = _as_int(loop.get("revision_count", 0)) or 0
+    thr = _as_int(loop.get("escalation_threshold", 3)) or 3
+    return thr > 0 and count >= thr
+
+
 def _signals() -> dict:
     """3개 트레이스 소스를 집계해 Loop 4 신호를 낸다 (결정론)."""
     loops = _collect_verify_loops()
@@ -122,8 +138,15 @@ def _signals() -> dict:
 
     # ── verify-loop (Loop 2) 신호 ──
     status_counts = Counter(str(l.get("status", "?")) for l in loops)
-    revisions = [n for n in (_as_int(l.get("revision_count", 0)) for l in loops) if n is not None]
-    escalated = [str(l.get("feature", "?")) for l in loops if l.get("status") == "escalated"]
+    # `revision_count` 는 "**마지막 architect 이후**의 예산" 이지 재작업 횟수가 아니다.
+    # 그것을 평균 내면 architect 체크포인트를 많이 쓴 루프일수록 과소보고되는 **역방향
+    # 신호**가 된다 — judge revision 6회 + architect 2회인 루프가 `0` 으로 집계됐다
+    # (6차 SHOULD / ADR-024 결정 8). 재작업 횟수는 이력에서 직접 센다.
+    reworks = [sum(1 for a in l.get("attempts", [])
+                   if str(a.get("verdict")) == "revision"
+                   and str(a.get("kind")) == "judge")
+               for l in loops]
+    escalated = [str(l.get("feature", "?")) for l in loops if _budget_exhausted(l)]
     grader_verdicts: Counter = Counter()   # (grader, verdict) → n
     for l in loops:
         for a in l.get("attempts", []):
@@ -152,7 +175,7 @@ def _signals() -> dict:
         "verify_loop": {
             "total": len(loops),
             "status": dict(status_counts),
-            "avg_revisions": round(sum(revisions) / len(revisions), 2) if revisions else 0,
+            "avg_reworks": round(sum(reworks) / len(reworks), 2) if reworks else 0,
             "escalated_features": escalated,
             "grader_revision_rate": {g: round(r, 2) for g, r in sorted(grader_rev_rate.items())},
         },
@@ -199,7 +222,7 @@ def cmd_analyze(args) -> int:
     vl, an, le = sig["verify_loop"], sig["analytics"], sig["learnings"]
     print("[hill-climb] ── Loop 4 신호 리포트 (결정론 집계) ──\n")
     print("① verify-loop (Loop 2 트레이스)")
-    print(f"   루프 {vl['total']}개 · 상태 {vl['status']} · 평균 revision {vl['avg_revisions']}")
+    print(f"   루프 {vl['total']}개 · 상태 {vl['status']} · 평균 재작업 {vl['avg_reworks']}회")
     if vl["grader_revision_rate"]:
         print(f"   grader revision율: {vl['grader_revision_rate']}")
     if vl["escalated_features"]:

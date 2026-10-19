@@ -195,7 +195,13 @@ def _derive(attempts: list, threshold: int) -> dict:
     else:
         status = "in-loop"
 
+    # `status` 는 **표시용 요약**이다. 동작을 바꾸는 코드는 이 합쳐진 값이 아니라
+    # 차원 필드를 읽는다 (ADR-024 결정 8). 예산 차원을 불리언으로 함께 내보내는 이유는
+    # 비교식을 호출처에 두면 **호출처마다 임계 정규화를 다시** 해야 하기 때문이다 —
+    # `cycle_driver._vl_norm` 은 `revision_count` 만 정규화하고 `escalation_threshold`
+    # 는 정규화하지 않는다. 그 누락이 곧 다음 라운드의 결함이 된다.
     summary = {"status": status, "revision_count": budget,
+               "budget_exhausted": exhausted,
                "gates_passed": sorted(g for g, v in gates.items() if v == "pass"),
                "gates_broken": broken}
     if escalated_at:
@@ -348,11 +354,11 @@ def cmd_start(args) -> int:
     # "rubric 이름도 같은 검증" 이라 적었지만 실제로는 feature 에만 걸려 있었다.
     rubric = _safe_name(args.rubric or "code-review", "rubric 이름")
     existing = _load(feature)
-    # 라벨이 아니라 **예산 차원**을 직접 본다. `_derive` 의 분류는 `failed` 를
-    # `escalated` 보다 앞에 두므로(순서는 5차 SHOULD-1 로 표에 고정), 예산이 소진돼도
-    # 마지막 judge 가 `fail` 이면 라벨은 `failed` 가 된다. 라벨을 보던 게이트는 그
-    # 한 번의 `fail` 에 가려 통째로 열렸다 (6차 MUST-1 실측 — 옆문 B).
-    if existing is not None and existing["revision_count"] >= existing["escalation_threshold"]:
+    # 라벨이 아니라 **예산 차원**을 읽는다 (ADR-024 결정 8). `_derive` 의 분류는
+    # `failed` 를 `escalated` 보다 앞에 두므로(순서는 5차 SHOULD-1 로 표에 고정),
+    # 예산이 소진돼도 마지막 judge 가 `fail` 이면 라벨은 `failed` 가 된다. 라벨을
+    # 보던 게이트는 그 한 번의 `fail` 에 가려 통째로 열렸다 (6차 MUST-1 — 옆문 B).
+    if existing is not None and existing["budget_exhausted"]:
         # 2차 리뷰가 "조용한 리셋" 을 막으면서 **명시적 리셋**은 열어 뒀고, 그 바람에
         # `start --force` 가 에스컬레이션 우회로가 됐다 (실측: revision ×3 → pass 는 exit 1,
         # 그러나 `start --force` → pass 는 exit 0 으로 `passed`). 이력을 지우면 예산도
@@ -439,11 +445,10 @@ def _record_locked(args, feature: str) -> int:
     #
     # `revision`·`fail` 과 결정론 grader 는 막지 않는다 — 전부 "아직 안 됐다" 는 증거이고,
     # 증거 기록을 막은 것이 바로 무인 드라이버를 세운 원인이었다 (ADR-024 실측 9).
-    # 게이트 1 과 같은 이유로 라벨이 아니라 예산 필드를 읽는다 — ADR-024 가 진단한
-    # "독립인 사실을 한 enum 에 접으면 둘이 어긋날 때 누가 이기나로만 표현된다" 가
-    # 게이트 자리에서 재현된 것이었다 (6차 MUST-1 실측 — 옆문 A).
-    if (loop["revision_count"] >= loop["escalation_threshold"]
-            and args.grader in _JUDGE and args.verdict == "pass"):
+    # 게이트 1 과 같은 이유로 예산 필드를 읽는다 — ADR-024 가 진단한 "독립인 사실을
+    # 한 enum 에 접으면 둘이 어긋날 때 누가 이기나로만 표현된다" 가 게이트 자리에서
+    # 재현된 것이었다 (6차 MUST-1 실측 — 옆문 A).
+    if loop["budget_exhausted"] and args.grader in _JUDGE and args.verdict == "pass":
         print(f"[verify-loop] ❌ {feature} 는 에스컬레이션 상태다 "
               f"(revision {loop['revision_count']}/{loop['escalation_threshold']}).",
               file=sys.stderr)
@@ -482,8 +487,14 @@ def _record_locked(args, feature: str) -> int:
         grade_note = f" (MUST {args.must}" + (f", SHOULD {args.should}" if args.should is not None else "") + ")"
     icon = {"pass": "✅", "revision": "🔄", "fail": "❌"}[args.verdict]
     print(f"[verify-loop] {icon} {feature} #{attempt['n']} — {args.grader}({kind}) → {args.verdict}{grade_note}")
-    if loop["status"] == "escalated":
+    # 운영자에게 **무엇을 하라고 지시하는 출력은 판정 사이트**다 (ADR-024 결정 8).
+    # 라벨을 보던 때는 예산이 소진된 `failed` 루프에 "재작업 필요" 라고 안내했는데,
+    # 그 재작업의 종착점인 judge `pass` 는 위 게이트가 거부한다 — 도구가 안내한 길을
+    # 도구가 막았다 (6차 SHOULD-3 실측).
+    if loop["budget_exhausted"]:
         since = loop.get("escalated_at", "?")
+        if loop["status"] == "failed":
+            print("  REJECTED — 그리고 예산도 소진됐다. 재작업만으로는 닫히지 않는다.")
         print(f"  🚨 ESCALATION — NEEDS REVISION {loop['revision_count']}회 도달 "
               f"(임계 {loop['escalation_threshold']}, {since} 부터).")
         print("     Planner+Architect 재검토 필요 · Feature 분해 검토 · /project:learn add (pitfall).")

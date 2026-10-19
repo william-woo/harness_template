@@ -432,10 +432,21 @@ def _vl_norm(loop: dict) -> dict:
     verify_loop 의 `_read_loop` 와 같은 규율을 드라이버 쪽에서도 지킨다.
     """
     if not isinstance(loop, dict):
-        return {"attempts": [], "revision_count": 0, "status": "?"}
+        return {"attempts": [], "revision_count": 0, "status": "?",
+                "escalation_threshold": 3, "budget_exhausted": False}
     loop["attempts"] = [a for a in loop.get("attempts", []) if isinstance(a, dict)]
     rc = loop.get("revision_count")
     loop["revision_count"] = rc if isinstance(rc, int) and not isinstance(rc, bool) else 0
+    # 임계도 정규화한다. 전엔 `revision_count` 만 정규화했는데, 소비 지점이 임계와
+    # 비교하기 시작하면 그 누락이 곧 결함이 된다 (ADR-024 결정 8).
+    thr = loop.get("escalation_threshold")
+    loop["escalation_threshold"] = (thr if isinstance(thr, int)
+                                    and not isinstance(thr, bool) and thr > 0 else 3)
+    # 예산 소진 여부는 verify_loop 이 파생해 넣어 준다. 없으면(옛 파일) 직접 센다 —
+    # **라벨로 돌아가지 않는다.**
+    be = loop.get("budget_exhausted")
+    loop["budget_exhausted"] = (be if isinstance(be, bool)
+                                else loop["revision_count"] >= loop["escalation_threshold"])
     return loop
 
 
@@ -1300,11 +1311,15 @@ def _cmd_run(args) -> int:
         revisions = sum(1 for a in state.get("attempts", [])
                         if a.get("verdict") == "revision" and a.get("grader") == "test")
         _log(f"② grader FAIL (revision {revisions}) — 출력: {out[:100]}")
-        # `state.get("escalated")` 를 읽었으나 상태 파일에 **그런 키는 없다** —
-        # 에스컬레이션 신호가 드라이버에 닿은 적이 없었다 (ADR-024 실측 8).
-        # 실제 표현은 파생된 `status` 다. verify_loop 의 예산은 judge revision 만
-        # 세므로(ADR-024 결정 1), 위 `test` 재작업이 이 신호를 거짓 발화시키지 않는다.
-        if state.get("status") == "escalated" or revisions >= args.max_revisions:
+        # 이 한 줄이 같은 결함을 **두 번** 겪었다. 처음엔 존재하지 않는 키
+        # (`state.get("escalated")`)를 읽어 신호가 닿은 적이 없었고(ADR-024 실측 8),
+        # 다음엔 파생 라벨(`status == "escalated"`)을 읽어 **예산이 소진돼도 마지막
+        # 판정이 `fail` 이면 발화하지 않았다** — 드라이버는 인계 대신 계속 진행하다
+        # judge `pass` 가 게이트에 거부당하고 "판정 확보 실패" 라는 **틀린 원인**을
+        # 보고했다 (6차 MUST-1 / ADR-024 결정 8).
+        # 이제 차원 필드를 읽는다. verify_loop 의 예산은 judge revision 만 세므로
+        # (ADR-024 결정 1), 위 `test` 재작업이 이 신호를 거짓 발화시키지 않는다.
+        if state["budget_exhausted"] or revisions >= args.max_revisions:
             _log(f"🚨 에스컬레이션 — 상위 호스트(사람/Claude Code) 인계 필요. "
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2

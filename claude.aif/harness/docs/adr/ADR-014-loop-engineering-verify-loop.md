@@ -50,8 +50,9 @@ verify-loop 훅을 단다.
 > 지금은 순서와 무관하다 — grader 별 **마지막** verdict 이 `pass` 가 아니면 `passed` 불가.
 
 ### 결정 6 — 격리: LINT-MR-13
-loop 오버레이(`verify_loop.py`, `verify-loop.md`, `.claude/rubrics/`)는 **claude.loope 에만**.
-다른 11 변형에 누수 시 BLOCK. `lint.py check --only=LINT-MR` (MR-13) 가드. pm/hermes 는 상속.
+loop 오버레이(`verify_loop.py`, `verify-loop.md`, `.claude/rubrics/`)는 작성 시점엔
+**claude.loope 에만** 이었다. 계보 승격 후 보유는 **메인 + 6 변형**
+(claude.aif · claude.loope · claude.vela.v0.1 · localllm · localllm.aif · localllm.nem) 이고, 나머지 **10 변형**에 누수 시 BLOCK. `lint.py check --only=LINT-MR` (MR-13) 가드. pm/hermes 는 상속.
 
 ## 대안 검토
 
@@ -81,11 +82,16 @@ Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→ha
 - 신규(Loop 4): `hill_climb.py`, `hill-climb.md` (결정 7).
 - 변경: reviewer.md/qa.md(record 연동), product-cycle.md(검증 단계 훅). 이 ADR, LINT-MR-13(6파일).
   > 변형 수 서술 주의: 이 ADR 작성 시점엔 loope 1곳이었으나, 계보 승격으로 지금은 **7곳**이
-  > loop 오버레이를 보유한다 (loope·localllm×3·aif·vela). 전체 매트릭스는 15 변형이다.
+  > loop 오버레이를 보유한다 (loope·localllm×3·aif·vela). 전체 매트릭스는 **16 변형**이다
+  > (`src/harness_template/` 아래 `harness/` 또는 `.codex/` 를 가진 디렉토리 실측 —
+  > baseline `claude/` 와 `openai/` 포함, `.git` 제외). 디렉토리를 이름만으로 세면
+  > `.git` 이 끼어 하나 더 나온다 — 실제로 이 줄을 고치다 그렇게 틀렸다.
+  > 이 숫자는 세 번 낡았다. 세어서 적고, 센 방법을 함께 적는다.
 - 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn/analytics 로 대체).
-- 검증 (테스트 이름으로 — 2026-10-14 기준 `tests/test_verify_loop.py` 46건):
+- 검증 (테스트 이름으로 — 2026-10-19 기준 `tests/test_verify_loop.py` 53건):
   - Loop 2 계약·파생: `VerifyLoopContractTest` · `VerifyLoopDerivedStateTest` ·
     `VerifyLoopTerminalStateTest` · `VerifyLoopFourthReviewTest`
   - Loop 4 heuristic 5종 발화: `HillClimbHeuristicTest`
+  - 에스컬레이션 집행 **지점의 공간**: `EscalationEnforcementSiteTest` (ADR-024 결정 8)
   > 이 줄은 원래 "mock E2E 로 모두 발화 확인" 이라고만 적었고 인용하는 테스트가 **없었다**.
   > 실제로 heuristic 을 하나 죽여도 스위트가 통과했다 (F020 4차 MUST-1). 이름을 적는다.

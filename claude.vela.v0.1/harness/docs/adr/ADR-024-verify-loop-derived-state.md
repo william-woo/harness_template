@@ -177,6 +177,83 @@ in-loop    ← 그 외
 - aif 의 `UNCERTAIN` 을 verdict 어휘에 넣는 것 — ADR-020 영역(`aif_judge.py:463` 이 이미 그 간극을 적어 둠).
 - `hill_climb.py` 신호 확장, 임계 재보정(결정 4 로 불필요), rubric 내용 개정.
 
+### 결정 8 — 파생 라벨은 **표시용**이다. 판정·게이트는 **차원을 직접 읽는다** (6차 재검토)
+
+결정 1 은 차원을 셋으로 나눴지만 **소비 지점은 여전히 합쳐진 라벨 하나를 읽고 있었다.**
+그래서 이 ADR 이 진단한 결함이 게이트 자리에서 그대로 재현됐다 (6차 MUST-1 실측):
+
+```
+reviewer:revision ×3 → reviewer:fail   →   라벨 failed · 예산 3/3 소진
+```
+
+결정 1 의 분류표는 `failed` 를 `escalated` 보다 **앞**에 둔다. 예산이 소진돼도 마지막
+판정이 `fail` 이면 라벨은 `failed` 다. 라벨을 보던 게이트에는 **"예산 소진" 이라는 사실이
+보이지 않았고**, judge `pass` 거부와 `start --force` 거부가 동시에 열렸다. 분류 순서는
+옳다 — 틀린 것은 **합쳐진 값을 판정 입력으로 쓴 것**이다.
+
+**규칙**: `status` 는 사람에게 보여 주기 위한 **요약 라벨**이다. 동작을 바꾸는 코드는
+`status` 를 비교하지 않고 해당 **차원 필드**를 읽는다.
+
+| 묻는 것 | 읽을 것 | 읽지 말 것 |
+|---|---|---|
+| 예산이 소진됐는가 | `budget_exhausted` | `status == "escalated"` |
+| 게이트가 깨졌는가 | `gates_broken` 이 비어 있지 않은가 | `status != "passed"` |
+| 판정이 무엇인가 | 마지막 judge/architect attempt 의 `verdict` | `status == "failed"` |
+
+**판별 기준**: 그 분기가 **동작을 바꾸면**(차단·인계·플래그·다음 지시) 판정 사이트다.
+문자열을 찍기만 하면 표시 사이트다. 운영자에게 **무엇을 하라고 지시하는 출력은 판정
+사이트로 본다** — 지시가 게이트와 어긋나면 도구가 안내한 길을 도구가 막는다 (실측:
+`failed` 라벨에서 "재작업 필요" 를 안내하지만 그 재작업의 종착점인 judge `pass` 는 거부됐다).
+
+**이 결정이 구속하는 소비자** (이 목록이 계약이다 — 추가 시 함께 갱신한다):
+
+| 소비자 | 사이트 | 종류 |
+|---|---|---|
+| `verify_loop.py` | `cmd_start` · `_record_locked` 게이트 | 판정 |
+| `verify_loop.py` | `_record_locked` 의 record 출력(에스컬레이션 안내) | 판정(지시) |
+| `verify_loop.py` | `_print_loop` 배지 | 표시 |
+| `cycle_driver.py` (localllm · localllm.aif · localllm.nem) | 에스컬레이션 인계 분기 | 판정 |
+| `hill_climb.py` | `escalated_features` → 개선 후보 | 판정(신호) |
+
+**`_derive` 가 `budget_exhausted` 를 함께 내보낸다.** 소비자가 임계값과 비교하지 않게
+하기 위해서다 — 비교를 호출처에 두면 호출처마다 임계 정규화를 다시 해야 하고
+(`cycle_driver._vl_norm` 은 `revision_count` 만 정규화하고 `escalation_threshold` 는
+정규화하지 않았다), 그 누락이 다음 라운드의 결함이 된다. 필드가 하나 늘지만 **호출처의
+비교식이 사라지므로 순증이 아니다.**
+
+**집행**: `EscalationEnforcementSiteTest` 가 소스를 AST 로 훑어 ① 라벨로 **분기**하는
+코드 0건 ② 위 표의 소비자가 전부 차원 필드를 읽음 을 확인한다. 지점별 회귀 테스트는
+인스턴스만 고정한다 — 이 클래스는 세 번 났고 매번 **다음 지점**이었다.
+
+### 결정 9 — 상태 파일은 **신뢰 경계가 아니다** (명시)
+
+결정 1 은 "손 교정이 불가능해진다" 고 적었다. **외부 소비자에게는 거짓이다** (실측):
+
+```
+FY.json 의 status 를 손으로 "passed" 로 고친 뒤
+  verify_loop.py status FY          → [ESCALATED] revision 3/3   (재파생)
+  hill_climb / cycle_driver (raw)   → passed, escalated_features: []
+```
+
+재파생 보장은 **`verify_loop.py` 의 성질이지 파일 포맷의 성질이 아니다.** 정확한 서술은
+**"`verify_loop.py` 를 거쳐 읽으면 손 교정이 교정된다"** 이고, 직접 `json.load` 하는
+소비자는 결정 8 의 폴백(필드 없으면 직접 셈)으로 대응한다.
+
+그리고 상태 파일 자체는 **에스컬레이션을 강제하지 못한다.** 파일에 쓸 수 있는 주체는
+게이트를 우회할 수 있다 (실측 — 두 경로 모두 rc=0 으로 `passed`):
+
+| 우회 | 흔적 |
+|---|---|
+| 손상 바이트 → `_read_loop` 격리 → `record` 자동 개시 | 경고 2줄 + `*.corrupt-<ts>` 보존 |
+| `{"attempts": []}` 덮어쓰기 | **없음 — 경고 0줄, 격리본 0건** |
+
+하네스는 모든 에이전트에게 `Write(**)` 를 준다. 이 파일을 변조 방지 대상으로 설계하지
+않는다 — **게이트는 실수와 표류를 막는 장치이지 권한 경계가 아니다.** 따라서 손상 격리
+후 자동 개시도 막지 않는다 (6차 SHOULD-1 기각): 그 경로는 유일하게 **시끄럽고**, 막으면
+같은 상황이 흔적 없는 쪽(빈 `attempts` 덮어쓰기)으로 밀려나 **관측 가능성만 잃는다.**
+에스컬레이션을 내구적으로 남겨야 한다면 그 자리는 이 파일이 아니라 이미 커밋되는 곳
+(`feature_list.json` · `claude-progress.txt` · git) 이고, 별도 ADR 로 다룬다.
+
 ## 대안 검토
 
 | 대안 | 장점 | 단점 | 제외 이유 |
@@ -201,13 +278,16 @@ in-loop    ← 그 외
   파생만으로도 상태는 `escalated` 로 남지만, pass 를 받아 두면 이후 architect 재검토가
   예산을 갱신하는 순간 **judge 가 다시 보지 않은 pass** 가 루프를 닫는다. 반대로 증거
   기록까지 막은 것이 실측 9 의 원인이었으므로, 막는 것은 **종결 하나**로 좁힌다.
-- 상태 파일을 손으로 고칠 이유가 사라진다 — 다음 `record` 가 이력에서 바로잡는다.
+- 상태 파일을 손으로 고칠 이유가 사라진다 — `verify_loop.py` 를 거친 다음 `record` 가
+  이력에서 바로잡는다 (직접 `json.load` 하는 소비자는 제외 — 결정 9).
 - 무인 드라이버(localllm 계열)가 다시 루프를 닫을 수 있게 된다.
 
 **부정적 영향/트레이드오프**
 - F029 의 표시 상태가 바뀐다(`passed` → `escalated`). **의도된 정직성**이지만 사람의 처리가 필요하다.
 - 요약 필드를 외부에서 쓴 코드가 있다면 "쓰면 덮인다" 로 동작이 바뀐다. 현재 소비자
   (`hill_climb.py`)는 읽기 전용이라 영향 없음(실측).
+- 요약 필드의 재파생은 `verify_loop.py` 를 거쳐 읽을 때만 적용된다. 상태 파일을 직접
+  `json.load` 하는 소비자(`hill_climb.py`·`cycle_driver.py`)는 저장값을 그대로 믿는다 (결정 9).
 - 6 변형 미러 + 3 변형 cycle_driver 수정 — 범위가 한 파일보다 넓다.
 - 에스컬레이션이 처음으로 **실제로 막게** 된다. architect 왕복이 실제 비용으로 발생한다
   (분포상 14건 중 2건 예상).
@@ -222,6 +302,14 @@ in-loop    ← 그 외
       (rev 8 · architect 기록 0건). 13/14 는 저장값과 일치. 이력은 고쳐 쓰지 않았다
 - [ ] 사람: F019/F020/F030 상태 파일의 `status_restored`·`restore_declined` 키 — 읽는 코드는
       여전히 0건이고 파생 전환으로 무의미해졌다. 지우지 않고 남겨 둔다 (상태 파일은 gitignore)
+- [x] Developer: 결정 8 — `_derive` 에 `budget_exhausted` 추가 + 소비자 전환
+      (`verify_loop.py` 게이트 2 · record 출력 / `cycle_driver.py` ×3 / `hill_climb.py`).
+      `EscalationEnforcementSiteTest` 2건이 **지점의 공간**을 고정한다 — 어느 한 지점을
+      라벨 읽기로 되돌리는 변이와 차원 읽기를 잃는 변이가 각각 이름으로 잡힌다(실측)
+- [x] Developer: `hill_climb` 의 `avg_revisions` → `avg_reworks`. `revision_count` 는
+      "마지막 architect 이후 예산" 이라 재작업 횟수가 아니다 — judge revision 6회 +
+      architect 2회인 루프가 `0` 으로 집계됐다. 이제 attempts 에서 직접 센다
+- [x] Developer: `reviewer.md` 의 거부 조건을 라벨이 아니라 횟수로 서술 (`qa.md` 와 일치)
 - [ ] QA: 무인 사이클 E2E — `--max-revisions` 를 임계보다 크게 두고 루프가 닫히는지.
       단위 레벨에서는 `test_결정론_revision_은_judge_예산을_쓰지_않는다` 가 막힘 해소를 고정했으나,
       OpenCode·로컬 모델 구동은 태우지 못했다
