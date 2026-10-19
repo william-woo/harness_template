@@ -88,7 +88,8 @@ Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→ha
   > `.git` 이 끼어 하나 더 나온다 — 실제로 이 줄을 고치다 그렇게 틀렸다.
   > 이 숫자는 세 번 낡았다. 세어서 적고, 센 방법을 함께 적는다.
 - 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn/analytics 로 대체).
-- 검증 (테스트 이름으로 — 2026-10-19 기준 `tests/test_verify_loop.py` 53건):
+- 검증 (테스트 **이름**으로 — 건수는 적지 않는다. 세 번 낡았고 적을 때마다 또 낡는다.
+  세려면 `grep -c '^    def test_' tests/test_verify_loop.py`):
   - Loop 2 계약·파생: `VerifyLoopContractTest` · `VerifyLoopDerivedStateTest` ·
     `VerifyLoopTerminalStateTest` · `VerifyLoopFourthReviewTest`
   - Loop 4 heuristic 5종 발화: `HillClimbHeuristicTest`

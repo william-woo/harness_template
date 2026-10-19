@@ -877,6 +877,9 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
     #: 사본에서 전부 실패했다.
     _FALLBACKS = {"_budget_exhausted": "hill_climb.py", "_vl_norm": "cycle_driver.py"}
 
+    def setUp(self):
+        self._skipped: list = []
+
     def _sources(self) -> dict:
         """스캔 대상 {표시이름: 소스}.
 
@@ -896,8 +899,11 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
                 # 받지 않았다 (7차 MUST-2 부수 지적).
                 try:
                     found[str(q.relative_to(root))] = q.read_text(encoding="utf-8")
-                except (OSError, ValueError):
-                    continue
+                except (OSError, ValueError) as exc:
+                    # `UnicodeDecodeError` 는 `ValueError` 다. 비-UTF-8 `.py` 하나가
+                    # 세 방향 **전부에서 면제**된다 — 8차 리뷰가 실측한 유일한 조용한
+                    # 탈락 경로다. 조용히 넘기지 않고 모아 두고 테스트가 단언한다.
+                    self._skipped.append(f"{q}: {type(exc).__name__}")
         return found
 
     @staticmethod
@@ -940,6 +946,16 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
                 tests = [node.test]
             elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
                 tests = [i for g in node.generators for i in g.ifs]
+            elif (isinstance(node, ast.Return) and node.value is not None
+                  # 컨테이너 리터럴 반환은 **생성**이지 결정이 아니다. `_vl_norm` 의
+                  # 조기 반환 `{… "budget_exhausted": False}` 가 여기 걸려 지점 수를
+                  # 부풀렸다 — 그러면 진짜 술어가 사라져도 수가 ≥1 이라 통과한다.
+                  and not isinstance(node.value, (ast.Dict, ast.List, ast.Set, ast.Tuple))):
+                # 조건을 **술어 함수**로 뽑는 것은 유효한 리팩터이고, 오히려 테스트가
+                # 직접 태울 수 있게 해 준다 (`_should_handoff`). `if` 만 보면 그 리팩터가
+                # "집행 분기가 사라졌다" 는 거짓 경보가 된다 (8차 CONSIDER-3).
+                # 대입(`_vl_norm` 의 정규화)은 Return 이 아니므로 여전히 걸리지 않는다.
+                tests = [node.value]
             else:
                 continue
             out.extend(t.lineno for t in tests if mentions(t))
@@ -947,16 +963,35 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
 
     @staticmethod
     def _recompute_funcs(src: str) -> set:
-        """저장된 `escalation_threshold` 를 읽으면서 `>=` 비교를 하는 함수 = 술어 재계산."""
+        """저장된 `revision_count` 를 **비교에 쓰는** 함수 = 술어 재계산.
+
+        첫 판은 `escalation_threshold` 를 읽는지로 셌는데, `revision_count >= 3` 처럼
+        임계를 **하드코딩**한 재계산 자리를 놓쳤다 (8차 SHOULD-2 — 변이 N4 생존).
+        `revision_count` 는 임계와 비교할 때만 의미가 있으므로 그쪽이 더 정확하고 더
+        단순하다. `_derive` 는 지역변수(`budget`)를 쓰므로 생산자는 걸리지 않는다.
+        """
+        def reads_count(fn) -> bool:
+            """`revision_count` 를 **읽는가** — 쓰기(`_derive` 의 요약 dict 키)는 뺀다."""
+            for n in ast.walk(fn):
+                if (isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant)
+                        and n.slice.value == "revision_count"
+                        and isinstance(n.ctx, ast.Load)):
+                    return True
+                if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "get" and n.args
+                        and isinstance(n.args[0], ast.Constant)
+                        and n.args[0].value == "revision_count"):
+                    return True
+            return False
+
         out = set()
         for fn in ast.walk(ast.parse(src)):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            reads = "'escalation_threshold'" in ast.dump(fn)
-            compares = any(isinstance(op, ast.GtE)
-                           for n in ast.walk(fn) if isinstance(n, ast.Compare)
-                           for op in n.ops)
-            if reads and compares:
+            gte = any(isinstance(op, ast.GtE)
+                      for n in ast.walk(fn) if isinstance(n, ast.Compare)
+                      for op in n.ops)
+            if gte and reads_count(fn):
                 out.add(fn.name)
         return out
 
@@ -976,6 +1011,9 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
             drivers = [k for k in srcs if Path(k).name == "cycle_driver.py"]
             self.assertGreaterEqual(len(drivers), 3,
                                     f"cycle_driver 3 사본이 스캔에 없다: {drivers}")
+        self.assertEqual(self._skipped, [],
+                         "읽지 못한 파일이 있다 — 그 파일은 세 방향 **전부에서 면제**된다. "
+                         f"비-UTF-8 이거나 권한이 없다: {self._skipped}")
 
     # ── 방향 ①: 라벨로 분기하지 않는다 ───────────────────────────────────
     def test_판정_지점이_접힌_라벨을_읽지_않는다(self):
@@ -1005,8 +1043,11 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
             checked += 1
             sites = self._decision_sites(src)
             self.assertTrue(sites,
-                            f"{label} 이 예산 차원을 **조건에서** 읽지 않는다 — 집행 분기가 "
-                            "사라졌거나 대입만 남았다 (ADR-024 결정 8 의 소비자 표)")
+                            f"{label} 이 예산 차원을 **조건이나 술어 반환에서** 읽지 않는다 — "
+                            "집행 분기가 사라졌거나 대입만 남았다 (ADR-024 결정 8 의 소비자 "
+                            "표). 조건을 변수나 다른 표기로 옮긴 유효한 리팩터라면 코드가 "
+                            "아니라 `_decision_sites` 를 함께 갱신하라 — 이 실패는 "
+                            "'테스트를 깨는 수정' 이 아니라 '검출기가 못 따라왔다' 일 수 있다")
         self.assertGreaterEqual(checked, 2, "소비자를 하나도 검사하지 않았다")
 
     # ── 방향 ③: 술어를 재계산하는 자리가 늘지 않는다 ─────────────────────
@@ -1034,14 +1075,17 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
             self.assertEqual(owners, {self._FALLBACKS[fn]},
                              f"{fn} 이 예상 밖 파일에 있다: {sorted(owners)}")
 
-        # ③ 줄지 않았는가 — **스캔된 소유 파일에 대해서만** 요구한다. 변형마다 소비자
-        #    구성이 다르다 (`cycle_driver` 는 localllm 계열에만).
-        scanned = {Path(k).name for k in srcs}
-        for fn, owner in self._FALLBACKS.items():
-            if owner in scanned:
-                self.assertIn(fn, found,
-                              f"{owner} 이 스캔됐는데 폴백 {fn} 이 없다 — 옛 파일을 "
-                              "읽는 소비자가 파생 필드만 믿게 됐다 (ADR-024 결정 9)")
+        # ③ 줄지 않았는가 — **파일 단위**로 요구한다. 합집합으로 보면 7 사본 중 한 곳에만
+        #    남아도 통과한다. 7차에서 스캔을 넓힌 것이 이 방향에선 **역효과**였다 (범위가
+        #    넓어질수록 "하나라도 있으면 통과" 가 약해진다). 8차 SHOULD-1 — 변이 N21·N2b
+        #    가 메인에서 생존하고 단일 사본에서만 죽었다.
+        owner_of = {v: k for k, v in self._FALLBACKS.items()}
+        for label, src in srcs.items():
+            fn = owner_of.get(Path(label).name)
+            if fn:
+                self.assertIn(fn, self._recompute_funcs(src),
+                              f"{label}: 폴백 {fn} 이 없다 — 옛 파일을 읽는 소비자가 "
+                              "파생 필드만 믿게 됐다 (ADR-024 결정 9)")
 
 
 class CycleDriverEscalationSignalTest(unittest.TestCase):
@@ -1073,8 +1117,10 @@ class CycleDriverEscalationSignalTest(unittest.TestCase):
         code = "\n".join(line.split("#", 1)[0] for line in src.splitlines())
         self.assertNotIn('state.get("escalated")', code,
                          "상태 파일에 없는 키를 읽는다 — 신호가 영영 닿지 않는다")
-        self.assertIn("budget_exhausted", code,
-                      "에스컬레이션 감지가 사라졌거나 다시 라벨을 읽는다")
+        # 아래 둘은 **존재만** 본다. 집행 분기가 살아 있는지는 여기서 못 본다 —
+        # `EscalationEnforcementSiteTest` 의 AST 검사가 그 몫이고, 실제로 집행 조건을
+        # 지우는 변이(M7)는 **이 테스트가 잡지 못한다**(실측). 7차가 지적한 공회전이
+        # 바로 이 형태였으므로, 실패 메시지가 할 수 있는 말만 하게 둔다.
         self.assertIn("_vl_norm", code,
                       "정규화를 거치지 않으면 임계 결측·오염이 새 결함이 된다")
 
@@ -1099,7 +1145,18 @@ class CycleDriverEscalationSignalTest(unittest.TestCase):
         """
         norm = self._driver_module()._vl_norm
         for bad in ({"attempts": None}, {"attempts": "x"}, {"attempts": 7},
-                    {"attempts": [1, "x", {"grader": "reviewer"}]}, {}, "notadict"):
+                    {"attempts": [1, "x", {"grader": "reviewer"}]}, {}, "notadict",
+                    # 아래 넷은 **가드를 직접 건드린다**. 전엔 입력이 없어서
+                    # `assertGreater(threshold, 0)` 의 메시지가 뒷받침되지 않았고,
+                    # 가드를 지우는 변이가 살아남았다 (8차 SHOULD-6 — N16·N17).
+                    {"escalation_threshold": 0, "attempts": []},
+                    {"escalation_threshold": True, "attempts": []},
+                    # 임계를 **1 로 낮춰** 관측 가능하게 만든다. 기본값 3 이면 `True`(=1)도
+                    # `0` 도 `>= 3` 이 False 라 가드 유무가 결과에 안 나타난다 — 처음엔
+                    # 그렇게 짜서 변이가 살아남았다 (대칭 상쇄와 같은 형태).
+                    {"revision_count": True, "escalation_threshold": 1, "attempts": []},
+                    {"budget_exhausted": "yes", "revision_count": 9,
+                     "escalation_threshold": 3, "attempts": []}):
             with self.subTest(bad=repr(bad)[:40]):
                 out = norm(bad)
                 self.assertIsInstance(out["attempts"], list)
@@ -1107,6 +1164,37 @@ class CycleDriverEscalationSignalTest(unittest.TestCase):
                 self.assertIsInstance(out["budget_exhausted"], bool)
                 self.assertGreater(out["escalation_threshold"], 0,
                                    "임계가 0 이면 `>= 0` 이 항상 참이라 영구 wedge 가 된다")
+                self.assertNotIsInstance(out["revision_count"], bool)
+                self.assertNotIsInstance(out["escalation_threshold"], bool)
+        # `True` 는 `int` 의 서브클래스다 — 걸러내지 않으면 카운터로 섞여 들어간다.
+        self.assertFalse(norm({"revision_count": True, "escalation_threshold": 1,
+                               "attempts": []})["budget_exhausted"],
+                         "bool 이 카운터로 섞여 예산 소진으로 읽혔다")
+
+    def test_인계_판정이_두_예산을_각각_본다(self):
+        """정적 검사는 "차원을 읽는가" 만 보고 **방향**은 못 본다 (8차 SHOULD-4 — 변이 N1).
+
+        조건을 반전시켜도(`if not state[...]`) AST 검사는 통과한다. 그래서 결정을
+        순수 함수로 뽑고 여기서 직접 태운다. `run` 은 OpenCode 가 필요하지만 이 결정은
+        그렇지 않다.
+
+        두 예산은 **다른 것**이다 (ADR-024 결정 1) — judge revision 예산은 verify_loop 이
+        이력에서 파생하고, grader 재작업은 드라이버가 센다. 하나가 다른 하나를 커버한다고
+        보면 "판정 확보 실패" 라는 틀린 원인으로 끝난다.
+        """
+        should = self._driver_module()._should_handoff
+        exhausted = {"budget_exhausted": True, "revision_count": 3, "escalation_threshold": 3}
+        fresh = {"budget_exhausted": False, "revision_count": 0, "escalation_threshold": 3}
+
+        self.assertTrue(should(exhausted, 0, 3), "judge 예산 소진인데 인계하지 않는다")
+        self.assertTrue(should(fresh, 3, 3), "grader 재작업 한도인데 인계하지 않는다")
+        self.assertFalse(should(fresh, 0, 3), "둘 다 여유 있는데 인계한다")
+        self.assertFalse(should(fresh, 2, 3), "한도 미만인데 인계한다 — off-by-one")
+        # 라벨이 failed 여도 (6차 결함의 입력) 예산 소진은 인계로 간다
+        self.assertTrue(should({**exhausted, "status": "failed"}, 0, 3),
+                        "라벨 failed 에 가려 인계하지 않는다")
+        # 필드가 없는 옛 파일은 `_vl_norm` 이 채워 준다 — 여기서는 보수적으로 False
+        self.assertFalse(should({}, 0, 3), "정보가 없는데 인계로 단정한다")
 
     def test_정규화가_예산_차원을_라벨에서_만들어내지_않는다(self):
         """파생 필드가 없는 옛 파일에서도 **이력 기준**으로 센다 (ADR-024 결정 9 폴백).
@@ -1274,6 +1362,26 @@ class HillClimbHeuristicTest(unittest.TestCase):
         data = json.loads(_run(root, _HILL, "analyze", "--json").stdout)
         self.assertEqual(data["signals"]["verify_loop"]["avg_reworks"], 2.0,
                          "저장된 kind 라벨로 재작업을 세고 있다 — grader 이름으로 센다")
+
+    def test_폴백이_파생필드_없는_옛_파일에서도_예산을_센다(self):
+        """`_budget_exhausted` 의 **행동** 테스트가 없었다 (8차 SHOULD-3 — 변이 N2 생존).
+
+        `HillClimbHeuristicTest` 의 다른 케이스는 CLI 로 루프를 만들어 저장된 플래그
+        경로만 탄다. 파생 필드가 없는 옛 파일(결정 9 의 폴백 입력)은 한 번도 안 태웠다.
+        `cycle_driver._vl_norm` 쪽은 이미 그렇게 테스트돼 있다 — 두 폴백의 대칭을 맞춘다.
+        """
+        root = self._fresh_root("fallback")
+        state = root / ".claude" / "state" / "verify-loop"
+        for feature, count in (("F510", 3), ("F511", 2)):   # 소진 / 유계 안
+            (state / f"{feature}.json").write_text(json.dumps({
+                "feature": feature, "status": "in-loop",     # 라벨은 일부러 무해하게
+                "revision_count": count, "escalation_threshold": 3,
+                "attempts": [],                              # budget_exhausted **없음**
+            }), encoding="utf-8")
+        esc = json.loads(_run(root, _HILL, "analyze", "--json").stdout)[
+            "signals"]["verify_loop"]["escalated_features"]
+        self.assertIn("F510", esc, "폴백이 예산 소진을 세지 못했다 (옛 파일)")
+        self.assertNotIn("F511", esc, "임계 미만인데 소진으로 셌다 — off-by-one")
 
     def test_개선후보_heuristic_5종이_각각_발화한다(self):
         """5종 중 **어느 하나를 제거해도** 이 테스트가 실패하고, 어느 것이 죽었는지

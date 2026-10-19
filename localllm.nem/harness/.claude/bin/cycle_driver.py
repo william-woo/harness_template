@@ -466,6 +466,22 @@ def _vl_state(feature: str) -> dict:
         return {}
 
 
+def _should_handoff(state: dict, test_revisions: int, max_revisions: int) -> bool:
+    """상위 호스트(사람/Claude Code)로 인계할 때인가 — **순수 함수**다.
+
+    인라인 조건이었을 때는 정적 검사(`EscalationEnforcementSiteTest`)가 "차원을 읽는가"
+    만 볼 수 있었고 **방향**은 못 봤다 — 조건을 반전시키는 변이가 살아남았다 (8차
+    SHOULD-4 / 변이 N1). `run` 은 OpenCode 가 있어야 돌지만 이 결정은 그렇지 않으므로,
+    떼어 두면 테스트가 import 해서 직접 태운다.
+
+    두 예산은 **다른 것**이다 (ADR-024 결정 1):
+      - `budget_exhausted` — judge revision 예산. verify_loop 이 이력에서 파생한다
+      - `test_revisions`   — grader(`grader="test"`) 재작업. 드라이버가 세는 값이다
+    그래서 둘을 OR 로 묶는다. 하나가 다른 하나를 커버한다고 보면 안 된다.
+    """
+    return bool(state.get("budget_exhausted")) or test_revisions >= max_revisions
+
+
 def _judge_recorded(feature: str, grader: str, before_n: int) -> str | None:
     """judge 가 새 판정을 기록했는지 검증한다. 기록됐으면 verdict, 아니면 None."""
     for a in _vl_state(feature).get("attempts", []):
@@ -1324,7 +1340,7 @@ def _cmd_run(args) -> int:
         # 보고했다 (6차 MUST-1 / ADR-024 결정 8).
         # 이제 차원 필드를 읽는다. verify_loop 의 예산은 judge revision 만 세므로
         # (ADR-024 결정 1), 위 `test` 재작업이 이 신호를 거짓 발화시키지 않는다.
-        if state["budget_exhausted"] or revisions >= args.max_revisions:
+        if _should_handoff(state, revisions, args.max_revisions):
             _log(f"🚨 에스컬레이션 — 상위 호스트(사람/Claude Code) 인계 필요. "
                  f"상태: python3 .claude/bin/verify_loop.py status {feature}")
             return 2
