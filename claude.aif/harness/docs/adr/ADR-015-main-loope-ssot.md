@@ -115,8 +115,10 @@ repro·artifact 6건이 3 사본 중 1곳에만)와 미가드 내용 오버레�
 
 `check_ssot()` 은 `docs/adr/` 를 **loope 하고만** 비교해 나머지 변형이 무가드였고, 실제로
 이 ADR 과 ADR-017 이 2:4 로 갈린 채 0 BLOCK 이었다. 이제 `LINT-CO` 가 전 트리를 본다.
-`wiki/` 는 (C) 다 — 변형별 노드 집합이 다르다고 적었던 것은 **틀렸고**, 실측상 같은 노드가
-여러 트리에서 **재생성 시각(`updated:`)만** 다르다. 생성 산출물이라 제외한다.
+`wiki/` 는 (C) 다 — 생성 vault 이고, 변형 로컬 입력(`feature_list.json`·보유 ADR 집합)에서
+생성되므로 **노드 내용 자체가** 다르다(`related:` 링크·인덱스의 노드 수). 중간에 "재생성
+시각만 다르다" 고 적었던 것은 **거짓**이었다 — 분류는 옳았지만 사유가 유일한 가드이므로
+사유가 틀리면 다음 사람이 잘못된 전제로 판단한다.
 
 또한 모델 축(`localllm.nem`, F030/ADR-021)은 **자기 파일이 하나도 없는 최초의 순수 내용
 오버레이**다. 그래서 파일 기반 정책이 구조적으로 볼 수 없었다 — 실측상 4 파일에서 부모와
@@ -160,9 +162,10 @@ LINT-MR 은 `src/harness_template/` 변형만 검사하므로 main 승격은 가
   backup.py 보안스캔 fix(6a10c0f). + `wiki/` vault, docs 3종, ADR-007~014.
 - CLAUDE.md 미러 정책 섹션 재작성 (이 ADR 반영). meta-dev 섹션 폐기.
 - 이후 신규 기능 개발: **main 에서 개발 → loope 로 1:1 미러 → 하위 변형은 오버레이 규칙대로 제외 미러**.
-- **미러 범위 정정 (2026-10-20)**: 이 ADR 은 main·loope 2곳이 아니라 `docs/adr/` **7 사본**
-  (main·loope·vela·claude.aif·localllm·localllm.aif·localllm.nem)에 존재하며,
-  `wiki/adrs/ADR-015.md` 요약 노드가 4곳 더 있다. 2026-09-22 보강은 앞 3곳에만 도달했고
-  뒤 4곳은 21줄이 빠진 채였다(ADR-017 도 동일 분할). 원인은 `check_ssot()` 이 `docs/adr/`
-  를 loope 하고만 비교하는 것이고, **결정 5** 의 `LINT-CO` 가 `docs/adr/`(축 ∅)를 범위에
-  넣어 닫는다.
+- **미러 범위 정정 (2026-10-20)**: 이 ADR 은 main·loope 2곳이 아니라 `docs/adr/` 를 가진
+  **모든 변형**에 존재하고, `wiki/adrs/ADR-015.md` 요약 노드도 따로 있다 (개수는 적지
+  않는다 — 변형이 늘면 낡는다. 세려면
+  `ls docs/adr/ADR-015*.md src/harness_template/*/harness/docs/adr/ADR-015*.md | wc -l`).
+  2026-09-22 보강은 그중 일부에만 도달했고 나머지는 21줄이 빠진 채였다(ADR-017 도 동일
+  분할). 원인은 `check_ssot()` 이 `docs/adr/` 를 loope 하고만 비교하는 것이고,
+  **결정 5** 의 `LINT-CO` 가 `docs/adr/`(축 ∅)를 범위에 넣어 닫는다.

@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -51,7 +52,7 @@ class OverlayFixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         (self.root / ".claude" / "bin").mkdir(parents=True)
-        shutil.copy2(_LINT, self.root / ".claude" / "bin" / "lint.py")
+        self._copy_lint_with_fixture_axes()
         self.ht = self.root / "src" / "harness_template"
         for v in _FIXTURE_VARIANTS:
             (self.ht / v / "harness" / ".claude" / "agents").mkdir(parents=True)
@@ -64,6 +65,25 @@ class OverlayFixture(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def _copy_lint_with_fixture_axes(self):
+        """`lint.py` 를 복사하되 **선언 목록을 fixture 가 가진 파일로** 바꾼다.
+
+        여기서 검증하는 것은 *우리 리포의 선언이 맞는가* 가 아니라 **메커니즘**이다.
+        실제 선언 22종을 그대로 쓰면 fixture 에 없는 20종이 "선언했는데 스캔에 없다" 로
+        터진다 — 그건 fixture 의 사정이지 결함이 아니다. 실제 선언의 건전성은
+        `RealTreeCoverageTest` 가 실트리에서 본다.
+        """
+        import re
+        src = _LINT.read_text(encoding="utf-8")
+        new = ('_CONTENT_OVERLAY_AXES = {\n'
+               '    ".claude/agents/reviewer.md": {"loop", "aif"},\n'
+               '    ".claude/commands/retro.md": {"loop"},\n'
+               '}\n')
+        patched, n = re.subn(r"_CONTENT_OVERLAY_AXES = \{.*?\n\}\n", new, src,
+                             count=1, flags=re.S)
+        assert n == 1, "선언 블록을 못 찾았다 — fixture 가 실제 선언을 쓰게 된다"
+        (self.root / ".claude" / "bin" / "lint.py").write_text(patched, encoding="utf-8")
 
     # ── fixture 작성 ─────────────────────────────────────────────────
     def _put(self, variant: str | None, rel: str, text: str) -> Path:
@@ -128,8 +148,13 @@ class OverlayFixture(unittest.TestCase):
         for checker in ("LINT-CO", "LINT-FREEZE"):
             blocks, out = self._run(checker)
             self.assertEqual(blocks, [], f"{checker} 기준선이 깨끗하지 않다:\n{out}")
-        self.assertIn("공유 파일", self._run("LINT-CO")[1],
-                      "공유 파일을 하나도 못 찾았다 — 검사기가 공회전한다")
+        out = self._run("LINT-CO")[1]
+        self.assertIn("공유 파일", out, "공유 파일을 하나도 못 찾았다 — 검사기가 공회전한다")
+        # 이 fixture 는 git 리포가 **아니다** → 추적 목록을 못 얻으므로 디스크로 내려간다.
+        # 그 강등이 **조용하면** 안 된다 — 로컬 산출물이 섞여 거짓 BLOCK 이 날 수 있는데
+        # 아무도 모른다. CONCERN 이 뜨는지 고정한다 (그걸 지우는 변이가 생존했다).
+        self.assertIn("git 추적 목록 없음", out,
+                      "git 없이 디스크를 훑으면서 아무 말도 하지 않았다 — 조용한 강등이다")
 
     # ── M1·M3: 2026-10-19 사고 재현 ──────────────────────────────────
     def test_M1_일괄복사가_오버레이를_지우면_잡힌다(self):
@@ -225,6 +250,68 @@ class OverlayFixture(unittest.TestCase):
         self.assertTrue(blocks, f"2 트리만 공유하는 파일이 검사에서 빠졌다:\n{out}")
         self.assertIn("aif-judge.md", "\n".join(blocks))
 
+    def test_죽은_축_선언이_잡힌다(self):
+        """축 안·밖 중 한쪽만 파일을 보유하면 그 선언은 아무것도 제약하지 않는다.
+
+        검사기에서 이 검출(⓪)을 지워도 실트리 커버리지 테스트는 통과했다 — 그 테스트가
+        검사기 대신 **데이터를 직접** 보기 때문이다 (재리뷰: 여섯 번째 공회전 형태).
+        그래서 여기서 **검사기를 돌려** 고정한다.
+        """
+        # 이 fixture 에 **없는** 변형만 가진 축(`nw` = productnw)을 붙인다 → 이 파일을
+        # 가진 변형 중 축 안이 비어 분할이 원리적으로 불가능해진다. 리뷰어가 실트리에서
+        # `nw` 로 쓴 것과 같은 변이다.
+        lintpy = self.root / ".claude" / "bin" / "lint.py"
+        src = lintpy.read_text(encoding="utf-8")
+        old_decl = '".claude/agents/reviewer.md": {"loop", "aif"},'
+        self.assertEqual(src.count(old_decl), 1, "선언을 못 찾았다")
+        lintpy.write_text(
+            src.replace(old_decl, '".claude/agents/reviewer.md": {"loop", "aif", "nw"},', 1),
+            encoding="utf-8")
+        blocks, out = self._run("LINT-CO")
+        self.assertTrue(blocks, f"죽은 축 선언이 잡히지 않았다:\n{out}")
+        self.assertIn("죽은 축 선언", "\n".join(blocks))
+
+    def test_읽지_못한_파일을_조용히_넘기지_않는다(self):
+        """읽지 못한 파일은 그 트리에서 **사라져** 보유 수가 줄고 분할이 틀린 채 통과한다.
+
+        F020 8차가 같은 모양(`UnicodeDecodeError ⊂ ValueError`)을 실측했다.
+        """
+        import os
+        victim = self._put("claude.loope", ".claude/commands/locked.md", "x\n")
+        self._put("claude.gstack", ".claude/commands/locked.md", "x\n")
+        os.chmod(victim, 0o000)
+        try:
+            blocks, out = self._run("LINT-CO")
+        finally:
+            os.chmod(victim, 0o644)
+        if os.geteuid() == 0:
+            self.skipTest("root 는 권한을 무시해 읽기 실패를 만들 수 없다")
+        self.assertTrue(blocks, f"읽지 못한 파일이 조용히 빠졌다:\n{out}")
+        self.assertIn("읽지 못한 파일", "\n".join(blocks))
+
+    def test_git_추적_밖_파일은_비교하지_않는다(self):
+        """미러는 **추적되는 내용**에 대한 계약이다.
+
+        디스크를 그대로 훑으면 로컬 산출물이 섞인다 — 실측: 메인의 gitignore 된
+        `.opencode/` 가 d-2 변형들과 "갈린" 것으로 읽혀 거짓 BLOCK 8건을 냈다.
+        """
+        import subprocess
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"]}
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "t"]):
+            r = subprocess.run(cmd, cwd=str(self.root), capture_output=True, env=env)
+            if r.returncode != 0:
+                self.skipTest(f"git 사용 불가: {r.stderr[:120]}")
+        # 커밋 **뒤에** 추적되지 않은 파일을 서로 다르게 둔다
+        self._put("claude.gstack", ".claude/commands/scratch.md", "A\n")
+        self._put("claude.loope", ".claude/commands/scratch.md", "B\n")
+        blocks, out = self._run("LINT-CO")
+        self.assertEqual(blocks, [],
+                         f"git 추적 밖 파일을 비교했다 — 로컬 산출물이 섞인다:\n{out}")
+        self.assertNotIn("git 추적 목록 없음", out,
+                         "git 리포인데 추적 목록을 못 얻었다")
+
     def test_N3_선언되지_않은_축으로_갈리면_잡힌다(self):
         """`retro.md` 는 축 {loop} 로 선언돼 있다. loop 안에서 또 갈리면 미선언 축이다."""
         self._put("localllm.nem", ".claude/commands/retro.md",
@@ -259,7 +346,10 @@ class RealTreeCoverageTest(unittest.TestCase):
         self.assertEqual(untracked, [],
                          "git 추적 목록 없이 디스크를 훑었다 — 로컬 산출물이 섞인다")
         shared = {rel: m for rel, m in files.items() if len(m) >= 2}
-        self.assertGreater(len(shared), 100, "공유 파일이 너무 적다 — 범위가 좁혀졌다")
+        # 하한을 적지 않는다 — 옛 범위(110)도 통과하던 숫자였다. 범위 축소는 아래
+        # "선언했는데 스캔에 없다" 와 검사기의 같은 BLOCK 이 잡는다 (재리뷰 SHOULD-7).
+        self.assertEqual(sorted(set(self.lint._CONTENT_OVERLAY_AXES) - set(files)), [],
+                         "선언한 파일이 스캔에 없다 — 범위가 좁혀졌다")
 
         declared = set(self.lint._CONTENT_OVERLAY_AXES)
         unexplained = []
@@ -353,6 +443,99 @@ class FreezeManifestTest(unittest.TestCase):
         (self.root / ".claude" / "freeze-manifest.json").write_text(
             json.dumps({"files": {}}), encoding="utf-8")
         self.assertIn("공회전", "\n".join(self._blocks()))
+
+
+class GateFailureTest(unittest.TestCase):
+    """**검사기가 죽으면 어떻게 되는가** — 다섯 번째 공회전 형태 (재리뷰 MUST-3).
+
+    runner 는 예외를 INFO 로 강등했고 `--strict` 는 INFO 를 세지 않았다. 그래서 검사기를
+    죽이는 입력 하나가 게이트를 통째로 여는 통로였다. 동작은 고쳤는데 **테스트가 0건**
+    이어서 그 수정 자체가 회귀에 무방비였다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "bin").mkdir(parents=True)
+        self.lint = self.root / ".claude" / "bin" / "lint.py"
+        shutil.copy2(_LINT, self.lint)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _inject_raise(self, func: str):
+        src = self.lint.read_text(encoding="utf-8")
+        marker = f"def {func}() -> list:\n"
+        self.assertEqual(src.count(marker), 1, f"{func} 를 못 찾았다")
+        self.lint.write_text(
+            src.replace(marker, marker + '    raise RuntimeError("죽었다")\n', 1),
+            encoding="utf-8")
+
+    def _run(self, checker: str) -> tuple:
+        res = subprocess.run([sys.executable, str(self.lint), "check",
+                              "--only", checker, "--strict"],
+                             capture_output=True, text=True, cwd=str(self.root))
+        return res.returncode, res.stdout
+
+    def test_게이트_검사기가_죽으면_BLOCK_이고_strict_가_막는다(self):
+        self._inject_raise("check_content_overlay")
+        code, out = self._run("LINT-CO")
+        self.assertEqual(code, 1, f"게이트 검사기가 죽었는데 통과했다:\n{out}")
+        self.assertIn("| BLOCK |", out)
+        self.assertIn("검사기 실행 실패", out)
+
+    def test_비게이트_검사기는_죽어도_INFO_다(self):
+        """훅의 관용은 훅의 것이지 게이트 검사기의 것이 아니다 — 경계를 고정한다."""
+        self._inject_raise("check_learn")
+        code, out = self._run("LINT-LEARN")
+        self.assertEqual(code, 0, f"비게이트 검사기가 게이트처럼 막았다:\n{out}")
+        self.assertIn("| INFO |", out)
+
+
+class FreezeManifestShapeTest(unittest.TestCase):
+    """매니페스트 **손상 3종** — 문법이 맞아도 모양이 틀리면 전면 거부다 (ADR-015 결정 6).
+
+    `[]` 는 전에 `.get()` 에서 AttributeError 를 냈고, 그것이 INFO 로 강등돼 `--strict`
+    가 **exit 0** 이었다. 두 수정(형태 검사 · 게이트 예외 BLOCK)이 서로를 가리므로
+    **메시지 수준**으로 각각 고정한다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "bin").mkdir(parents=True)
+        shutil.copy2(_LINT, self.root / ".claude" / "bin" / "lint.py")
+        (self.root / "src" / "harness_template" / "claude" / "harness").mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, body: str) -> tuple:
+        (self.root / ".claude" / "freeze-manifest.json").write_text(body, encoding="utf-8")
+        res = subprocess.run([sys.executable, str(self.root / ".claude" / "bin" / "lint.py"),
+                              "check", "--only", "LINT-FREEZE", "--strict"],
+                             capture_output=True, text=True, cwd=str(self.root))
+        return res.returncode, res.stdout
+
+    def test_최상위가_dict_가_아니면_모양_오류로_거부된다(self):
+        code, out = self._run("[]")
+        self.assertEqual(code, 1, f"`[]` 손상이 통과했다:\n{out}")
+        self.assertIn("매니페스트 모양이 틀렸다", out)
+
+    def test_files_가_dict_가_아니면_거부된다(self):
+        code, out = self._run('{"files": []}')
+        self.assertEqual(code, 1)
+        self.assertIn("매니페스트 모양이 틀렸다", out)
+
+    def test_깨진_JSON_은_읽기_실패로_거부된다(self):
+        code, out = self._run("{broken")
+        self.assertEqual(code, 1)
+        self.assertIn("읽지 못했다", out)
+
+    def test_비었으면_공회전하지_않는다(self):
+        code, out = self._run('{"files": {}}')
+        self.assertEqual(code, 1)
+        self.assertIn("공회전", out)
 
 
 class OverlayDeclarationTest(unittest.TestCase):

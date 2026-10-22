@@ -1163,8 +1163,9 @@ _CO_AXES = {
 
 #: 이 파일의 내용은 이 축들에 대해서**만** 갈라진다.
 #: 없는 파일은 **축 ∅** — 존재하는 모든 곳에서 바이트 동일해야 한다(fail-closed 기본값).
-#: 아래 14종은 트리에서 **도출**한 것이다: 관측 분할을 재현하는 최소 축 집합을 탐색했고
-#: 14/14 가 기존 `_VARIANTS_WITH_*` 조합으로 정확히 재구성됐다.
+#: 이 목록은 **도출**한 것이다 — 관측 분할을 재현하는 최소 축 집합을 탐색해, 갈린 파일
+#: 전부가 기존 `_VARIANTS_WITH_*` 조합으로 재구성되는 것을 확인했다. **개수는 적지
+#: 않는다**: 선언이 하나 늘 때마다 낡는다 (`len(_CONTENT_OVERLAY_AXES)` 로 센다).
 _CONTENT_OVERLAY_AXES = {
     ".claude/agents/reviewer.md": {"loop", "aif"},
     ".claude/agents/qa.md": {"loop", "aif"},
@@ -1205,28 +1206,38 @@ _CO_VARIANT_LOCAL = {
     "docs/progress-archive.txt": "`claude-progress.txt` 의 아카이브 — 같은 이유로 변형별",
     "docs/index.md": "생성 산출물 (`lint.py regenerate-index`)",
     "docs/UPSTREAM.md": "변형 메타 — 어느 변형에서 파생됐는지 적는 파일",
-    "wiki/": "생성 vault — 같은 노드라도 `updated:` 재생성 시각이 다르다",
+    "wiki/": "생성 vault — 변형 로컬 입력(feature_list·ADR 집합)에서 생성되므로 노드 내용 자체가 다르다 (`updated:` 시각뿐이라 적었던 것은 거짓이다 — `related:`·노드 수도 다르다)",
     "tests/suite/results/": "무인 스위트 실측 로그 — 변형·모델마다 다른 것이 **결과**다",
 }
+
+#: 스캔에서 빠지는 통로는 **넷**이다 — `_CO_SKIP_ANY_DIRS`(캐시·VCS) ·
+#: `_co_local_excluded`(머신 로컬, ADR-015 결정 2) · `_CO_VARIANT_LOCAL`(C 부류) ·
+#: 그리고 git 미추적. "둘뿐" 이라 적었던 것은 거짓이었다 (재리뷰 SHOULD-4).
+#: 어느 쪽도 사유 없이 늘리지 않는다.
 
 #: 동결 변형 — `LINT-CO` 에 참여시키지 않는다. "baseline 은 늘 달라야 한다" 로 모델링하면
 #: Karpathy 동기화가 영구 금지된다. 동결은 `LINT-FREEZE` 가 해시로 본다.
 _CO_FROZEN = ("claude", "openai")
 
-#: 변형마다 정당하게 다른 머신·프로젝트 로컬 파일 (`_SSOT_EXCLUDE_*` 와 같은 층위).
-_CO_LOCAL_NAMES = {"settings.json", "settings.local.json", "host.json",
-                   "atlassian-targets.json"}
+#: 트리 어디에 있든 건너뛰는 디렉토리 — 캐시·VCS·외부 설치물뿐이다.
+#: **내용 디렉토리를 여기 넣지 않는다.** 이름만으로 자르면 `docs/design/` 처럼 전혀 다른
+#: 경로가 함께 사라진다 — F021 1차 리뷰가 `_SSOT_EXCLUDE_NAMES` 에서 고친 밀반입 통로
+#: (`_SSOT_EXCLUDE_PREFIXES` 위 주석)를 재리뷰에서 그대로 재도입했다. 실측으로 잡혔다:
+#: `docs/design/*.md` 3종(×15)과 `.claude/agents/design/` 아래 무엇이든 0 BLOCK 이었다.
+_CO_SKIP_ANY_DIRS = frozenset({"__pycache__", ".git", "node_modules",
+                               ".pytest_cache", ".venv", ".mypy_cache"})
 
-#: 스캔에서 건너뛸 디렉토리 이름 — 런타임·캐시·외부 설치물.
-#: **여기를 늘리는 것이 범위를 좁히는 유일한 통로**이므로 사유 없이 늘리지 않는다.
-_CO_SKIP_DIRS = frozenset({
-    "__pycache__", ".git", "node_modules", ".pytest_cache", ".venv",
-    "state",     # `.claude/state/` — 런타임
-    "design",    # `.claude/design/` — design_pick 의 프로젝트 로컬 산출물
-})
-
-#: 변형마다 정당하게 다른 머신·프로젝트 로컬 파일 (`_SSOT_EXCLUDE_*` 와 같은 층위).
-_CO_LOCAL_NAMES_EXTRA = frozenset()  # (예약 — 현재 없음)
+#: 머신·프로젝트 로컬이라 미러 대상이 아닌 경로 — **루트 상대**다.
+#: `_SSOT_EXCLUDE_*` 에서 **파생한다**. 두 목록을 따로 쓰면 갈라지고, 실제로 갈라져
+#: 있었다(`bin/live_status.sh`·`hooks/pre-atlassian-write-check.sh` 가 LINT-CO 쪽에만
+#: 없었다). 같은 사실에 목록이 둘이면 한쪽만 고치게 된다 — 이 리포의 반복 결함이다.
+#: (`_SSOT_EXCLUDE_*` 는 아래 SSOT 절에서 정의되므로 **호출 시점에** 파생한다 —
+#:  여기서 값을 복사해 두면 그 순간 두 목록이 다시 갈라진다.)
+def _co_local_excluded(rel: str) -> bool:
+    """루트 상대 경로가 머신·프로젝트 로컬이라 미러 대상이 아닌가."""
+    if rel in {f".claude/{x}" for x in _SSOT_EXCLUDE_EXACT}:
+        return True
+    return rel.startswith(tuple(f".claude/{x}" for x in _SSOT_EXCLUDE_PREFIXES))
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -2037,7 +2048,7 @@ def _co_walk(root: Path):
             if q.is_symlink():
                 continue        # 링크를 따라가면 같은 파일이 두 경로로 세어진다
             if q.is_dir():
-                if q.name not in _CO_SKIP_DIRS:
+                if q.name not in _CO_SKIP_ANY_DIRS:
                     stack.append(q)
             elif q.is_file() and q.suffix != ".pyc":
                 yield q
@@ -2070,8 +2081,10 @@ def _co_collect() -> tuple:
                 continue        # 메인의 템플릿 트리 자신 — 변형으로 따로 센다
             if tracked is not None and rel not in tracked:
                 continue        # 로컬 산출물 — 미러 계약 밖이다
-            if Path(rel).name in _CO_LOCAL_NAMES or _co_variant_local(rel):
-                continue
+            if _co_local_excluded(rel):
+                continue        # 머신·프로젝트 로컬 (ADR-015 결정 2 — 루트 상대)
+            if _co_variant_local(rel):
+                continue        # (C) 변형 로컬·생성물
             try:
                 digest = hashlib.sha256(q.read_bytes()).hexdigest()[:12]
             except OSError as exc:
@@ -2122,7 +2135,15 @@ def check_content_overlay() -> list:
         return [_issue(checker, BLOCK, "src/harness_template/",
                        "공유 파일을 하나도 못 찾았다 — 검사기가 공회전한다")]
 
-    bad = 0
+    # 선언했는데 **스캔에 없다** — 범위가 좁아졌거나 파일이 사라졌다. 이게 없으면
+    # 범위 축소가 테스트에서만 잡히고 `lint --strict` 는 통과한다 (재리뷰 SHOULD-5).
+    missing = sorted(set(_CONTENT_OVERLAY_AXES) - set(files))
+    bad = len(missing)
+    for rel in missing:
+        results.append(_issue(checker, BLOCK, rel,
+                              "축을 선언했는데 스캔에 없다 — 범위가 좁아졌거나 "
+                              "파일이 사라졌다"))
+
     for rel in sorted(shared):
         obs = shared[rel]
         axes = _CONTENT_OVERLAY_AXES.get(rel, set())
