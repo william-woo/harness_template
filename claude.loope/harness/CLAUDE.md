@@ -102,7 +102,7 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 | **`claude.loope/`** ★ | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외: `settings.json`/`settings.local.json`/`host.json`/`.claude/state/` |
 | `claude.productmgr/` | main − loop 오버레이 |
 | `claude.hermes/` | main − loop − pm 오버레이 |
-| orch/wiki/design/auto 계열 | 해당 변형 아래 오버레이 순차 제외 — **LINT-MR-1~13 의 _*_OVERLAY_FILES 목록이 SSOT** |
+| orch/wiki/design/auto 계열 | 해당 변형 아래 오버레이 순차 제외 — `lint.py` 의 **`_*_OVERLAY_FILES` / `_VARIANTS_WITH_*` 가 SSOT**. 범위 번호는 적지 않는다 (세려면 `grep -c "MR-[0-9]*:" .claude/bin/lint.py`). 공유 파일 **안의** 오버레이는 `_CONTENT_OVERLAY_AXES` (ADR-015 결정 5) |
 | `claude.gstack/` (표준) | gstack.auto 기준 + autonomous 오버레이 4 파일 제외 |
 | `claude.productnw/` | nw(consortium) 오버레이는 main 에 없음 — productnw 전용 유지 |
 | `claude/` (baseline) · `openai/.codex/` | 동결, Karpathy 예외만 |
@@ -225,7 +225,7 @@ rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
 > | 미러할 것 | 방법 |
 > |---|---|
 > | 전 변형 동일 파일 (축 ∅) | 복사해도 된다 |
-> | **내용 오버레이 보유 파일** (`lint.py` 의 `_CONTENT_OVERLAY_AXES` 14종 — `reviewer.md`·`qa.md`·`coding-standards.md`·`retro.md`·`verify-loop.md`·SKILL 4종·`cycle_driver.py` 등) | **복사 금지.** 같은 **삽입/치환**을 변형군마다 적용한다 |
+> | **내용 오버레이 보유 파일** (`lint.py` 의 `_CONTENT_OVERLAY_AXES` — `reviewer.md`·`qa.md`·`coding-standards.md`·`retro.md`·`verify-loop.md`·SKILL 류·`cycle_driver.py` 등) | **복사 금지.** 같은 **삽입/치환**을 변형군마다 적용한다 |
 > | 동결 (`claude/`·`openai/`) | 손대지 않는다. Karpathy 동기화만 예외이고 `freeze-manifest.json` 을 **같은 커밋에서** 갱신한다 |
 >
 > 미러 뒤 `python3 .claude/bin/lint.py check --only=LINT-CO,LINT-FREEZE,LINT-SSOT,LINT-MR --strict`
@@ -933,7 +933,8 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 회귀 방지: `lint.py check --only=LINT-SSOT` (main ≡ loope 내용 정합, ADR-015)
 + `--only=LINT-CO` (**내용** 오버레이 — 공유 파일 안의 변형군별 사본, ADR-015 결정 5)
 + `--only=LINT-FREEZE` (동결 스냅샷 불변 — baseline·openai, ADR-015 결정 6)
-+ `--only=LINT-MR` (변형 오버레이 격리) 로 자동 가드 (MR-1~15 / F011 신설·F012 확장·F013 MR-8·F015 MR-9·F016 MR-10·F018 MR-11·F019 MR-12·F020 MR-13·F028 MR-14·F030 변형 등재·F032 MR-15 추가).
++ `--only=LINT-MR` (변형 오버레이 격리 — **파일** 단위) 로 자동 가드.
+규칙 번호·개수는 적지 않는다 (세려면 `grep -c "MR-[0-9]*:" .claude/bin/lint.py`) — 적어 둔 번호가 세 번 낡았다.
 
 ---
 

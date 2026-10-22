@@ -20,10 +20,17 @@ JSON·마크다운 분석으로 검사한다.
   LINT-LEARN  learnings 모순 휴리스틱
   LINT-SSOT   main ≡ claude.loope invariant (ADR-015, BLOCK)
   LINT-MIRROR gstack 표준 변형 대조 (참고용 INFO)
-  LINT-MR     변형 오버레이 정합 (14변형 — F011 신설, F012: MR-6/7, F013: MR-8, F015: MR-9, F016: MR-10, F018: MR-11, F019: MR-12, F020: MR-13, F028: MR-14)
+  LINT-MR     변형 오버레이 정합 — **파일** 단위 (ADR-015 결정 3)
+  LINT-CO     내용 오버레이 정합 — 공유 파일 **안**의 변형군별 사본 (ADR-015 결정 5, BLOCK)
+  LINT-FREEZE 동결 스냅샷 불변 — baseline · openai/.codex (ADR-015 결정 6, BLOCK)
+  LINT-ATL    Atlassian 쓰기 대상 제한 — 3-C 철칙 (배포본 fail-closed)
+
+검사기·규칙 **개수를 적지 않는다** — 세 번 낡았다 (세려면 `grep -c "MR-[0-9]*:" 이 파일`).
 
 외부 의존성: 없음 (Python stdlib only)
-hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0
+hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stderr + exit 0.
+  **단 게이트 검사기는 예외다** — 아래 `_GATE_CHECKERS` 참조. 훅의 관용은 훅의 것이지
+  게이트 검사기의 것이 아니다 (검사기가 죽으면 조용히 통과하는 것이 가장 나쁜 실패다).
 """
 
 import argparse
@@ -1173,6 +1180,33 @@ _CONTENT_OVERLAY_AXES = {
     ".claude/bin/cycle_driver.py": {"aif", "model_nem"},
     ".claude/bin/autoresearch.py": {"model_nem"},
     ".claude/bin/opencode-setup.sh": {"model_nem"},
+    # `.opencode/` 는 `.claude/` 의 **렌더 산출물**이다 (host.py render-agents/commands).
+    # 원본만 가드하면 산출물이 조용히 어긋난다 — 리뷰 MUST-2 가 실측으로 짚었다.
+    ".opencode/agent/reviewer.md": {"aif"},
+    ".opencode/agent/qa.md": {"aif"},
+    ".opencode/commands/verify-loop.md": {"aif"},
+    ".opencode/commands/init-project.md": {"model_nem"},
+    ".opencode/AGENTS.md": {"model_nem"},
+    "opencode.json": {"model_nem"},
+    "docs/poc/MODEL-GRADES.md": {"model_nem"},
+    "tests/suite/run_suite.py": {"model_nem"},
+}
+
+#: **(C) 미러 대상이 아닌 공유 파일** — 변형 로컬이거나 생성 산출물이다.
+#: 사유를 함께 적는다. 사유 없는 제외는 곧 *어떤 검사도 보지 않는 파일*이고,
+#: ADR-015 결정 2 가 "가드 없는 제외는 금지" 로 세운 규칙이 여기에도 적용된다.
+#: 끝이 `/` 면 접두 일치.
+_CO_VARIANT_LOCAL = {
+    "CLAUDE.md": "변형별 헤더가 다르다. 본문 섹션은 `check_ssot` 이 main↔loope 로 본다",
+    "README.md": "변형 소개문 — 변형마다 다른 것이 정상",
+    ".gitignore": "변형마다 런타임 산출물 경로가 다르다",
+    "feature_list.json": "템플릿엔 데모 샘플을 유지한다 (CLAUDE.md 동기화 정책)",
+    "claude-progress.txt": "세션 인계용 — 변형별로 다른 것이 정상",
+    "docs/progress-archive.txt": "`claude-progress.txt` 의 아카이브 — 같은 이유로 변형별",
+    "docs/index.md": "생성 산출물 (`lint.py regenerate-index`)",
+    "docs/UPSTREAM.md": "변형 메타 — 어느 변형에서 파생됐는지 적는 파일",
+    "wiki/": "생성 vault — 같은 노드라도 `updated:` 재생성 시각이 다르다",
+    "tests/suite/results/": "무인 스위트 실측 로그 — 변형·모델마다 다른 것이 **결과**다",
 }
 
 #: 동결 변형 — `LINT-CO` 에 참여시키지 않는다. "baseline 은 늘 달라야 한다" 로 모델링하면
@@ -1183,11 +1217,16 @@ _CO_FROZEN = ("claude", "openai")
 _CO_LOCAL_NAMES = {"settings.json", "settings.local.json", "host.json",
                    "atlassian-targets.json"}
 
-#: 비교 대상 하위 트리. `docs/adr/` 는 **축 ∅** — 존재하는 모든 곳에서 같아야 한다.
-#: `check_ssot` 이 `docs/adr/` 를 **loope 하고만** 비교해 나머지 변형이 무가드였고,
-#: 실제로 ADR-015·ADR-017 이 2:4 로 갈린 채 0 BLOCK 이었다.
-#: `wiki/` 는 범위 밖 — 생성 vault 이고 변형별 노드 집합 자체가 다르다.
-_CO_ROOTS = (".claude", "docs/adr")
+#: 스캔에서 건너뛸 디렉토리 이름 — 런타임·캐시·외부 설치물.
+#: **여기를 늘리는 것이 범위를 좁히는 유일한 통로**이므로 사유 없이 늘리지 않는다.
+_CO_SKIP_DIRS = frozenset({
+    "__pycache__", ".git", "node_modules", ".pytest_cache", ".venv",
+    "state",     # `.claude/state/` — 런타임
+    "design",    # `.claude/design/` — design_pick 의 프로젝트 로컬 산출물
+})
+
+#: 변형마다 정당하게 다른 머신·프로젝트 로컬 파일 (`_SSOT_EXCLUDE_*` 와 같은 층위).
+_CO_LOCAL_NAMES_EXTRA = frozenset()  # (예약 — 현재 없음)
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -1958,35 +1997,90 @@ def _co_profile(variant: str, axes) -> frozenset:
     return frozenset(a for a in axes if src in _CO_AXES[a])
 
 
+def _co_variant_local(rel: str) -> str | None:
+    """(C) 미러 대상이 아닌 파일이면 그 **사유**를, 아니면 None."""
+    for key, reason in _CO_VARIANT_LOCAL.items():
+        if (rel == key) if not key.endswith("/") else rel.startswith(key):
+            return reason
+    return None
+
+
+def _co_tracked(root: Path) -> set | None:
+    """`root` 아래 **git 추적** 파일의 상대경로. git 을 못 쓰면 None.
+
+    미러는 **추적되는 내용**에 대한 계약이다. 디스크를 그대로 훑으면 로컬 산출물이
+    섞인다 — 실측: 메인의 `.opencode/` 는 gitignore 된 render 결과물인데 디스크
+    스캔에서는 d-2 변형들과 "갈린" 것으로 읽혔다(7 BLOCK). `package-lock.json` 도 같다.
+    반대로 `docs/poc/measurements/06-harness-e2e.md` 는 3곳 모두 추적이고 **진짜 drift** 다.
+    """
+    import subprocess
+    try:
+        res = subprocess.run(["git", "ls-files", "-z"], cwd=str(root),
+                             capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return {x.decode("utf-8", "replace") for x in res.stdout.split(b"\0") if x}
+
+
+def _co_walk(root: Path):
+    """트리 전체를 훑되 `_CO_SKIP_DIRS` 는 **내려가지 않는다**."""
+    stack = [root]
+    while stack:
+        d = stack.pop()
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            continue
+        for q in entries:
+            if q.is_symlink():
+                continue        # 링크를 따라가면 같은 파일이 두 경로로 세어진다
+            if q.is_dir():
+                if q.name not in _CO_SKIP_DIRS:
+                    stack.append(q)
+            elif q.is_file() and q.suffix != ".pyc":
+                yield q
+
+
 def _co_collect() -> tuple:
-    """{상대경로: {변형: 해시}} 와 스캔한 루트 수를 모은다."""
+    """{상대경로: {변형: 해시}}, 스캔한 트리 수, **읽지 못한 파일** 목록.
+
+    **트리 전체**를 훑는다. 전에는 `.claude/`·`docs/adr/` 만 봤고, 그 바깥에 실제 drift
+    (`docs/poc/measurements/06-harness-e2e.md` — F024 수정이 3 사본 중 1곳에만)와 미가드
+    내용 오버레이(`.opencode/` 렌더 산출물 등 9종)가 있었다. 범위를 좁히면 AC3 의
+    "미분류 0건" 이 **범위 축소로 통과**해 버린다 (리뷰 MUST-2).
+    """
     import hashlib
     roots = {"MAIN": _PROJECT_ROOT}
     for d in sorted(_HT.iterdir()):
         if d.is_dir() and (d / "harness").is_dir() and d.name not in _CO_FROZEN:
             roots[d.name] = d / "harness"
     files: dict = {}
+    unread: list = []
+    untracked_roots: list = []
     for name, root in roots.items():
-        for base in _CO_ROOTS:
-            top = root / base
-            if not top.is_dir():
+        tracked = _co_tracked(root)
+        if tracked is None:
+            # 조용히 디스크로 내려가지 않는다 — 어떤 경계로 쟀는지 보고한다.
+            untracked_roots.append(name)
+        for q in _co_walk(root):
+            rel = str(q.relative_to(root))
+            if rel.startswith("src/"):
+                continue        # 메인의 템플릿 트리 자신 — 변형으로 따로 센다
+            if tracked is not None and rel not in tracked:
+                continue        # 로컬 산출물 — 미러 계약 밖이다
+            if Path(rel).name in _CO_LOCAL_NAMES or _co_variant_local(rel):
                 continue
-            for q in top.rglob("*"):
-                if not q.is_file() or q.is_symlink():
-                    continue
-                if "__pycache__" in q.parts or q.suffix == ".pyc":
-                    continue
-                rel = str(q.relative_to(root))
-                if Path(rel).name in _CO_LOCAL_NAMES:
-                    continue
-                if rel.startswith(".claude/state/") or rel.startswith(".claude/design/"):
-                    continue
-                try:
-                    digest = hashlib.sha256(q.read_bytes()).hexdigest()[:12]
-                except OSError:
-                    continue
-                files.setdefault(rel, {})[name] = digest
-    return files, len(roots)
+            try:
+                digest = hashlib.sha256(q.read_bytes()).hexdigest()[:12]
+            except OSError as exc:
+                # **조용히 넘기지 않는다.** 읽지 못한 파일은 그 트리에서 사라져 보유 수가
+                # 줄고, 분할이 틀린 채 통과한다 (F020 8차가 같은 모양을 실측했다).
+                unread.append(f"{name}:{rel} ({type(exc).__name__})")
+                continue
+            files.setdefault(rel, {})[name] = digest
+    return files, len(roots), unread, untracked_roots
 
 
 def check_content_overlay() -> list:
@@ -2013,7 +2107,16 @@ def check_content_overlay() -> list:
                               f"_CO_AXES 에 없는 축을 선언했다: {sorted(unknown)}"))
         return results
 
-    files, n_roots = _co_collect()
+    files, n_roots, unread, untracked_roots = _co_collect()
+    if untracked_roots:
+        results.append(_issue(
+            checker, CONCERN, "git 추적 목록 없음",
+            f"{untracked_roots} 에서 `git ls-files` 를 쓰지 못해 디스크를 그대로 훑었다 — "
+            "로컬 산출물이 섞여 거짓 BLOCK 이 날 수 있다"))
+    if unread:
+        results.append(_issue(checker, BLOCK, "읽지 못한 파일",
+                              f"{len(unread)}건이 스캔에서 빠졌다 — 그 트리에서 사라져 "
+                              f"분할이 틀린 채 통과한다: {unread[:5]}"))
     shared = {rel: m for rel, m in files.items() if len(m) >= 2}
     if not shared:
         return [_issue(checker, BLOCK, "src/harness_template/",
@@ -2030,6 +2133,22 @@ def check_content_overlay() -> list:
 
         def _name(prof):
             return ",".join(sorted(prof)) or "(base)"
+
+        # ⓪ 선언한 축이 이 파일에서 **실제로 분할을 만들 수 있는가**.
+        #    축 안·밖 중 한쪽만 이 파일을 보유하면 그 선언은 아무것도 제약하지 않는다 —
+        #    붙여 놔도 조용히 통과한다(실측: `nw` 를 4 파일에 붙여도 생존). 죽은 선언은
+        #    다음 사람에게 "여기는 갈려도 된다" 는 거짓 신호를 준다.
+        holders = set(obs)
+        for axis in sorted(axes):
+            members = {("claude.loope" if v == "MAIN" else v) for v in holders}
+            inside = members & set(_CO_AXES[axis])
+            if not inside or inside == members:
+                bad += 1
+                side = "안" if not inside else "밖"
+                results.append(_issue(
+                    checker, BLOCK, rel,
+                    f"죽은 축 선언 — 이 파일을 가진 변형 중 축 '{axis}' {side}이 비었다. "
+                    "선언이 아무것도 제약하지 않는다 (붙여 놔도 조용히 통과)"))
 
         # ① 같은 프로필인데 갈렸다
         for prof, by_digest in sorted(groups.items(), key=lambda kv: _name(kv[0])):
@@ -2051,7 +2170,9 @@ def check_content_overlay() -> list:
                 continue
             bad += 1
             names = sorted(_name(x) for x in profs)
-            diff = set().union(*profs) - set().intersection(*profs)
+            # `set().intersection(*profs)` 는 **항상 ∅** 이라 diff 가 합집합이 됐다 —
+            # 힌트가 "분할을 만들지 않는 축" 으로 엉뚱한 축까지 지목했다 (리뷰 SHOULD-3).
+            diff = frozenset.union(*profs) - frozenset.intersection(*profs)
             hint = (f" 선언된 축 {sorted(diff)} 가 실제로는 분할을 만들지 않는다 — "
                     "죽은 축 선언이거나 오버레이가 지워졌다." if diff else "")
             results.append(_issue(
@@ -2099,10 +2220,17 @@ def check_freeze() -> list:
         return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
                        "동결 매니페스트가 없다 — 동결이 강제되지 않는다 (ADR-015 결정 6)")]
     try:
-        manifest = json.loads(_FREEZE_MANIFEST.read_text(encoding="utf-8")).get("files", {})
+        raw = json.loads(_FREEZE_MANIFEST.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
                        f"매니페스트를 읽지 못했다 ({type(exc).__name__}) — 손상이면 전면 거부다")]
+    # `[]` 처럼 **문법은 맞는데 모양이 틀린** 손상이 있다. `.get` 이 AttributeError 를 내고
+    # 그것이 러너에서 INFO 로 강등되면 게이트가 조용히 열린다 (실측). 형태도 본다.
+    if not isinstance(raw, dict) or not isinstance(raw.get("files"), dict):
+        return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
+                       f"매니페스트 모양이 틀렸다 ({type(raw).__name__}) — "
+                       "`{\"files\": {경로: {sha256, reason}}}` 여야 한다")]
+    manifest = raw["files"]
     if not manifest:
         return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
                        "매니페스트가 비었다 — 검사기가 공회전한다")]
@@ -2352,6 +2480,10 @@ def check_ssot() -> list:
 
 # ---------------------------------------------------------------------------
 
+#: 이 검사기들이 **죽으면 BLOCK** 이다. 나머지(참고용·휴리스틱)는 INFO 로 둔다.
+#: 판정 기준: 그 검사기가 없으면 **통과하면 안 되는 것이 통과하는가**.
+_GATE_CHECKERS = frozenset({"LINT-SSOT", "LINT-MR", "LINT-CO", "LINT-FREEZE", "LINT-ATL"})
+
 _CHECKERS = {
     "LINT-FL": ("feature_list 정합성", check_fl),
     "LINT-STALE": ("오래된 in-progress", check_stale),
@@ -2361,7 +2493,7 @@ _CHECKERS = {
     "LINT-MIRROR": ("gstack 표준 변형 대조 (참고용 INFO)", check_mirror),
     "LINT-SSOT": ("main ≡ claude.loope invariant (ADR-015)", check_ssot),
     "LINT-ATL": ("Atlassian 쓰기 대상 제한 — 3-C 철칙 (배포본 fail-closed)", check_atlassian_targets),
-    "LINT-MR": ("변형 오버레이 정합 — 파일 단위 (MR-1~15)", check_mirror_regression),
+    "LINT-MR": ("변형 오버레이 정합 — 파일 단위", check_mirror_regression),
     "LINT-CO": ("내용 오버레이 정합 — 공유 파일 안의 변형군별 사본 (ADR-015 결정 5)", check_content_overlay),
     "LINT-FREEZE": ("동결 스냅샷 불변 — baseline · openai/.codex (ADR-015 결정 6)", check_freeze),
 }
@@ -2885,8 +3017,19 @@ def cmd_check(args) -> int:
         try:
             all_results[checker_id] = fn()
         except Exception as exc:  # noqa: BLE001
+            # **게이트 검사기가 죽으면 BLOCK 이다.** 전에는 전부 INFO 로 강등했고
+            # `--strict` 는 INFO 를 세지 않으므로, 검사기를 죽이는 입력 하나가 게이트를
+            # 통째로 여는 통로였다 (실측: `freeze-manifest.json` 을 `[]` 로 바꾸면
+            # AttributeError → INFO → exit 0). ADR-015 결정 6 의 "손상이면 전면 거부" 가
+            # 그 모양의 손상에서 거짓이었다.
+            #
+            # hook-failure-tolerance 는 **훅**의 정책이다 — 훅은 작업을 막지 않는 것이
+            # 목적이고, 게이트 검사기는 막는 것이 목적이다. 둘에 같은 관용을 적용하면
+            # "조용히 통과" 가 되고, 그것이 이 리포가 가장 비싸게 배운 실패 형태다.
+            label = BLOCK if checker_id in _GATE_CHECKERS else INFO
             all_results[checker_id] = [
-                _issue(checker_id, INFO, checker_id, f"검사기 실행 실패 — {exc}")
+                _issue(checker_id, label, checker_id,
+                       f"검사기 실행 실패 — {type(exc).__name__}: {exc}")
             ]
 
     # 요약 계산

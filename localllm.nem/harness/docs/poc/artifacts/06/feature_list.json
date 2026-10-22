@@ -1,0 +1,18 @@
+{
+  "project": "repro-06",
+  "features": [
+    {
+      "id": "F001",
+      "title": "fizzbuzz — fizzbuzz.py",
+      "priority": "high",
+      "status": "done",
+      "passes": true,
+      "dependencies": [],
+      "acceptance_criteria": [
+        "fizzbuzz.py 에 fizzbuzz(n) 함수: 3 배수 'Fizz', 5 배수 'Buzz', 15 배수 'FizzBuzz', 나머지는 str(n) 을 반환, docstring 포함",
+        "test_fizzbuzz.py: fizzbuzz(3)=='Fizz', fizzbuzz(5)=='Buzz', fizzbuzz(15)=='FizzBuzz', fizzbuzz(7)=='7' assert 후 print('PASS'); 파일 끝에 if __name__ == '__main__': 로 테스트 함수 호출",
+        "python3 test_fizzbuzz.py 가 exit 0 + PASS 출력"
+      ]
+    }
+  ]
+}

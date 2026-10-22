@@ -194,6 +194,37 @@ class OverlayFixture(unittest.TestCase):
         self.assertTrue(blocks, f"부분 미러가 잡히지 않았다:\n{out}")
         self.assertIn("선언 안 된 분기", "\n".join(blocks))
 
+    def test_선언되지_않은_파일은_축_공집합_기본값이다(self):
+        """**검사기를 돌려서** 본다 — 전에는 테스트가 스스로 기본값을 계산했다.
+
+        `self.assertEqual(_co_profile(v, _CONTENT_OVERLAY_AXES.get(rel, set())), frozenset())`
+        는 동어반복이다. 테스트가 `.get(…, set())` 을 직접 넣으므로 **검사기의 기본값을
+        보지 않는다**. 실제로 기본값을 fail-open(`set(_CO_AXES)`)으로 바꾸는 변이가 17건을
+        전부 통과했다 (리뷰 MUST-4 / 변이 m8).
+
+        선언 없는 파일은 축 ∅ 이어야 하므로 **모든 비동결 트리에서 같아야 한다**.
+        fail-open 이면 프로필이 서로 달라져 갈려도 통과한다.
+        """
+        self._put("claude.gstack", ".claude/commands/handoff.md", "# handoff\nA\n")
+        self._put("claude.loope", ".claude/commands/handoff.md", "# handoff\nB\n")
+        blocks, out = self._run("LINT-CO")
+        self.assertTrue(blocks, f"선언 없는 파일이 갈렸는데 통과했다 — 기본값이 "
+                                f"fail-open 이다:\n{out}")
+        self.assertIn("handoff.md", "\n".join(blocks))
+        self.assertIn("선언 안 된 분기", "\n".join(blocks))
+
+    def test_두_트리만_공유하는_파일도_검사한다(self):
+        """공유 임계(`len(m) >= 2`)를 고정한다 — 임계를 올리는 변이가 생존했다.
+
+        실트리에서 aif(2곳)·d2(3곳) 전용 파일이 정확히 그 구간이다. fixture 에 2 트리
+        공유 파일이 없으면 임계가 아무것도 막지 않는다 (리뷰 SHOULD-7 / 변이 m7).
+        """
+        self._put("claude.aif", ".claude/commands/aif-judge.md", "# aif\nA\n")
+        self._put("localllm.nem", ".claude/commands/aif-judge.md", "# aif\nB\n")
+        blocks, out = self._run("LINT-CO")
+        self.assertTrue(blocks, f"2 트리만 공유하는 파일이 검사에서 빠졌다:\n{out}")
+        self.assertIn("aif-judge.md", "\n".join(blocks))
+
     def test_N3_선언되지_않은_축으로_갈리면_잡힌다(self):
         """`retro.md` 는 축 {loop} 로 선언돼 있다. loop 안에서 또 갈리면 미선언 축이다."""
         self._put("localllm.nem", ".claude/commands/retro.md",
@@ -202,6 +233,68 @@ class OverlayFixture(unittest.TestCase):
         self.assertTrue(blocks, f"미선언 축이 잡히지 않았다:\n{out}")
         self.assertIn("retro.md", "\n".join(blocks))
         self.assertIn("선언 안 된 분기", "\n".join(blocks))
+
+
+class RealTreeCoverageTest(unittest.TestCase):
+    """AC3 의 **"미분류 0건"** 을 실트리에서 직접 단언한다.
+
+    fixture 테스트는 "이 모양이 잡히는가" 를 본다. 그것만으로는 **범위를 좁혀** 통과하는
+    것을 막지 못한다 — 실제로 처음 판은 `.claude/`·`docs/adr/` 만 훑어서, 바깥의 진짜
+    drift(`docs/poc/measurements/06-harness-e2e.md`)와 미가드 내용 오버레이(`.opencode/`
+    렌더 산출물 등 9종)를 못 봤다 (리뷰 MUST-2).
+
+    그래서 여기서는 **실트리의 git 추적 공유 파일 전부**가 A(축 ∅ — 어디서나 동일) /
+    B(`_CONTENT_OVERLAY_AXES`) / C(`_CO_VARIANT_LOCAL`) 중 하나로 설명되는지 본다.
+    설명되지 않는 파일이 곧 "53번째 파일" 이다.
+    """
+
+    def setUp(self):
+        self.lint = _load_lint()
+        if not (_ROOT / "src" / "harness_template").is_dir():
+            self.skipTest("템플릿 트리가 없는 변형 사본 — 실트리 검사 대상 아님")
+
+    def test_공유_파일이_전부_A_B_C_중_하나로_분류된다(self):
+        files, _, unread, untracked = self.lint._co_collect()
+        self.assertEqual(unread, [], "읽지 못한 파일이 있다 — 그만큼 분류에서 빠진다")
+        self.assertEqual(untracked, [],
+                         "git 추적 목록 없이 디스크를 훑었다 — 로컬 산출물이 섞인다")
+        shared = {rel: m for rel, m in files.items() if len(m) >= 2}
+        self.assertGreater(len(shared), 100, "공유 파일이 너무 적다 — 범위가 좁혀졌다")
+
+        declared = set(self.lint._CONTENT_OVERLAY_AXES)
+        unexplained = []
+        for rel, obs in shared.items():
+            if len(set(obs.values())) == 1:
+                continue                      # (A) 어디서나 동일
+            if rel in declared:
+                continue                      # (B) 축 선언됨
+            unexplained.append(rel)           # (C) 는 `_co_collect` 가 이미 제외한다
+        self.assertEqual(sorted(unexplained), [],
+                         "내용이 갈렸는데 A·B·C 어디에도 없다 — AC3 의 '미분류 0건' 위반. "
+                         "의도된 오버레이면 `_CONTENT_OVERLAY_AXES` 에, 변형 로컬이면 "
+                         "`_CO_VARIANT_LOCAL` 에 **사유와 함께** 등재하라")
+
+    def test_C_부류는_사유_없이_늘지_않는다(self):
+        """제외는 곧 *어떤 검사도 보지 않는 파일*을 만드는 일이다 (ADR-015 결정 2)."""
+        for key, reason in self.lint._CO_VARIANT_LOCAL.items():
+            self.assertTrue(isinstance(reason, str) and len(reason) >= 10,
+                            f"'{key}' 의 제외 사유가 없거나 너무 짧다: {reason!r}")
+
+    def test_선언된_축이_전부_살아_있다(self):
+        """죽은 선언은 "여기는 갈려도 된다" 는 **거짓 신호**를 남긴다."""
+        files, _, _, _ = self.lint._co_collect()
+        dead = []
+        for rel, axes in self.lint._CONTENT_OVERLAY_AXES.items():
+            obs = files.get(rel)
+            if not obs:
+                dead.append(f"{rel}: 파일이 없다")
+                continue
+            members = {("claude.loope" if v == "MAIN" else v) for v in obs}
+            for axis in axes:
+                inside = members & set(self.lint._CO_AXES[axis])
+                if not inside or inside == members:
+                    dead.append(f"{rel}: 축 '{axis}'")
+        self.assertEqual(dead, [], f"죽은 축 선언: {dead}")
 
 
 class FreezeManifestTest(unittest.TestCase):
@@ -283,12 +376,6 @@ class OverlayDeclarationTest(unittest.TestCase):
             self.assertIs(self.lint._CO_AXES[axis], getattr(self.lint, const),
                           f"축 '{axis}' 가 {const} 를 **참조**하지 않고 재나열했다")
 
-    def test_선언되지_않은_파일은_축_공집합이_기본값이다(self):
-        """fail-closed 쪽이 기본값이어야 한다 — 새 파일이 조용히 면제되면 안 된다."""
-        self.assertEqual(
-            self.lint._co_profile("localllm.nem",
-                                  self.lint._CONTENT_OVERLAY_AXES.get("없는/파일.md", set())),
-            frozenset())
 
     def test_MAIN_은_loope_프로필로_환산된다(self):
         """ADR-015: main ≡ loope. 환산하지 않으면 main 이 늘 '(base)' 로 읽힌다."""

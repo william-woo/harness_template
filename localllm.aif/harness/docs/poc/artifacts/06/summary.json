@@ -1,0 +1,19 @@
+{
+  "ts": "2026-09-23T01:40:37+0900",
+  "scenario": "측정 06 재현 — F001 fizzbuzz",
+  "driver_exit": 0,
+  "elapsed_sec": 239.6,
+  "verify_loop_status": "passed",
+  "verify_loop_attempts": 5,
+  "judge_verdicts": [
+    "revision",
+    "pass",
+    "pass"
+  ],
+  "revision_count": 2,
+  "ground_truth_pass": true,
+  "ground_truth_output": "PASS",
+  "feature_passes": true,
+  "false_pass": false,
+  "sandbox": "/tmp/harness-repro-06"
+}
