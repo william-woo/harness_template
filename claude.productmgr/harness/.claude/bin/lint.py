@@ -34,6 +34,7 @@ hook-failure-tolerance: 최상위 try/except → 예기치 못한 예외도 stde
 """
 
 import argparse
+import ast
 import difflib
 import json
 import re
@@ -1145,9 +1146,12 @@ _VARIANTS_WITH_ATLASSIAN = ["claude.vela.v0.1"]
 # (기대 해시 표로 두면 `reviewer.md` 를 한 줄 고칠 때마다 갈래 수만큼 갱신해야 하고,
 #  그 번거로움이 `regenerate` 를 부르며, 그 순간 검사기는 공회전한다.)
 
-#: 모델 축 — `localllm.nem` (F030 / ADR-021). **자기 파일이 하나도 없는 최초의 순수
-#: 내용 오버레이**다. 그래서 파일 기반 정책이 구조적으로 볼 수 없었다 (실측: 부모와
-#: 4 파일에서 갈림). CLAUDE.md 는 "오버레이 프로필이 부모와 동일" 이라 적지만 내용은 다르다.
+#: 모델 축 — `localllm.nem` (F030 / ADR-021). **부모와 같은 오버레이 프로필을 가지면서
+#: 내용이 갈리는 첫 변형**이라, 파일 기반 정책만으로는 그 차이를 원리적으로 볼 수 없다.
+#: ("자기 파일이 하나도 없다" 고 적었던 것은 **거짓**이다 — `.claude/policy/qa.md`·
+#:  `.claude/policy/reviewer.md`·`tests/finetune_readiness.sh` 가 nem 에만 있고, 셋 다
+#:  어느 `_*_OVERLAY_FILES` 에도 없어 **존재 축**(F038)이 닫는다.)
+#: 갈리는 파일 수는 적지 않는다 — 선언에서 센다. "4 파일" 은 선언이 늘어난 날 낡았다.
 _VARIANTS_WITH_MODEL_NEM = ["localllm.nem"]
 
 #: 축 이름 → 그 축을 가진 변형 목록. **기존 상수를 참조한다 — 재나열하지 않는다.**
@@ -1193,51 +1197,181 @@ _CONTENT_OVERLAY_AXES = {
     "tests/suite/run_suite.py": {"model_nem"},
 }
 
-#: **(C) 미러 대상이 아닌 공유 파일** — 변형 로컬이거나 생성 산출물이다.
-#: 사유를 함께 적는다. 사유 없는 제외는 곧 *어떤 검사도 보지 않는 파일*이고,
-#: ADR-015 결정 2 가 "가드 없는 제외는 금지" 로 세운 규칙이 여기에도 적용된다.
-#: 끝이 `/` 면 접두 일치.
-_CO_VARIANT_LOCAL = {
-    "CLAUDE.md": "변형별 헤더가 다르다. 본문 섹션은 `check_ssot` 이 main↔loope 로 본다",
-    "README.md": "변형 소개문 — 변형마다 다른 것이 정상",
-    ".gitignore": "변형마다 런타임 산출물 경로가 다르다",
-    "feature_list.json": "템플릿엔 데모 샘플을 유지한다 (CLAUDE.md 동기화 정책)",
-    "claude-progress.txt": "세션 인계용 — 변형별로 다른 것이 정상",
-    "docs/progress-archive.txt": "`claude-progress.txt` 의 아카이브 — 같은 이유로 변형별",
-    "docs/index.md": "생성 산출물 (`lint.py regenerate-index`)",
-    "docs/UPSTREAM.md": "변형 메타 — 어느 변형에서 파생됐는지 적는 파일",
-    "wiki/": "생성 vault — 변형 로컬 입력(feature_list·ADR 집합)에서 생성되므로 노드 내용 자체가 다르다 (`updated:` 시각뿐이라 적었던 것은 거짓이다 — `related:`·노드 수도 다르다)",
-    "tests/suite/results/": "무인 스위트 실측 로그 — 변형·모델마다 다른 것이 **결과**다",
+# ── 제외 규칙 표 (ADR-015 결정 2 개정 — 2026-10-23) ─────────────────────────
+#
+# **제외는 목록이 아니라 규칙이다.** 세 라운드 연속으로 같은 모양의 결함이 났는데,
+# 원인은 테스트를 덜 써서가 아니라 **규칙이 흩어진 상수·조건문으로만 존재해서** 테스트가
+# 언제나 "직전에 고친 그 규칙 하나" 만 겨냥할 수 있었던 것이다. 다음 규칙이 추가되는
+# 순간 또 구멍이 난다 (실측: mC·mD·mH·mT2 가 전부 그 모양).
+#
+# 그래서 규칙을 **증인 포함 데이터**로 적고 테스트가 표를 순회한다. 행을 추가하면
+# 테스트가 **자동으로 따라온다** — 증인 없는 행은 그 자체로 BLOCK 이다.
+#
+#   kind     exact(정확 일치) / prefix(루트 상대 접두) / anydir(경로 성분 — 캐시·VCS 만)
+#   scope    이 행이 적용되는 검사기 — {"ssot", "co", "freeze"} 의 부분집합
+#            **이 열이 '파생' 이 지웠던 사실이다.** SSOT 의 제외는 "main→loope 로
+#            미러하지 않는다", CO 의 제외는 "어느 변형끼리도 비교하지 않는다" —
+#            둘은 같은 사실이 아니다. 파생이 그 차이를 지워 `.claude/state/*/README.md`
+#            같은 전 변형 공유 문서가 무가드로 떨어졌다 (실측: LINT-CO 보유 0).
+#   guard    제외하는 대신 **무엇이 보는가** (ADR-015 "가드 없는 제외 금지" 의 기계 강제)
+#   inside   이 행이 **반드시 제외해야 하는** 경로 (≥1)
+#   outside  이 행이 **제외하면 안 되는 이웃** 경로 (≥1) — 통로를 한 칸 넓히는 변이를 잡는다
+_SCOPE_RULES = (
+    # ── 캐시·VCS·외부 설치물: 트리 어디에 있든 건너뛴다 ────────────────────
+    dict(kind="anydir", pattern="__pycache__", scope={"ssot", "co", "freeze"},
+         guard="없음 — 생성물이고 git 추적 대상도 아니다",
+         reason="Python 바이트코드 캐시 — 소스에서 생성되고 환경마다 다르다",
+         inside=[".claude/bin/__pycache__/lint.cpython-310.pyc"],
+         outside=[".claude/bin/lint.py"]),
+    dict(kind="anydir", pattern=".git", scope={"ssot", "co", "freeze"},
+         guard="없음 — VCS 내부", reason="git 내부 메타데이터 — 미러 대상이 아니다",
+         inside=[".git/config"], outside=[".claude/bin/git-sync.sh"]),
+    dict(kind="anydir", pattern="node_modules", scope={"ssot", "co"},
+         guard="없음 — 외부 설치물, git 미추적", reason="npm 설치물 — 외부 의존성이고 git 추적 대상이 아니다",
+         inside=[".opencode/node_modules/x/index.js"], outside=[".opencode/AGENTS.md"]),
+    dict(kind="anydir", pattern=".pytest_cache", scope={"ssot", "co"},
+         guard="없음 — 생성물", reason="pytest 실행 캐시 — 생성물이고 환경마다 다르다",
+         inside=["tests/.pytest_cache/v/cache/nodeids"], outside=["tests/test_lint_overlay.py"]),
+    dict(kind="anydir", pattern=".venv", scope={"ssot", "co"},
+         guard="없음 — 외부 설치물", reason="Python 가상환경 — 외부 설치물이라 미러 대상이 아니다",
+         inside=[".venv/lib/python3.10/site-packages/x.py"], outside=[".claude/bin/lint.py"]),
+    dict(kind="anydir", pattern=".mypy_cache", scope={"ssot", "co"},
+         guard="없음 — 생성물", reason="mypy 타입 캐시 — 생성물이고 환경마다 다르다",
+         inside=[".mypy_cache/3.10/x.json"], outside=[".claude/bin/host.py"]),
+
+    # ── 머신 로컬: 변형마다 정당하게 다르다 ────────────────────────────────
+    dict(kind="exact", pattern=".claude/settings.json", scope={"ssot", "co"},
+         guard="없음 — 머신별 권한 구성이라 비교 대상이 아니다",
+         reason="머신 로컬 권한·훅 배선",
+         inside=[".claude/settings.json"], outside=[".claude/settings-example.json"]),
+    dict(kind="exact", pattern=".claude/settings.local.json", scope={"ssot", "co"},
+         guard="없음 — 머신 로컬", reason="로컬 권한 누적 — 머신마다 다르게 쌓인다",
+         inside=[".claude/settings.local.json"], outside=[".claude/settings-local-notes.md"]),
+    dict(kind="exact", pattern=".claude/host.json", scope={"ssot", "co"},
+         guard="`host.py check`", reason="프로젝트 로컬 agent_type·백업 설정",
+         inside=[".claude/host.json"], outside=[".claude/hosts.json"]),
+    dict(kind="exact", pattern=".claude/bin/live_status.sh", scope={"ssot", "co"},
+         guard="없음 — 머신 로컬 관측 도구(tmux·파일 기반)",
+         reason="머신 로컬 관측 도구",
+         inside=[".claude/bin/live_status.sh"], outside=[".claude/bin/lint.py"]),
+    dict(kind="exact", pattern=".claude/atlassian-targets.json", scope={"ssot", "co"},
+         guard="`LINT-ATL` — 배포본이 빈 목록인지 본다 (3-C 철칙)",
+         reason="쓰기 허용 대상 — settings.json 과 같은 층위의 로컬 값",
+         inside=[".claude/atlassian-targets.json"], outside=[".claude/atlassian-map.json"]),
+    dict(kind="exact", pattern=".claude/hooks/pre-atlassian-write-check.sh", scope={"ssot", "co"},
+         guard="`LINT-ATL` — 로컬 훅과 vela 사본의 **바이트 동일**을 본다",
+         reason="허용 목록을 강제하는 훅 — 목록과 한 쌍",
+         inside=[".claude/hooks/pre-atlassian-write-check.sh"],
+         outside=[".claude/hooks/pre-bash-check.sh"]),
+
+    # ── MAIN 전용 커밋 상태: loope 로 미러하지 않지만 **비교는 한다** ───────
+    #    scope 에서 "co" 를 뺀 것이 핵심이다. 전엔 `state/` 접두 하나로 둘 다 빠져
+    #    `.claude/state/*/README.md`(전 변형 공유 문서)가 무가드로 떨어졌다.
+    dict(kind="prefix", pattern=".claude/state/checkpoints/", scope={"ssot"},
+         guard="`LINT-CO` — 변형에 나타나면 보유 분할로 드러난다",
+         reason="MAIN 전용 세션 인계 기록 — loope 로 미러하지 않는다",
+         inside=[".claude/state/checkpoints/20261020-x.md"],
+         outside=[".claude/state/orch/README.md"]),
+    dict(kind="exact", pattern=".claude/state/learnings.jsonl", scope={"ssot"},
+         guard="`LINT-CO`", reason="MAIN 전용 학습 누적 로그",
+         inside=[".claude/state/learnings.jsonl"],
+         outside=[".claude/state/verify-loop/README.md"]),
+    dict(kind="exact", pattern=".claude/state/analytics.jsonl", scope={"ssot"},
+         guard="`LINT-CO`", reason="MAIN 전용 이벤트 로그",
+         inside=[".claude/state/analytics.jsonl"],
+         outside=[".claude/state/product-cycle/README.md"]),
+    dict(kind="prefix", pattern=".claude/design/", scope={"ssot"},
+         guard="`LINT-CO` — 변형 트리 보유 0 이라 CO 에서는 애초에 아무것도 막지 않았다",
+         reason="`design_pick.py apply` 의 프로젝트 로컬 산출물",
+         inside=[".claude/design/tokens.json"],
+         outside=["docs/design/F007-design-review-checklist.md"]),
+
+    # ── (C) 변형 로컬·생성물: 미러 대상이 아니다 ───────────────────────────
+    dict(kind="exact", pattern="CLAUDE.md", scope={"co"},
+         guard="`check_ssot` 의 **섹션 단위** main↔loope 비교",
+         reason="변형별 헤더가 다르다",
+         inside=["CLAUDE.md"], outside=["docs/claude-md-notes.md"]),
+    dict(kind="exact", pattern="README.md", scope={"co"},
+         guard="없음 — 변형 소개문이라 다른 것이 정상",
+         reason="변형 소개문 — 변형마다 다른 것이 정상이다",
+         inside=["README.md"], outside=["docs/readme-template.md"]),
+    dict(kind="exact", pattern=".gitignore", scope={"co"},
+         guard="없음 — 변형마다 런타임 산출물 경로가 다르다",
+         reason="변형마다 런타임 산출물 경로가 다르다",
+         inside=[".gitignore"], outside=[".claude/bin/gitignore-check.sh"]),
+    dict(kind="exact", pattern="feature_list.json", scope={"co"},
+         guard="`LINT-FL` 이 각 트리에서 따로 본다",
+         reason="템플릿엔 데모 샘플을 유지한다",
+         inside=["feature_list.json"], outside=["docs/feature-list-schema.md"]),
+    dict(kind="exact", pattern="claude-progress.txt", scope={"co"},
+         guard="없음 — 세션 인계용", reason="세션 인계용 로그 — 변형별로 다른 것이 정상",
+         inside=["claude-progress.txt"], outside=["docs/claude-progress-notes.md"]),
+    dict(kind="exact", pattern="docs/progress-archive.txt", scope={"co"},
+         guard="없음 — 위의 아카이브", reason="진행 로그의 아카이브 — 위와 같은 이유로 변형별",
+         inside=["docs/progress-archive.txt"], outside=["docs/progress-notes.md"]),
+    dict(kind="exact", pattern="docs/index.md", scope={"co"},
+         guard="`lint.py regenerate-index` 가 생성한다", reason="생성 산출물 — `lint.py regenerate-index` 가 만든다",
+         inside=["docs/index.md"], outside=["docs/index-notes.md"]),
+    dict(kind="exact", pattern="docs/UPSTREAM.md", scope={"co"},
+         guard="없음 — 어느 변형에서 파생됐는지 적는 메타",
+         reason="변형 메타 — 어느 변형에서 파생됐는지 적는다",
+         inside=["docs/UPSTREAM.md"], outside=["docs/UPSTREAM-notes.md"]),
+    dict(kind="prefix", pattern="wiki/", scope={"co"},
+         guard="`wiki.py lint` — vault 정합성은 거기서 본다",
+         reason="생성 vault — 변형 로컬 입력(feature_list·ADR 집합)에서 생성되므로 "
+                "노드 내용 자체가 다르다 (`related:` 링크·인덱스 노드 수)",
+         inside=["wiki/index.md"], outside=["docs/adr/ADR-007-llm-wiki-knowledge-graph.md"]),
+    dict(kind="prefix", pattern="tests/suite/results/", scope={"co"},
+         guard="없음 — 변형·모델마다 다른 것이 **결과**다",
+         reason="무인 스위트 실측 로그",
+         inside=["tests/suite/results/round1.jsonl"], outside=["tests/suite/run_suite.py"]),
+)
+
+#: **양의 목록** — 각 경로류는 공유 파일을 1건 이상 내놓아야 한다. 0 이면 BLOCK.
+#: 증인은 "제외를 **더하는**" 방향을 막는다. 이것은 **범위가 무신호로 줄어드는** 반대
+#: 방향을 막는다 — 실측(mH): `_SSOT_EXCLUDE_PREFIXES` 에 `hooks/` 를 더하면 파생으로
+#: LINT-CO 범위가 조용히 줄었는데 37 테스트와 `lint --strict` 가 **전부 통과**했다.
+_SCOPE_REQUIRED = {
+    ".claude/agents/": "에이전트 정의",
+    ".claude/bin/": "헬퍼 스크립트",
+    ".claude/commands/": "슬래시 커맨드",
+    ".claude/hooks/": "훅 스크립트",
+    ".claude/rules/": "팀 규칙",
+    ".claude/skills/": "스킬",
+    "docs/adr/": "아키텍처 결정 기록",
+    "tests/": "테스트",
 }
 
-#: 스캔에서 빠지는 통로는 **넷**이다 — `_CO_SKIP_ANY_DIRS`(캐시·VCS) ·
-#: `_co_local_excluded`(머신 로컬, ADR-015 결정 2) · `_CO_VARIANT_LOCAL`(C 부류) ·
-#: 그리고 git 미추적. "둘뿐" 이라 적었던 것은 거짓이었다 (재리뷰 SHOULD-4).
-#: 어느 쪽도 사유 없이 늘리지 않는다.
+
+def _scope_rules(scope: str) -> tuple:
+    """이 검사기에 적용되는 규칙만."""
+    return tuple(r for r in _SCOPE_RULES if scope in r["scope"])
+
+
+def _scope_match(rel: str, scope: str):
+    """`rel` 을 제외하는 규칙을 돌려준다 (없으면 None).
+
+    **부울이 아니라 규칙 자체**를 돌려준다 — 증인 테스트가 "어느 행이 잡았는가" 를
+    단언해야 다른 행에 흡수된 죽은 행이 조용히 통과하지 않는다.
+    """
+    parts = tuple(Path(rel).parts)
+    for rule in _SCOPE_RULES:
+        if scope not in rule["scope"]:
+            continue
+        kind, pat = rule["kind"], rule["pattern"]
+        if kind == "anydir" and pat in parts:
+            return rule
+        if kind == "exact" and rel == pat:
+            return rule
+        if kind == "prefix" and rel.startswith(pat):
+            return rule
+    return None
+
 
 #: 동결 변형 — `LINT-CO` 에 참여시키지 않는다. "baseline 은 늘 달라야 한다" 로 모델링하면
 #: Karpathy 동기화가 영구 금지된다. 동결은 `LINT-FREEZE` 가 해시로 본다.
 _CO_FROZEN = ("claude", "openai")
 
-#: 트리 어디에 있든 건너뛰는 디렉토리 — 캐시·VCS·외부 설치물뿐이다.
-#: **내용 디렉토리를 여기 넣지 않는다.** 이름만으로 자르면 `docs/design/` 처럼 전혀 다른
-#: 경로가 함께 사라진다 — F021 1차 리뷰가 `_SSOT_EXCLUDE_NAMES` 에서 고친 밀반입 통로
-#: (`_SSOT_EXCLUDE_PREFIXES` 위 주석)를 재리뷰에서 그대로 재도입했다. 실측으로 잡혔다:
-#: `docs/design/*.md` 3종(×15)과 `.claude/agents/design/` 아래 무엇이든 0 BLOCK 이었다.
-_CO_SKIP_ANY_DIRS = frozenset({"__pycache__", ".git", "node_modules",
-                               ".pytest_cache", ".venv", ".mypy_cache"})
-
-#: 머신·프로젝트 로컬이라 미러 대상이 아닌 경로 — **루트 상대**다.
-#: `_SSOT_EXCLUDE_*` 에서 **파생한다**. 두 목록을 따로 쓰면 갈라지고, 실제로 갈라져
-#: 있었다(`bin/live_status.sh`·`hooks/pre-atlassian-write-check.sh` 가 LINT-CO 쪽에만
-#: 없었다). 같은 사실에 목록이 둘이면 한쪽만 고치게 된다 — 이 리포의 반복 결함이다.
-#: (`_SSOT_EXCLUDE_*` 는 아래 SSOT 절에서 정의되므로 **호출 시점에** 파생한다 —
-#:  여기서 값을 복사해 두면 그 순간 두 목록이 다시 갈라진다.)
-def _co_local_excluded(rel: str) -> bool:
-    """루트 상대 경로가 머신·프로젝트 로컬이라 미러 대상이 아닌가."""
-    if rel in {f".claude/{x}" for x in _SSOT_EXCLUDE_EXACT}:
-        return True
-    return rel.startswith(tuple(f".claude/{x}" for x in _SSOT_EXCLUDE_PREFIXES))
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
 _EXTERNAL_DEP_FILES = [
@@ -2008,14 +2142,6 @@ def _co_profile(variant: str, axes) -> frozenset:
     return frozenset(a for a in axes if src in _CO_AXES[a])
 
 
-def _co_variant_local(rel: str) -> str | None:
-    """(C) 미러 대상이 아닌 파일이면 그 **사유**를, 아니면 None."""
-    for key, reason in _CO_VARIANT_LOCAL.items():
-        if (rel == key) if not key.endswith("/") else rel.startswith(key):
-            return reason
-    return None
-
-
 def _co_tracked(root: Path) -> set | None:
     """`root` 아래 **git 추적** 파일의 상대경로. git 을 못 쓰면 None.
 
@@ -2035,8 +2161,15 @@ def _co_tracked(root: Path) -> set | None:
     return {x.decode("utf-8", "replace") for x in res.stdout.split(b"\0") if x}
 
 
-def _co_walk(root: Path):
-    """트리 전체를 훑되 `_CO_SKIP_DIRS` 는 **내려가지 않는다**."""
+def _co_walk(root: Path, scope: str = "co"):
+    """트리를 훑는다. 건너뛸 디렉토리는 **표의 `anydir` 행**이 정한다.
+
+    symlink 은 **조용히 건너뛰지 않고 돌려준다** — 호출자가 BLOCK 한다. 전에는
+    `continue` 였고, 그래서 변형 사본을 전부 main 으로 링크하면 부분 미러가
+    BLOCK 1 → **0** 으로 사라졌다 (실측 mS3). `LINT-SSOT` 는 같은 위험을 sentinel
+    digest 로 이미 막는다 — 같은 위험에 검사기마다 정책이 다르면 약한 쪽으로 샌다.
+    """
+    skip = {r["pattern"] for r in _scope_rules(scope) if r["kind"] == "anydir"}
     stack = [root]
     while stack:
         d = stack.pop()
@@ -2046,9 +2179,9 @@ def _co_walk(root: Path):
             continue
         for q in entries:
             if q.is_symlink():
-                continue        # 링크를 따라가면 같은 파일이 두 경로로 세어진다
-            if q.is_dir():
-                if q.name not in _CO_SKIP_ANY_DIRS:
+                yield q         # 호출자가 BLOCK — 조용히 빠지면 범위가 줄어든다
+            elif q.is_dir():
+                if q.name not in skip:
                     stack.append(q)
             elif q.is_file() and q.suffix != ".pyc":
                 yield q
@@ -2070,21 +2203,26 @@ def _co_collect() -> tuple:
     files: dict = {}
     unread: list = []
     untracked_roots: list = []
+    links: list = []
     for name, root in roots.items():
         tracked = _co_tracked(root)
         if tracked is None:
             # 조용히 디스크로 내려가지 않는다 — 어떤 경계로 쟀는지 보고한다.
             untracked_roots.append(name)
-        for q in _co_walk(root):
+        for q in _co_walk(root, "co"):
             rel = str(q.relative_to(root))
             if rel.startswith("src/"):
                 continue        # 메인의 템플릿 트리 자신 — 변형으로 따로 센다
             if tracked is not None and rel not in tracked:
                 continue        # 로컬 산출물 — 미러 계약 밖이다
-            if _co_local_excluded(rel):
-                continue        # 머신·프로젝트 로컬 (ADR-015 결정 2 — 루트 상대)
-            if _co_variant_local(rel):
-                continue        # (C) 변형 로컬·생성물
+            if _scope_match(rel, "co") is not None:
+                continue        # 표가 제외한다 (머신 로컬 · 변형 로컬 · 캐시)
+            # symlink 판정은 **제외 필터 뒤**다. 앞에 두면 범위 밖(`src/` 하위 소스
+            # 트리 등)의 정당한 링크까지 잡는다 — 실제로 `src/gstack/` 의 상대 링크
+            # 2건을 거짓 BLOCK 했다.
+            if q.is_symlink():
+                links.append(f"{name}:{rel}")
+                continue
             try:
                 digest = hashlib.sha256(q.read_bytes()).hexdigest()[:12]
             except OSError as exc:
@@ -2093,7 +2231,7 @@ def _co_collect() -> tuple:
                 unread.append(f"{name}:{rel} ({type(exc).__name__})")
                 continue
             files.setdefault(rel, {})[name] = digest
-    return files, len(roots), unread, untracked_roots
+    return files, len(roots), unread, untracked_roots, links
 
 
 def check_content_overlay() -> list:
@@ -2120,7 +2258,12 @@ def check_content_overlay() -> list:
                               f"_CO_AXES 에 없는 축을 선언했다: {sorted(unknown)}"))
         return results
 
-    files, n_roots, unread, untracked_roots = _co_collect()
+    files, n_roots, unread, untracked_roots, links = _co_collect()
+    if links:
+        results.append(_issue(
+            checker, BLOCK, "symlink",
+            f"{len(links)}건 — 미러에 심볼릭 링크를 두지 않는다. 링크하면 사본이 늘 "
+            f"같아 보여 부분 미러가 **사라진다**(실측 BLOCK 1→0): {links[:5]}"))
     if untracked_roots:
         results.append(_issue(
             checker, CONCERN, "git 추적 목록 없음",
@@ -2135,17 +2278,40 @@ def check_content_overlay() -> list:
         return [_issue(checker, BLOCK, "src/harness_template/",
                        "공유 파일을 하나도 못 찾았다 — 검사기가 공회전한다")]
 
-    # 선언했는데 **스캔에 없다** — 범위가 좁아졌거나 파일이 사라졌다. 이게 없으면
-    # 범위 축소가 테스트에서만 잡히고 `lint --strict` 는 통과한다 (재리뷰 SHOULD-5).
-    missing = sorted(set(_CONTENT_OVERLAY_AXES) - set(files))
-    bad = len(missing)
-    for rel in missing:
-        results.append(_issue(checker, BLOCK, rel,
-                              "축을 선언했는데 스캔에 없다 — 범위가 좁아졌거나 "
-                              "파일이 사라졌다"))
+    bad = 0
 
-    for rel in sorted(shared):
-        obs = shared[rel]
+    # **양의 목록** — 각 경로류가 공유 파일을 1건 이상 내놓는가. 제외를 더해 어떤
+    # 경로류가 통째로 비면 여기서 막힌다. 증인(`outside`)은 "제외를 더하는" 방향을
+    # 막고 이것은 "범위가 무신호로 줄어드는" 반대 방향을 막는다 — 실측(mH): 파생으로
+    # `hooks/` 가 빠졌을 때 37 테스트와 `lint --strict` 가 **전부 통과**했다.
+    for prefix, label in sorted(_SCOPE_REQUIRED.items()):
+        if not any(r.startswith(prefix) for r in shared):
+            bad += 1
+            results.append(_issue(checker, BLOCK, prefix,
+                                  f"{label} 경로류의 공유 파일이 0건이다 — 제외가 "
+                                  "너무 넓거나 스캔 범위가 줄었다"))
+
+    # **선언을 순회**한다 (`shared` 가 아니라). 보유 1 은 전에 `shared`(≥2)와
+    # `missing`(0) 어디에도 들지 않아, 테스트는 실패하는데 `lint --strict` 는
+    # **exit 0** 이었다 (실측: 단일 보유 파일을 선언하면 `PASS`).
+    for rel in sorted(set(shared) | set(_CONTENT_OVERLAY_AXES)):
+        obs = files.get(rel, {})
+        if rel in _CONTENT_OVERLAY_AXES and not obs:
+            bad += 1
+            results.append(_issue(checker, BLOCK, rel,
+                                  "축을 선언했는데 스캔에 없다 — 범위가 좁아졌거나 "
+                                  "파일이 사라졌다"))
+            continue
+        if rel in _CONTENT_OVERLAY_AXES and len(obs) == 1:
+            bad += 1
+            results.append(_issue(
+                checker, BLOCK, rel,
+                f"사본이 하나뿐이다({list(obs)}) — 내용 오버레이는 사본이 둘 이상일 때만 "
+                "성립하는 개념이다. 이것은 **파일** 오버레이이므로 `_*_OVERLAY_FILES` 로 "
+                "옮겨라"))
+            continue
+        if len(obs) < 2:
+            continue
         axes = _CONTENT_OVERLAY_AXES.get(rel, set())
         groups: dict = {}
         for variant, digest in obs.items():
@@ -2293,9 +2459,15 @@ def check_freeze() -> list:
         for q in sorted(base.rglob("*")):
             if not q.is_file() or q.is_symlink():
                 continue
-            if "__pycache__" in q.parts or q.suffix == ".pyc":
+            if q.suffix == ".pyc":
                 continue
-            if any(x in q.parts for x in ("state", "node_modules", ".pytest_cache")):
+            # 건너뛰기는 **표의 `freeze` scope** 가 정한다. 손으로 적은
+            # `any(x in q.parts for x in ("state", …))` 는 `LINT-SSOT`·`LINT-CO` 가
+            # 각각 한 번씩 고친 bare-name 밀반입 통로와 같은 모양이었다 — 실측:
+            # `claude/harness/.claude/agents/evil.md` 는 BLOCK 인데 그 아래 `state/`·
+            # `node_modules/`·`.pytest_cache/` 를 한 겹 끼우면 전부 **0 BLOCK**.
+            # 같은 결함이 세 검사기에 각각 생긴 이유가 각자 손으로 적은 것이다.
+            if _scope_match(str(q.relative_to(_PROJECT_ROOT)), "freeze") is not None:
                 continue
             if str(q.relative_to(_PROJECT_ROOT)) not in tracked:
                 bad += 1
@@ -2308,6 +2480,128 @@ def check_freeze() -> list:
         results.append(_issue(checker, PASS, f"{len(manifest)} 동결 파일",
                               f"해시 일치 OK (karpathy {n_k} / phase0 {len(manifest) - n_k})"))
     return results
+
+
+#: 문서가 인용해도 되는 비-코드 심볼 (환경변수·외부 규약 — 우리 코드에 없는 것이 정상).
+_DOC_SYMBOL_ALLOW = frozenset({
+    "CLAUDE_PROJECT_DIR", "HARNESS_AGENT_TYPE", "PYTHONPYCACHEPREFIX",
+    "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "LC_ALL",
+})
+
+
+def check_doc_symbols() -> list:
+    """문서가 **코드를 인용하되 복제하지 않는지** 본다 (ADR-015 결정 8).
+
+    이 리포에서 숫자·심볼 인용이 낡은 것은 **네 번째**다 — 제외 "5종"→7, 통로
+    "둘"→"넷"→9, `model_nem` "4 파일"→9, 그리고 `_CO_SKIP_DIRS` 는 개명 뒤
+    **존재하지 않는 심볼**이 됐다. "숫자를 적지 말고 세는 명령을 적는다" 는 규율은
+    옳지만 **사람의 기억에 의존해서 네 번 다 실패했다.**
+
+    기계가 볼 수 있는 만큼만 기계에 맡긴다:
+
+      1. 문서가 백틱으로 인용한 `_UPPER_SNAKE` 식별자는 `.claude/bin/*.py` 에 실재해야
+         한다 → 개명 리팩터가 문서를 끌고 간다.
+      2. 숫자를 적으려면 출처를 단다 —
+         `<!-- lint:len _CONTENT_OVERLAY_AXES -->22<!-- /lint -->`.
+         실제 길이와 다르면 BLOCK. (표현식 평가는 하지 않는다 — **심볼 길이**만.)
+
+    **검사할 수 없는 서술 주장**("자기 파일이 하나도 없는")은 이 검사기가 못 본다.
+    답은 "검사기를 더 똑똑하게" 가 아니라 그런 문장을 쓰지 않는 규율 + 리뷰다 —
+    그 경계를 정직하게 긋는 것이 "전부 자동화했다" 보다 낫다.
+    """
+    import re as _re
+    results = []
+    checker = "LINT-DOC"
+
+    # 코드에 실재하는 모듈 수준 심볼 수집
+    symbols: dict = {}
+    bindir = _CLAUDE_DIR / "bin"
+    if not bindir.is_dir():
+        return [_issue(checker, INFO, ".claude/bin/", "코드 디렉토리 없음 — 검사 생략")]
+    # 메인 + **변형**의 bin 전부. 문서는 오버레이 전용 심볼도 인용한다
+    # (예: ADR-016 의 `_CC_NORMALIZE` 는 d-2 오버레이 `opencode.py` 에 있다).
+    # 메인만 보면 정당한 인용을 거짓 BLOCK 한다.
+    scan = sorted(bindir.rglob("*.py"))
+    if _HT.exists():
+        scan += sorted(_HT.glob("*/harness/.claude/bin/**/*.py"))
+    for q in scan:   # host_adapters/ 같은 하위 패키지도
+        try:
+            tree = ast.parse(q.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for node in tree.body:
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                targets = [node.target.id]
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                targets = [node.name]
+            for name in targets:
+                symbols.setdefault(name, q.name)
+
+    docs = [_PROJECT_ROOT / "CLAUDE.md"]
+    adr = _PROJECT_ROOT / "docs" / "adr"
+    if adr.is_dir():
+        docs += sorted(adr.glob("*.md"))
+
+    cited = _re.compile(r"`(_[A-Z][A-Z0-9_]{3,})`")
+    provenance = _re.compile(r"<!--\s*lint:len\s+([A-Za-z_][A-Za-z0-9_]*)\s*-->"
+                             r"\s*(\d+)\s*<!--\s*/lint\s*-->")
+    bad = 0
+    for doc in docs:
+        if not doc.is_file():
+            continue
+        try:
+            text = doc.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rel = str(doc.relative_to(_PROJECT_ROOT))
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for name in cited.findall(line):
+                if name in symbols or name in _DOC_SYMBOL_ALLOW:
+                    continue
+                bad += 1
+                results.append(_issue(
+                    checker, BLOCK, f"{rel}:{line_no}",
+                    f"`{name}` 을 인용하는데 `.claude/bin/*.py` 에 없다 — 개명됐거나 "
+                    "오타다. 문서가 코드보다 앞서가면 다음 사람이 그 이름을 찾는다"))
+        for name, written in provenance.findall(text):
+            obj = None
+            for mod_sym, _f in symbols.items():
+                if mod_sym == name:
+                    obj = name
+                    break
+            if obj is None:
+                bad += 1
+                results.append(_issue(checker, BLOCK, rel,
+                                      f"`lint:len {name}` 의 심볼이 코드에 없다"))
+                continue
+            actual = _doc_symbol_len(name)
+            if actual is None:
+                bad += 1
+                results.append(_issue(checker, BLOCK, rel,
+                                      f"`{name}` 의 길이를 잴 수 없다 (컨테이너가 아니다)"))
+            elif int(written) != actual:
+                bad += 1
+                results.append(_issue(
+                    checker, BLOCK, rel,
+                    f"`{name}` 길이가 문서는 {written}, 실제는 {actual} — 출처를 달았으면 "
+                    "값은 기계가 맞춘다"))
+
+    if not bad:
+        results.append(_issue(checker, PASS, f"{len(docs)} 문서",
+                              f"인용 심볼 실재 OK (코드 심볼 {len(symbols)}개)"))
+    return results
+
+
+def _doc_symbol_len(name: str):
+    """이 모듈의 심볼 길이 — `lint:len` 출처 검사용. 잴 수 없으면 None."""
+    obj = globals().get(name)
+    try:
+        return len(obj)
+    except TypeError:
+        return None
 
 
 def check_atlassian_targets() -> list:
@@ -2517,6 +2811,7 @@ _CHECKERS = {
     "LINT-MR": ("변형 오버레이 정합 — 파일 단위", check_mirror_regression),
     "LINT-CO": ("내용 오버레이 정합 — 공유 파일 안의 변형군별 사본 (ADR-015 결정 5)", check_content_overlay),
     "LINT-FREEZE": ("동결 스냅샷 불변 — baseline · openai/.codex (ADR-015 결정 6)", check_freeze),
+    "LINT-DOC": ("문서가 인용한 심볼·숫자가 코드와 맞는가 (ADR-015 결정 8)", check_doc_symbols),
 }
 
 

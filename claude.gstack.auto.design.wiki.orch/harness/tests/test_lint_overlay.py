@@ -62,6 +62,13 @@ class OverlayFixture(unittest.TestCase):
         self._write_reviewer()
         self._write_retro()
         self._write_freeze_manifest()
+        # 양의 목록(`_SCOPE_REQUIRED`)을 만족시킨다 — 안 채우면 모든 케이스가
+        # "경로류가 비었다" BLOCK 에 묻혀 fixture 가 아무것도 구별하지 못한다.
+        for prefix in _load_lint()._SCOPE_REQUIRED:
+            for v in _FIXTURE_VARIANTS:
+                if v == "claude":
+                    continue        # 동결 변형은 LINT-CO 참여 대상이 아니다
+                self._put(v, f"{prefix}keep.md", "same\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -341,8 +348,9 @@ class RealTreeCoverageTest(unittest.TestCase):
             self.skipTest("템플릿 트리가 없는 변형 사본 — 실트리 검사 대상 아님")
 
     def test_공유_파일이_전부_A_B_C_중_하나로_분류된다(self):
-        files, _, unread, untracked = self.lint._co_collect()
+        files, _, unread, untracked, links = self.lint._co_collect()
         self.assertEqual(unread, [], "읽지 못한 파일이 있다 — 그만큼 분류에서 빠진다")
+        self.assertEqual(links, [], "미러에 심볼릭 링크가 있다 — 사본이 늘 같아 보인다")
         self.assertEqual(untracked, [],
                          "git 추적 목록 없이 디스크를 훑었다 — 로컬 산출물이 섞인다")
         shared = {rel: m for rel, m in files.items() if len(m) >= 2}
@@ -364,15 +372,20 @@ class RealTreeCoverageTest(unittest.TestCase):
                          "의도된 오버레이면 `_CONTENT_OVERLAY_AXES` 에, 변형 로컬이면 "
                          "`_CO_VARIANT_LOCAL` 에 **사유와 함께** 등재하라")
 
-    def test_C_부류는_사유_없이_늘지_않는다(self):
-        """제외는 곧 *어떤 검사도 보지 않는 파일*을 만드는 일이다 (ADR-015 결정 2)."""
-        for key, reason in self.lint._CO_VARIANT_LOCAL.items():
-            self.assertTrue(isinstance(reason, str) and len(reason) >= 10,
-                            f"'{key}' 의 제외 사유가 없거나 너무 짧다: {reason!r}")
+    def test_제외가_사유와_가드_없이_늘지_않는다(self):
+        """제외는 곧 *어떤 검사도 보지 않는 파일*을 만드는 일이다 (ADR-015 결정 2).
+
+        구조는 `ScopeRuleTableTest` 가 보고, 여기서는 **실트리에서 실제로 쓰이는**
+        규칙만 추려 사유·가드를 다시 본다 — 죽은 행은 아래 테스트가 따로 잡는다.
+        """
+        for rule in self.lint._SCOPE_RULES:
+            with self.subTest(pattern=rule["pattern"]):
+                self.assertGreaterEqual(len(rule["reason"]), 10)
+                self.assertGreaterEqual(len(rule["guard"]), 5)
 
     def test_선언된_축이_전부_살아_있다(self):
         """죽은 선언은 "여기는 갈려도 된다" 는 **거짓 신호**를 남긴다."""
-        files, _, _, _ = self.lint._co_collect()
+        files, *_ = self.lint._co_collect()
         dead = []
         for rel, axes in self.lint._CONTENT_OVERLAY_AXES.items():
             obs = files.get(rel)
@@ -439,10 +452,229 @@ class FreezeManifestTest(unittest.TestCase):
         (self.target.parent / "slipped-in.md").write_text("몰래", encoding="utf-8")
         self.assertIn("매니페스트에 없는 파일", "\n".join(self._blocks()))
 
+    def test_동결_밀반입은_중간_디렉토리_이름으로_숨을_수_없다(self):
+        """같은 bare-name 구멍이 `LINT-SSOT`·`LINT-CO`·`LINT-FREEZE` 에 **각각** 났다.
+
+        각자 손으로 적었기 때문이고, 그래서 하나의 표로 모았다. 실측: 전에는
+        `agents/evil.md` 는 BLOCK 인데 그 아래 `state/`·`node_modules/`·
+        `.pytest_cache/` 를 한 겹 끼우면 전부 **0 BLOCK** 이었다.
+        """
+        base = self.target.parent
+        for mid in ("", "state/", "node_modules/", ".pytest_cache/"):
+            with self.subTest(mid=mid or "(루트)"):
+                d = base / mid if mid else base
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "slipped.md").write_text("몰래", encoding="utf-8")
+                try:
+                    self.assertIn("매니페스트에 없는 파일", "\n".join(self._blocks()),
+                                  f"'{mid}' 를 끼우니 밀반입이 숨었다")
+                finally:
+                    (d / "slipped.md").unlink()
+
     def test_매니페스트가_비었으면_공회전하지_않는다(self):
         (self.root / ".claude" / "freeze-manifest.json").write_text(
             json.dumps({"files": {}}), encoding="utf-8")
         self.assertIn("공회전", "\n".join(self._blocks()))
+
+
+class ScopeRuleTableTest(unittest.TestCase):
+    """제외 **규칙 표**를 순회한다 — F021 AC6 의 본체.
+
+    세 라운드 연속 같은 모양의 결함이 난 원인은 테스트를 덜 써서가 아니라, **규칙이
+    흩어진 상수·조건문으로만 존재해서** 테스트가 언제나 "직전에 고친 그 규칙 하나" 만
+    겨냥할 수 있었던 것이다. 그래서 다음 규칙이 추가되면 또 구멍이 났다
+    (mC·mD·mH·mT2 가 전부 그 모양).
+
+    여기서는 **규칙이 자기 증인을 들고** 있고 테스트가 표를 순회한다 — 행을 추가하면
+    테스트가 **자동으로 따라온다**. 그것이 "제외 규칙이 하나 늘 때 테스트가 따라오는가"
+    라는 판단 기준에 대한 답이다.
+    """
+
+    def setUp(self):
+        self.lint = _load_lint()
+
+    def test_모든_제외규칙이_증인과_가드를_갖는다(self):
+        """증인 없는 행은 그 자체로 결함이다 — 아무것도 고정하지 않으면서 범위만 줄인다."""
+        for rule in self.lint._SCOPE_RULES:
+            with self.subTest(pattern=rule.get("pattern")):
+                for field in ("kind", "pattern", "scope", "reason", "guard",
+                              "inside", "outside"):
+                    self.assertIn(field, rule, f"필수 필드 누락: {field}")
+                self.assertIn(rule["kind"], ("exact", "prefix", "anydir"))
+                self.assertTrue(rule["scope"] <= {"ssot", "co", "freeze"},
+                                f"알 수 없는 scope: {rule['scope']}")
+                self.assertTrue(rule["scope"], "scope 가 비었다 — 아무 데도 적용되지 않는다")
+                self.assertGreaterEqual(len(rule["reason"]), 10, "사유가 너무 짧다")
+                self.assertGreaterEqual(len(rule["guard"]), 5, "가드 서술이 없다")
+                self.assertTrue(rule["inside"], "inside 증인이 없다")
+                self.assertTrue(rule["outside"], "outside 증인이 없다")
+
+    def test_증인이_의도한_행에_걸린다(self):
+        """**부울이 아니라 매칭된 행의 정체**를 단언한다.
+
+        부울만 보면 다른 행에 흡수된 **죽은 행**이 조용히 통과한다.
+        """
+        for rule in self.lint._SCOPE_RULES:
+            for scope in sorted(rule["scope"]):
+                for path in rule["inside"]:
+                    with self.subTest(scope=scope, rule=rule["pattern"], inside=path):
+                        hit = self.lint._scope_match(path, scope)
+                        self.assertIsNotNone(hit, "이 행이 제외해야 하는데 안 한다")
+                        self.assertEqual(hit["pattern"], rule["pattern"],
+                                         f"다른 행({hit['pattern']})이 흡수했다 — "
+                                         "이 행은 죽은 행이다")
+                for path in rule["outside"]:
+                    with self.subTest(scope=scope, rule=rule["pattern"], outside=path):
+                        hit = self.lint._scope_match(path, scope)
+                        self.assertIsNone(
+                            hit, f"이웃 경로가 제외됐다 — 통로가 한 칸 넓다 "
+                                 f"(걸린 행: {hit['pattern'] if hit else None})")
+
+    def test_anydir_는_캐시와_VCS_에만_쓴다(self):
+        """내용 디렉토리를 `anydir` 로 두면 전혀 다른 경로가 함께 사라진다.
+
+        `docs/design/` 이 `design` 이라는 이름 하나로 통째로 빠진 것이 그 사고였고,
+        같은 결함이 `LINT-SSOT`·`LINT-CO`·`LINT-FREEZE` 에 **각각** 났다.
+        """
+        allowed = {"__pycache__", ".git", "node_modules", ".pytest_cache",
+                   ".venv", ".mypy_cache"}
+        for rule in self.lint._SCOPE_RULES:
+            if rule["kind"] == "anydir":
+                self.assertIn(rule["pattern"], allowed,
+                              f"'{rule['pattern']}' 는 캐시·VCS 가 아니다 — "
+                              "루트 상대 `prefix` 로 쓰라")
+
+    def test_필수_경로류가_제외와_겹치지_않는다(self):
+        """양의 목록과 음의 목록이 모순이면 둘 중 하나는 거짓이다."""
+        for prefix in self.lint._SCOPE_REQUIRED:
+            with self.subTest(prefix=prefix):
+                hit = self.lint._scope_match(prefix + "sample.md", "co")
+                self.assertIsNone(hit, f"필수 경로류가 제외된다 (행: "
+                                       f"{hit['pattern'] if hit else None})")
+
+
+class ScopeWitnessFixtureTest(unittest.TestCase):
+    """증인 경로를 **실제 검사기**에 태운다 — 데이터 순회만으로는 동작을 못 본다."""
+
+    #: 두 변형이면 분할 비교가 성립한다
+    _V = ("claude.gstack", "claude.loope")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "bin").mkdir(parents=True)
+        shutil.copy2(_LINT, self.root / ".claude" / "bin" / "lint.py")
+        self.lint = _load_lint()
+        self.ht = self.root / "src" / "harness_template"
+        for v in self._V:
+            (self.ht / v / "harness").mkdir(parents=True)
+        # 양의 목록을 만족시킨다 — 안 그러면 모든 케이스가 그 BLOCK 에 묻힌다
+        for prefix in self.lint._SCOPE_REQUIRED:
+            self._put_all(f"{prefix}keep.md", "same\n", "same\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _put_all(self, rel: str, a: str, b: str):
+        for v, body in zip(self._V, (a, b)):
+            q = self.ht / v / "harness" / rel
+            q.parent.mkdir(parents=True, exist_ok=True)
+            q.write_text(body, encoding="utf-8")
+
+    def _blocks(self) -> str:
+        res = subprocess.run(
+            [sys.executable, str(self.root / ".claude" / "bin" / "lint.py"),
+             "check", "--only", "LINT-CO"],
+            capture_output=True, text=True, cwd=str(self.root))
+        return "\n".join(l for l in res.stdout.splitlines() if "| BLOCK |" in l)
+
+    def test_증인_경계가_실제_검사에서_지켜진다(self):
+        """`inside` 는 제외되고 `outside` 는 **갈리면 BLOCK** 이어야 한다.
+
+        규칙마다 돌린다 — 행을 추가하면 이 테스트가 자동으로 그 행을 태운다.
+        """
+        for rule in self.lint._SCOPE_RULES:
+            if "co" not in rule["scope"]:
+                continue
+            if rule["pattern"] == ".git":
+                continue        # fixture 에 가짜 .git 을 만들면 git 경계가 흔들린다
+            for path in rule["inside"]:
+                with self.subTest(rule=rule["pattern"], inside=path):
+                    self._put_all(path, "A\n", "B\n")
+                    self.assertNotIn(path, self._blocks(),
+                                     "제외되어야 할 경로가 BLOCK 됐다")
+            for path in rule["outside"]:
+                with self.subTest(rule=rule["pattern"], outside=path):
+                    self._put_all(path, "A\n", "B\n")
+                    self.assertIn(path, self._blocks(),
+                                  "제외하면 안 되는 이웃인데 BLOCK 이 안 났다 — "
+                                  "통로가 한 칸 넓다")
+
+    def test_범위_필수_경로류가_전부_살아_있다(self):
+        """제외가 넓어져 경로류가 통째로 비면 `lint --strict` 가 막아야 한다.
+
+        실측(mH): 파생으로 `hooks/` 가 빠졌을 때 37 테스트와 `lint --strict` 가
+        **전부 통과**했다. 테스트만으로는 못 막는다.
+        """
+        out = self._blocks()
+        for prefix in self.lint._SCOPE_REQUIRED:
+            self.assertNotIn(f"| {prefix} |", out, f"{prefix} 가 비었다")
+        # 경로류 하나를 지우면(=파일을 다른 데로 옮기면) BLOCK 이 나야 한다
+        victim = ".claude/hooks/"
+        for v in self._V:
+            (self.ht / v / "harness" / victim / "keep.md").unlink()
+        self.assertIn(victim, self._blocks(),
+                      "경로류가 비었는데 BLOCK 이 안 났다")
+
+    def _patch_axes(self, body: str):
+        """fixture 의 `lint.py` 선언을 갈아끼운다 — 메커니즘 검증이다."""
+        import re
+        q = self.root / ".claude" / "bin" / "lint.py"
+        src = q.read_text(encoding="utf-8")
+        patched, n = re.subn(r"^_CONTENT_OVERLAY_AXES = \{.*?\n\}\n", body, src,
+                             count=1, flags=re.S | re.M)
+        self.assertEqual(n, 1, "선언 블록을 못 찾았다")
+        q.write_text(patched, encoding="utf-8")
+
+    def test_선언했는데_스캔에_없으면_BLOCK_이다(self):
+        """범위가 좁아지면 `lint --strict` **단독**으로 막혀야 한다.
+
+        전에는 테스트에서만 잡히고 게이트는 열려 있었다 (재리뷰 SHOULD-5).
+        """
+        self._patch_axes('_CONTENT_OVERLAY_AXES = {\n'
+                         '    ".claude/commands/nowhere.md": {"loop"},\n'
+                         '}\n')
+        out = self._blocks()
+        self.assertIn("nowhere.md", out, "선언한 파일이 없는데 통과했다")
+        self.assertIn("스캔에 없다", out)
+
+    def test_사본이_하나뿐인_파일은_내용_오버레이가_아니다(self):
+        """보유 1 은 `shared`(≥2)·`missing`(0) 어디에도 없어 **둘 다에서 빠졌다**.
+
+        그래서 테스트는 빨간데 `lint --strict` 는 exit 0 이었다 — 여섯 번째 공회전
+        형태의 역상(검사기가 테스트보다 덜 안다). 내용 오버레이는 사본이 둘 이상일
+        때만 성립하는 개념이므로 **정의상** BLOCK 이다.
+        """
+        only = self.ht / self._V[0] / "harness" / ".claude" / "commands" / "solo.md"
+        only.parent.mkdir(parents=True, exist_ok=True)
+        only.write_text("only here\n", encoding="utf-8")
+        self._patch_axes('_CONTENT_OVERLAY_AXES = {\n'
+                         '    ".claude/commands/solo.md": {"loop"},\n'
+                         '}\n')
+        out = self._blocks()
+        self.assertIn("solo.md", out, "단일 보유 선언이 통과했다")
+        self.assertIn("사본이 하나뿐", out)
+
+    def test_symlink_은_스캔에서_조용히_빠지지_않는다(self):
+        """실측 mS3: 변형 사본을 main 으로 링크하면 부분 미러가 BLOCK 1 → **0** 이었다."""
+        self._put_all(".claude/commands/x.md", "A\n", "B\n")
+        self.assertIn("x.md", self._blocks(), "전제가 깨졌다")
+        tgt = self.ht / self._V[1] / "harness" / ".claude" / "commands" / "x.md"
+        tgt.unlink()
+        tgt.symlink_to(self.ht / self._V[0] / "harness" / ".claude" / "commands" / "x.md")
+        out = self._blocks()
+        self.assertIn("symlink", out,
+                      "링크가 조용히 빠졌다 — 사본이 늘 같아 보여 부분 미러가 사라진다")
 
 
 class GateFailureTest(unittest.TestCase):
@@ -536,6 +768,57 @@ class FreezeManifestShapeTest(unittest.TestCase):
         code, out = self._run('{"files": {}}')
         self.assertEqual(code, 1)
         self.assertIn("공회전", out)
+
+
+class DocSymbolTest(unittest.TestCase):
+    """`LINT-DOC` — 문서가 코드를 인용하되 복제하지 않는가 (ADR-015 결정 8).
+
+    숫자·심볼 인용이 낡은 것이 **네 번째**였고, "세는 명령을 적는다" 는 규율은 사람의
+    기억에 의존해 네 번 다 실패했다. 기계가 볼 수 있는 만큼만 기계에 맡긴다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "bin").mkdir(parents=True)
+        shutil.copy2(_LINT, self.root / ".claude" / "bin" / "lint.py")
+        (self.root / "docs" / "adr").mkdir(parents=True)
+        (self.root / "CLAUDE.md").write_text("# h\n", encoding="utf-8")
+        self.adr = self.root / "docs" / "adr" / "ADR-001-x.md"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, body: str) -> tuple:
+        self.adr.write_text(body, encoding="utf-8")
+        res = subprocess.run([sys.executable, str(self.root / ".claude" / "bin" / "lint.py"),
+                              "check", "--only", "LINT-DOC", "--strict"],
+                             capture_output=True, text=True, cwd=str(self.root))
+        return res.returncode, res.stdout
+
+    def test_실재하는_심볼_인용은_통과한다(self):
+        code, out = self._run("`_SCOPE_RULES` 가 SSOT 다.\n")
+        self.assertEqual(code, 0, f"실재 심볼인데 막혔다:\n{out}")
+
+    def test_없는_심볼을_인용하면_BLOCK_이다(self):
+        """개명 리팩터가 문서를 끌고 가게 하는 장치다 — `_CO_SKIP_DIRS` 가 그렇게 남았다."""
+        code, out = self._run("`_CO_SKIP_DIRS` 와 아래 둘뿐이다.\n")
+        self.assertEqual(code, 1, f"유령 심볼이 통과했다:\n{out}")
+        self.assertIn("_CO_SKIP_DIRS", out)
+
+    def test_숫자는_출처를_달면_기계가_맞춘다(self):
+        code, _ = self._run("규칙 <!-- lint:len _SCOPE_RULES -->99<!-- /lint --> 행.\n")
+        self.assertEqual(code, 1, "틀린 숫자가 통과했다")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_l", _LINT)
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        n = len(mod._SCOPE_RULES)
+        code, out = self._run(f"규칙 <!-- lint:len _SCOPE_RULES -->{n}<!-- /lint --> 행.\n")
+        self.assertEqual(code, 0, f"맞는 숫자가 막혔다:\n{out}")
+
+    def test_환경변수_같은_비코드_심볼은_허용된다(self):
+        code, out = self._run("`CLAUDE_PROJECT_DIR` 아래에서 돈다.\n")
+        self.assertEqual(code, 0, f"허용 목록이 동작하지 않는다:\n{out}")
 
 
 class OverlayDeclarationTest(unittest.TestCase):

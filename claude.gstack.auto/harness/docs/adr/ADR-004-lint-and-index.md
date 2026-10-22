@@ -599,7 +599,10 @@ src/harness_template/openai/                         # codex stub (결정 5)
 - 옵션: `--format=human|json`, `--strict`, `--category=<name>`, `--quiet`
 - 모든 핸들러 try/except 로 감싸 항상 exit 0 (단, `--strict` + BLOCK 시 exit 1)
 - 경로 상수: `_PROJECT_ROOT`, `_FEATURE_LIST`, `_ADR_DIR`, `_DESIGN_DIR`, `_LEARNINGS`,
-  `_PROGRESS`, `_GSTACK_DIR`, `_INDEX_MD`
+  `_FEATURE_LIST`, `_DOCS_ADR`, `_DOCS_INDEX`, `_GSTACK_DIR`
+  > 2026-10-23 정정: 옛 이름 둘(progress·index 상수)은 코드에 없다. `LINT-DOC` 이
+  > 잡았다 — 문서가 코드보다 앞서가면 다음 사람이 그 이름을 찾는다. **죽은 이름은
+  > 백틱으로 적지 않는다** (백틱은 '코드에 실재한다' 는 주장이다).
 
 **Step 1.3 — `LintIssue` 데이터 클래스 + `LintResult` 컨테이너 정의**
 - `LintIssue`: `(category, id, label, message, file, line, fix_hint)` — 7 필드

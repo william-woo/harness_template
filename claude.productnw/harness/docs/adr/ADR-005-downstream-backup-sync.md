@@ -628,7 +628,8 @@ src/harness_template/openai/                         # codex stub (결정 8)
 - F005 brain.py 헤더 docstring 형식 모방 (서브커맨드 카탈로그 + 옵션 표 + 설계 원칙)
 - argparse 서브커맨드 골격: `init`, `sync`, `status`, `config`, `self` 등록 (세션 1 에서는 `sync` 만 구현, 나머지는 NotImplementedError 또는 "세션 2 에서 구현" 안내)
 - 옵션: `--strict`, `--dry-run`, `--message`, `--format=human|json`
-- 경로 상수: `_PROJECT_ROOT`, `_HOST_JSON`, `_BACKUP_TMP_DIR`, `_EXCLUDE_PATTERNS`
+- 경로 상수: `_PROJECT_ROOT`, `_HOST_JSON`, `_STATE_DIR`, `_BACKUP_CACHE`
+  > 2026-10-23 정정: 옛 이름 둘(tmp-dir·exclude-patterns 상수)은 코드에 없다 (`LINT-DOC`).
 
 **Step 1.2 — `EXCLUDE_PATTERNS` 상수 정의 (결정 6 그대로)**
 - 카테고리별 리스트 7개 (사용자 코드 / 빌드 / 보안 / IDE / 로그 / 세션 로컬 / 서브 git)

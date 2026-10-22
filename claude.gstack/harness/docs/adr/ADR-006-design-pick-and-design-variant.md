@@ -957,7 +957,8 @@ cp docs/design/F011-tokens-schema.md \
 - F005 brain.py / F009 lint.py / F010 backup.py 헤더 docstring 형식 모방
 - argparse 서브커맨드 등록: `compare`, `recommend`, `apply`, `show`, `self`
 - 옵션: `--brand`, `--output`, `--force`, `--strict`, `--format`
-- 경로 상수: `_PROJECT_ROOT`, `_TOKENS_JSON_DEFAULT`, `_DESIGN_REFS_CANDIDATES`
+- 경로 상수: `_PROJECT_ROOT`, `_TOKENS_PATH_DEFAULT`, `_REFS_DIR`, `_REFS_ALT_DIR`
+  > 2026-10-23 정정: 옛 이름 둘(tokens-json-default·design-refs-candidates)은 코드에 없다 (`LINT-DOC`).
 
 **Step 2.2 — 4 브랜드 정적 토큰 카탈로그 (design_pick.py 내부 상수)**
 

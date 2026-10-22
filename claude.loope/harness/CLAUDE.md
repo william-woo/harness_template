@@ -910,6 +910,11 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 - (localllm.aif 만) `tests/judge_variance.py` + `docs/poc/measurements/10-aif-judgment.md` (실측)
 
 **모델 축 분기 변형** (F030 신설 — 오버레이가 아니라 **모델만 다른 형제**):
+> ⚠️ **2026-10-23 정정**: "모델만 다르다" 는 **현재 사실이 아니다.** 실측상
+> `localllm.nem` 에만 있는 파일이 3건이다 — `.claude/policy/qa.md` ·
+> `.claude/policy/reviewer.md` · `tests/finetune_readiness.sh`. 셋 다 어느
+> `_*_OVERLAY_FILES` 에도 없어 LINT-MR 이 지키지 못한다. 이 셋이 nem 오버레이면
+> 등재하고 아니면 정리한다 — **존재 축 가드(F038)** 가 처분한다.
 - `localllm.nem/` — `nemotron-3-nano:30b` 단일 (전 9 역할). 후속 `localllm.gem/` = gemma 기반
 - 부모 `localllm/` 은 qwen2.5 2 티어로 **그대로 유지** — 대조군이 사라지면 측정 01~09 가 해석 불가가 된다
 - **추론 모델 관문** (ADR-021): nemotron·gemma 는 도구 호출 **전에** 추론 토큰을 쓴다. 전역 설정에
