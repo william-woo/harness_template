@@ -88,15 +88,28 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 메인 `.claude/` 는 **`claude.loope` 와 정합** 상태입니다 (구 SSOT main≡gstack.auto 는 폐기).
 신규 개발은 **main 에서 → loope 로 1:1 미러 → 하위 변형은 오버레이 규칙대로 제외 미러**:
 
+> ### 2026-10-23 — **활성 변형은 셋뿐이다** (사용자 지시)
+>
+> `claude.loope` · `claude.vela.v0.1` · `localllm` 만 유지하고, 나머지 13종은
+> `src/harness_template/deprecated/` 로 **이동**했다 (`git mv` — 삭제가 아니다).
+> 동결 baseline(`claude/`·`openai/`)도 함께 옮겼으므로 **LINT-FREEZE 는 지킬 대상이 없어
+> INFO 로 내려간다**. 거버넌스 검사기(LINT-MR/CO/SSOT/FREEZE)는 `deprecated/` 를 보지 않는다.
+>
+> 아래 표와 816 행 매트릭스의 비활성 행은 **계보 설명**으로 남긴다 — ADR·측정 문서가
+> 그 이름으로 참조하므로 개명·삭제하면 참조가 전부 깨진다 (ADR-023 의 "개명하지 않는다"와
+> 같은 이유). 되살리는 절차와 **알려진 손실**은 `src/harness_template/deprecated/README.md`.
+
 | 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| **`claude.loope/`** ★ | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외: `settings.json`/`settings.local.json`/`host.json`/`.claude/state/` |
-| `claude.productmgr/` | main − loop 오버레이 |
-| `claude.hermes/` | main − loop − pm 오버레이 |
-| orch/wiki/design/auto 계열 | 해당 변형 아래 오버레이 순차 제외 — **LINT-MR-1~13 의 _*_OVERLAY_FILES 목록이 SSOT** |
-| `claude.gstack/` (표준) | gstack.auto 기준 + autonomous 오버레이 4 파일 제외 |
-| `claude.productnw/` | nw(consortium) 오버레이는 main 에 없음 — productnw 전용 유지 |
-| `claude/` (baseline) · `openai/.codex/` | 동결, Karpathy 예외만 |
+| **`claude.loope/`** ★ 활성 | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외 — 목록은 `python3 .claude/bin/lint.py mirror-excludes` 가 `_SCOPE_RULES` 에서 **생성**한다 |
+| **`claude.vela.v0.1/`** 활성 | loope 1:1 + Atlassian 오버레이 (MR-15) |
+| **`localllm/`** 활성 | loope 1:1 + d-2 오버레이 (MR-9) |
+| ~~`claude.productmgr/`~~ | deprecated — main − loop 오버레이였다 |
+| ~~`claude.hermes/`~~ | deprecated — main − loop − pm 오버레이였다 |
+| ~~orch/wiki/design/auto 계열~~ | deprecated — 오버레이 순차 제외였다. 살아 있는 축의 SSOT 는 여전히 `lint.py` 의 **`_*_OVERLAY_FILES` / `_VARIANTS_WITH_*`** 이고, 공유 파일 **안의** 오버레이는 `_CONTENT_OVERLAY_AXES` (ADR-015 결정 5) |
+| ~~`claude.gstack/` (표준)~~ | deprecated — gstack.auto 기준 + autonomous 오버레이 4 파일 제외였다 |
+| ~~`claude.productnw/`~~ | deprecated — nw(consortium) 오버레이는 main 에 없었다 |
+| ~~`claude/` (baseline) · `openai/.codex/`~~ | deprecated — 동결이었다. 매니페스트 경로가 안 맞으므로 되살릴 때 먼저 맞춘다 |
 
 **중요**: F010 회귀 교훈 — 미러링 시 변형별 settings.json 을 덮어쓰지 말 것. 미러 작업 전 이 표 + LINT-MR 확인.
 
@@ -747,22 +760,22 @@ feature의 `acceptance_criteria`에 다음 중 하나가 있으면 `/project:qa-
 
 ---
 
-## 🪞 메인 ↔ 변형 미러 정책 (12 변형 매트릭스)
+## 🪞 메인 ↔ 변형 미러 정책 (12 변형 계보 — **활성 2**)
 
-| 변형 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
-|---|---|:-:|:-:|:-:|:-:|:-:|
-| ⓐ `claude/` (baseline) | Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
-| ⓑ `claude.gstack/` (표준) | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | ❌ | 0 |
-| ⓑ′ `claude.gstack.auto/` (자율) | main − design~loop 오버레이 (F021 후) | ✅ | ❌ | ❌ | ❌ | 0 |
-| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
-| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
-| **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
-| **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
-| **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
-| **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
-| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
-| **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
-| ⓒ `openai/.codex/` (codex stub) | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+| 변형 | 상태 | 미러 정책 | 자율 | 디자인 | wiki | orch | 외부 의존성 |
+|---|:-:|---|:-:|:-:|:-:|:-:|:-:|
+| ⓐ `claude/` (baseline) | deprecated | Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
+| ⓑ `claude.gstack/` (표준) | deprecated | autonomous 오버레이 4 파일 제외 | ❌ | ❌ | ❌ | ❌ | 0 |
+| ⓑ′ `claude.gstack.auto/` (자율) | deprecated | main − design~loop 오버레이 (F021 후) | ✅ | ❌ | ❌ | ❌ | 0 |
+| ⓑ″ `claude.gstack.auto.design/` (자율+디자인) | deprecated | main − wiki~loop 오버레이 | ✅ | ✅ | ❌ | ❌ | 0 |
+| ⓑ‴ `claude.gstack.auto.design.wiki/` (자율+디자인+wiki) | deprecated | main − orch~loop 오버레이 + 외부 의존성 예외 | ✅ | ✅ | ✅ | ❌ | **허용** (Obsidian/qmd/Marp) |
+| **ⓑ⁗ `claude.gstack.auto.design.wiki.orch/`** (자율+디자인+wiki+orch) | deprecated | wiki 변형 1:1 + orch 오버레이 | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속) |
+| **ⓑ⁵ `localllm/`** (d-2 — 로컬 LLM) | **활성** | **loope 계보 + d-2 오버레이** (F023 승격). **OpenCode + 로컬 LLM 구동** | ✅ | ✅ | ✅ | ✅ | **허용** (OpenCode/Ollama) |
+| **ⓑ⁶ `claude.hermes/`** (영속기억·자가진화) | deprecated | orch 변형 1:1 + hermes 오버레이 (FTS5 세션검색 + 스킬 자동생성/self-improve) | ✅ | ✅ | ✅ | ✅ | **허용** (wiki 상속, hermes 기능은 stdlib) |
+| **ⓑ⁷ `claude.productmgr/`** (PM 주도 통합 SDLC) | deprecated | hermes 변형 1:1 + pm 오버레이 (product-manager + product-cycle) | ✅ | ✅ | ✅ | ✅ | **허용** (hermes 상속, pm 오버레이는 stdlib/문서) |
+| **ⓑ⁸ `claude.productnw/`** (분산 멀티팀 컨소시엄, d-3) | deprecated | productmgr 변형 1:1 + nw 오버레이 (consortium 계약/로스터/큐 + Slack 게이트웨이 실구현) | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, nw 오버레이는 stdlib/문서) |
+| **ⓑ⁹ `claude.loope/`** ★ (loop engineering — Loop 2+4) | **활성** | **메인과 1:1 (SSOT, F021/ADR-015)** — loop 오버레이(verify_loop+hill_climb+rubrics) 보유 | ✅ | ✅ | ✅ | ✅ | **허용** (productmgr 상속, loop 오버레이는 stdlib/문서) |
+| ⓒ `openai/.codex/` (codex stub) | deprecated | 정적, Karpathy 만 | ❌ | ❌ | ❌ | ❌ | 0 |
 
 > **claude.loope 변형 (F020)**: productmgr 변형 복사 + loop 오버레이 (ADR-014). LangChain
 > "loop engineering"(Swyx, the art of stacking loops)의 **Loop 2(검증 루프)** 를 하네스에 이식.

@@ -873,11 +873,7 @@ _DESIGN_OVERLAY_DIRS = [
 _VARIANTS_NO_DESIGN = ["claude", "claude.gstack", "claude.gstack.auto"]
 
 # 디자인 오버레이를 보유해야 하는 변형 (MR-5: design + wiki + orch 셋 다)
-_VARIANTS_WITH_DESIGN = [
-    "claude.gstack.auto.design",
-    "claude.gstack.auto.design.wiki",
-    "claude.gstack.auto.design.wiki.orch",  # F013: orch 변형도 wiki 복사라 디자인 보유
-]
+_VARIANTS_WITH_DESIGN = []
 
 # wiki 오버레이 파일 (ⓑ‴ wiki 변형 + ⓑ⁗ orch 변형에만 존재해야 함 — MR-6)
 _WIKI_OVERLAY_FILES = [
@@ -895,10 +891,7 @@ _WIKI_OVERLAY_DIRS = [
 _VARIANTS_NO_WIKI = ["claude", "claude.gstack", "claude.gstack.auto", "claude.gstack.auto.design"]
 
 # wiki 오버레이를 보유해야 하는 변형 (MR-6 확장: wiki + orch 둘 다)
-_VARIANTS_WITH_WIKI = [
-    "claude.gstack.auto.design.wiki",
-    "claude.gstack.auto.design.wiki.orch",  # F013: orch 변형도 wiki 오버레이 보유 (wiki 상속)
-]
+_VARIANTS_WITH_WIKI = []
 
 # orch 오버레이 파일 (ⓑ⁗ orch 변형에만 존재해야 함 — MR-8)
 _ORCH_OVERLAY_FILES = [
@@ -922,7 +915,7 @@ _VARIANTS_NO_ORCH = [
 ]
 
 # orch 오버레이를 보유해야 하는 변형 (MR-8: orch 변형만)
-_VARIANTS_WITH_ORCH = ["claude.gstack.auto.design.wiki.orch"]
+_VARIANTS_WITH_ORCH = []
 
 # d-2 오버레이 파일 (ⓑ⁵ localllm 변형에만 존재해야 함 — MR-9, F015 정식 등재)
 # 주의: opencode.py 는 d-2 오버레이가 아님 — gstack 등 6변형이 호스트 어댑터로 정당 보유.
@@ -960,7 +953,7 @@ _VARIANTS_NO_D2 = [
 ]
 
 # d-2 오버레이를 보유해야 하는 변형 (MR-9: localllm 만)
-_VARIANTS_WITH_D2 = ["localllm", "localllm.nem", "localllm.aif"]
+_VARIANTS_WITH_D2 = ["localllm"]
 
 # hermes 오버레이 파일 (ⓑ⁶ claude.hermes 변형에만 존재해야 함 — MR-10, F016 신설)
 # Hermes Agent 패턴 이식: FTS5 세션검색 + 스킬 자동생성/self-improve (ADR-010)
@@ -983,8 +976,7 @@ _VARIANTS_NO_HERMES = [
 
 # hermes 오버레이를 보유해야 하는 변형 (MR-10: claude.hermes + 상속받은 productmgr/productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_HERMES = ["claude.hermes", "claude.productmgr", "claude.productnw", "claude.loope", "claude.vela.v0.1",
-                         "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
+_VARIANTS_WITH_HERMES = ["claude.loope", "claude.vela.v0.1", "localllm"]
 
 # pm 오버레이 파일 (ⓑ⁷ claude.productmgr 변형에만 존재해야 함 — MR-11, F018 신설)
 # Product Manager 주도 통합 SDLC (ADR-011)
@@ -1006,8 +998,7 @@ _VARIANTS_NO_PM = [
 
 # pm 오버레이를 보유해야 하는 변형 (MR-11: claude.productmgr + 상속받은 productnw/loope
 # + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_PM = ["claude.productmgr", "claude.productnw", "claude.loope", "claude.vela.v0.1", "localllm", "localllm.nem",
-                     "claude.aif", "localllm.aif"]
+_VARIANTS_WITH_PM = ["claude.loope", "claude.vela.v0.1", "localllm"]
 
 # nw(컨소시엄) 오버레이 파일 (ⓑ⁸ claude.productnw 변형에만 존재해야 함 — MR-12, F019 신설)
 # 분산 멀티팀 에이전트 컨소시엄: 메시지 계약 + 로스터 + 로컬 큐 + Slack 게이트웨이
@@ -1035,7 +1026,7 @@ _VARIANTS_NO_NW = [
 ]
 
 # nw 오버레이를 보유해야 하는 변형 (MR-12: claude.productnw 만)
-_VARIANTS_WITH_NW = ["claude.productnw"]
+_VARIANTS_WITH_NW = []
 
 # loop 오버레이 파일 (ⓑ⁹ claude.loope 변형에만 존재해야 함 — MR-13, F020 신설)
 # LangChain loop engineering: Loop 2(검증 루프) + Loop 4(hill-climbing) 정형화 (ADR-014)
@@ -1062,7 +1053,7 @@ _VARIANTS_NO_LOOP = [
 ]
 
 # loop 오버레이를 보유해야 하는 변형 (MR-13: claude.loope + localllm — F023 loope 계보 승격, ADR-017)
-_VARIANTS_WITH_LOOP = ["claude.loope", "claude.vela.v0.1", "localllm", "localllm.nem", "claude.aif", "localllm.aif"]
+_VARIANTS_WITH_LOOP = ["claude.loope", "claude.vela.v0.1", "localllm"]
 
 # AIF 오버레이 파일 (ⓑ¹⁰ claude.aif + ⓑ¹¹ localllm.aif 에만 존재해야 함 — MR-14, F028 신설)
 # RLAIF/CAI 판정 설계 규율 이식: 항목형 rubric + 증거 강제 + 앙상블 + UNCERTAIN (ADR-020)
@@ -1095,7 +1086,7 @@ _VARIANTS_NO_AIF = [
 ]
 
 # AIF 오버레이를 보유해야 하는 변형 (MR-14)
-_VARIANTS_WITH_AIF = ["claude.aif", "localllm.aif"]
+_VARIANTS_WITH_AIF = []
 
 # Atlassian 오버레이 파일 (ⓑ¹³ claude.vela.* 계열에만 존재해야 함 — MR-15, F032 신설)
 # Jira·Confluence 연동 (ADR-023): 공식 MCP 가 도구를 주므로 API 래퍼는 만들지 않고,
@@ -1152,7 +1143,7 @@ _VARIANTS_WITH_ATLASSIAN = ["claude.vela.v0.1"]
 #:  `.claude/policy/reviewer.md`·`tests/finetune_readiness.sh` 가 nem 에만 있고, 셋 다
 #:  어느 `_*_OVERLAY_FILES` 에도 없어 **존재 축**(F038)이 닫는다.)
 #: 갈리는 파일 수는 적지 않는다 — 선언에서 센다. "4 파일" 은 선언이 늘어난 날 낡았다.
-_VARIANTS_WITH_MODEL_NEM = ["localllm.nem"]
+_VARIANTS_WITH_MODEL_NEM = []
 
 #: 축 이름 → 그 축을 가진 변형 목록. **기존 상수를 참조한다 — 재나열하지 않는다.**
 #: 재나열하면 두 목록이 갈라지고, 그것이 지금 고치는 결함 그 자체다.
@@ -1171,30 +1162,12 @@ _CO_AXES = {
 #: 전부가 기존 `_VARIANTS_WITH_*` 조합으로 재구성되는 것을 확인했다. **개수는 적지
 #: 않는다**: 선언이 하나 늘 때마다 낡는다 (`len(_CONTENT_OVERLAY_AXES)` 로 센다).
 _CONTENT_OVERLAY_AXES = {
-    ".claude/agents/reviewer.md": {"loop", "aif"},
-    ".claude/agents/qa.md": {"loop", "aif"},
-    ".claude/commands/retro.md": {"loop"},
-    ".claude/commands/product-cycle.md": {"loop"},
-    ".claude/commands/verify-loop.md": {"aif"},
-    ".claude/commands/init-project.md": {"d2", "model_nem"},
-    ".claude/rules/coding-standards.md": {"loop", "d2", "aif"},
+    ".claude/rules/coding-standards.md": {"d2"},
+    ".claude/commands/init-project.md": {"d2"},
     ".claude/skills/coding/SKILL.md": {"d2"},
     ".claude/skills/coding/SKILL.md.template": {"d2"},
     ".claude/skills/design-review/SKILL.md": {"d2"},
     ".claude/skills/qa-browser/SKILL.md": {"d2"},
-    ".claude/bin/cycle_driver.py": {"aif", "model_nem"},
-    ".claude/bin/autoresearch.py": {"model_nem"},
-    ".claude/bin/opencode-setup.sh": {"model_nem"},
-    # `.opencode/` 는 `.claude/` 의 **렌더 산출물**이다 (host.py render-agents/commands).
-    # 원본만 가드하면 산출물이 조용히 어긋난다 — 리뷰 MUST-2 가 실측으로 짚었다.
-    ".opencode/agent/reviewer.md": {"aif"},
-    ".opencode/agent/qa.md": {"aif"},
-    ".opencode/commands/verify-loop.md": {"aif"},
-    ".opencode/commands/init-project.md": {"model_nem"},
-    ".opencode/AGENTS.md": {"model_nem"},
-    "opencode.json": {"model_nem"},
-    "docs/poc/MODEL-GRADES.md": {"model_nem"},
-    "tests/suite/run_suite.py": {"model_nem"},
 }
 
 # ── 제외 규칙 표 (ADR-015 결정 2 개정 — 2026-10-23) ─────────────────────────
@@ -1351,37 +1324,37 @@ _SCOPE_RULES = (
 #: 반대 방향을 막는다 — 실측(mH): 파생으로 `hooks/` 가 빠졌을 때 37 테스트와
 #: `lint --strict` 가 전부 통과했다.
 #:
+#: **2026-10-23 변형 축소의 귀결**: 활성 변형이 셋(loope·vela·localllm)으로 줄면서
+#: `.opencode/*` · `docs/poc/` · `tests/suite/` · `.claude/policy/` · `.claude/schema/` ·
+#: `.claude/design/` · `docs/reviews/` 는 **보유 변형이 하나뿐**이 됐다 — 비교할 사본이
+#: 없으므로 내용 가드가 성립하지 않는다. 목록에서 뺐고, **그 사실을 숨기지 않는다**:
+#: 그 경로들은 지금 어느 미러 검사도 보지 않는다. 같은 오버레이를 가진 변형이 다시
+#: 생기면 자동으로 공유가 되고 아래 양방향 테스트가 등재를 강요한다.
+#:
 #: **관측과 양방향으로 강제한다** (`test_경로류_목록이_관측과_일치한다`). 전엔 8개만
 #: 적혀 있어 `rules/`·`rubrics/`·`.opencode/*` 를 제외로 지워도 아무도 몰랐다
 #: (실측 M2r·M3r·M8) — 아홉 번째 공회전 형태: *표는 데이터가 됐는데 표를 지키는 쪽은
 #: 다시 손으로 적은 이름 목록이다.* 새 경로류가 생기면 테스트가 등재를 강제하고,
 #: 등재된 경로류가 비면 검사기가 BLOCK 한다.
 _SCOPE_REQUIRED = {
+    "(루트)": "리포 루트 직속 파일",
     ".claude/": "하네스 루트 직속 파일",
     ".claude/agents/": "에이전트 정의",
     ".claude/bin/": "헬퍼 스크립트",
     ".claude/commands/": "슬래시 커맨드",
     ".claude/hooks/": "훅 스크립트",
-    ".claude/policy/": "역할 지시 오버레이 (d-2)",
     ".claude/rubrics/": "명시 rubric (loop 오버레이)",
     ".claude/rules/": "팀 규칙",
-    ".claude/schema/": "스키마 정의",
     ".claude/skills/": "스킬",
     ".claude/state/": "커밋되는 상태 문서 (README·.gitkeep — 런타임은 표가 제외한다)",
-    ".opencode/": "OpenCode 루트 설정 (d-2)",
-    ".opencode/agent/": "render-agents 산출물 (d-2)",
-    ".opencode/commands/": "render-commands 산출물 (d-2)",
     "docs/": "문서 루트 직속",
     "docs/adr/": "아키텍처 결정 기록",
     "docs/design/": "상세 설계 문서",
-    "docs/design-references/": "디자인 레퍼런스 (design 오버레이)",
-    "docs/orch-examples/": "오케스트레이션 예시 (orch 오버레이)",
-    "docs/poc/": "d-2 측정 기록",
+    "docs/design-references/": "디자인 레퍼런스",
+    "docs/orch-examples/": "오케스트레이션 예시",
     "docs/validation/": "검증 기록",
     "tests/": "테스트",
     "tests/e2e/": "Playwright E2E",
-    "tests/suite/": "무인 스위트",
-    "(루트)": "리포 루트 직속 파일",
 }
 
 
@@ -1425,6 +1398,15 @@ def _scope_match(rel: str, scope: str):
 #: 동결 변형 — `LINT-CO` 에 참여시키지 않는다. "baseline 은 늘 달라야 한다" 로 모델링하면
 #: Karpathy 동기화가 영구 금지된다. 동결은 `LINT-FREEZE` 가 해시로 본다.
 _CO_FROZEN = ("claude", "openai")
+
+#: `src/harness_template/` 바로 아래지만 **변형이 아닌** 디렉토리.
+#:
+#: 2026-10-23 축소 때 비활성 13종을 `deprecated/` 로 옮겼다. 그 순간 스캔에서 빠진 것은
+#: 사실이지만 **우연히** 빠진 것이었다 — `deprecated/harness/` 가 없어서였다. 그런 제외는
+#: 다음 사람이 `deprecated/` 안의 구조를 한 칸 바꾸는 순간 조용히 뒤집힌다. 보관소가
+#: 거버넌스에 안 걸리는 것은 **결정**이므로 결정으로 적는다 (ADR-015 "가드 없는 제외 금지").
+#: 검출은 `_co_collect` 가 하고, 뒤집히지 않는지는 `DeprecatedStoreTest` 가 본다.
+_CO_NON_VARIANT_DIRS = ("deprecated",)
 
 
 # 외부 의존성 매니페스트 (wiki 변형 외에 있으면 BLOCK — MR-7)
@@ -2270,6 +2252,8 @@ def _co_collect() -> tuple:
     import hashlib
     roots = {"MAIN": _PROJECT_ROOT}
     for d in sorted(_HT.iterdir()):
+        if d.name in _CO_NON_VARIANT_DIRS:
+            continue            # 보관소 — 뒤처져도 BLOCK 이 나지 않는 게 deprecated 의 뜻
         if d.is_dir() and (d / "harness").is_dir() and d.name not in _CO_FROZEN:
             roots[d.name] = d / "harness"
     files: dict = {}
@@ -2474,6 +2458,17 @@ def check_freeze() -> list:
     checker = "LINT-FREEZE"
     if not _HT.exists():
         return [_issue(checker, INFO, "src/harness_template/", "템플릿 트리 없음 — 검사 생략")]
+    # 동결 대상이 **활성 트리에 없으면** 이 검사기는 할 일이 없다. 2026-10-23 에
+    # `claude/`(baseline)·`openai/` 를 `deprecated/` 로 옮기면서 그렇게 됐다.
+    # **숨기지 않고 INFO 로 말한다** — 그 스냅샷들은 지금 어느 해시 가드도 받지 않는다.
+    # 되살릴 때는 `deprecated/README.md` 의 절차대로 매니페스트 경로부터 맞춘다.
+    active = [b for b in (_HT / "claude" / "harness", _HT / "openai" / "harness")
+              if b.is_dir()]
+    if not active:
+        return [_issue(checker, INFO, "src/harness_template/deprecated/",
+                       "동결 대상(baseline `claude/` · `openai/`)이 deprecated 로 "
+                       "이동했다 — 해시 가드 없음. 되살리려면 매니페스트 경로를 "
+                       "먼저 맞춘다 (`deprecated/README.md`)")]
     if not _FREEZE_MANIFEST.is_file():
         return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
                        "동결 매니페스트가 없다 — 동결이 강제되지 않는다 (ADR-015 결정 6)")]

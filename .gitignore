@@ -1,7 +1,10 @@
-
 # 측정 작업본·원시응답 (state 런타임 — 커밋 대상 아님, 요약은 측정 문서에)
-*/harness/.claude/state/aif-nem/
-*/harness/.claude/state/probe/
+#
+# 깊이를 박지 않는다. 전엔 `*/harness/...` 였는데, 2026-10-23 에 변형을 `deprecated/`
+# 로 한 단 내리자 패턴이 **조용히 안 맞아** `git add -A` 가 런타임 245 파일을 쓸어
+# 담았다. 보관소로 옮기는 것만으로 무시 규칙이 풀리면 안 된다.
+**/harness/.claude/state/aif-nem/
+**/harness/.claude/state/probe/
 
 # Atlassian 매핑 (머신 로컬 — ADR-023 비용 절)
-*/harness/.claude/state/atlassian/map.json
+**/harness/.claude/state/atlassian/map.json

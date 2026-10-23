@@ -31,8 +31,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 _LINT = _ROOT / ".claude" / "bin" / "lint.py"
 
 #: fixture 에 둘 변형 — 실제 이름이어야 `_CO_AXES` 멤버십이 성립한다
-_FIXTURE_VARIANTS = ("claude", "claude.gstack", "claude.loope",
-                     "claude.aif", "localllm", "localllm.nem")
+#: fixture 변형 — **활성 셋**(2026-10-23 축소) + 동결 하나. 실제 이름이어야
+#: `_CO_AXES` 멤버십이 성립한다. 축은 이제 `d2`(localllm)·`atl`(vela) 둘뿐이다.
+_FIXTURE_VARIANTS = ("claude", "claude.loope", "claude.vela.v0.1", "localllm")
 
 
 def _load_lint():
@@ -42,7 +43,7 @@ def _load_lint():
     return mod
 
 
-class OverlayFixture(unittest.TestCase):
+class _FixtureBase(unittest.TestCase):
     """실제 `lint.py` 를 fixture 루트에 복사해 **그 사본을 돌린다**.
 
     `_PROJECT_ROOT` 가 `__file__` 에서 파생되므로, 사본을 두면 그 트리가 프로젝트 루트가
@@ -85,8 +86,8 @@ class OverlayFixture(unittest.TestCase):
         import re
         src = _LINT.read_text(encoding="utf-8")
         new = ('_CONTENT_OVERLAY_AXES = {\n'
-               '    ".claude/agents/reviewer.md": {"loop", "aif"},\n'
-               '    ".claude/commands/retro.md": {"loop"},\n'
+               '    ".claude/agents/reviewer.md": {"d2", "atl"},\n'
+               '    ".claude/commands/retro.md": {"d2"},\n'
                '}\n')
         patched, n = re.subn(r"_CONTENT_OVERLAY_AXES = \{.*?\n\}\n", new, src,
                              count=1, flags=re.S)
@@ -102,24 +103,30 @@ class OverlayFixture(unittest.TestCase):
         return p
 
     def _write_reviewer(self):
-        """축 {loop, aif} — 실제 `reviewer.md` 의 분할 모양 그대로."""
-        base, loop, aif = "# reviewer\nbase\n", "# reviewer\nbase\nLoop 2\n", \
-                          "# reviewer\nbase\nLoop 2\nADR-020\n"
-        self._put(None, ".claude/agents/reviewer.md", loop)       # MAIN ≡ loope
-        self._put("claude.gstack", ".claude/agents/reviewer.md", base)
-        self._put("claude.loope", ".claude/agents/reviewer.md", loop)
-        self._put("localllm", ".claude/agents/reviewer.md", loop)
-        self._put("localllm.nem", ".claude/agents/reviewer.md", loop)
-        self._put("claude.aif", ".claude/agents/reviewer.md", aif)
+        """축 {d2, atl} — 살아 있는 두 축을 **모두** 쓰는 유일한 모양.
+
+        2026-10-23 축소 후 비동결 변형은 loope·vela·localllm 셋뿐이고, 분할을 실제로
+        만드는 축은 `d2`(localllm 만) 와 `atl`(vela 만) 둘뿐이다. `loop`·`pm`·`hermes` 는
+        셋 모두가 가지므로 **축 밖이 비어** 아무것도 가르지 못한다 (= 죽은 축).
+        """
+        base = "# reviewer\nbase\n"
+        self._put(None, ".claude/agents/reviewer.md", base)        # MAIN ≡ loope
+        self._put("claude.loope", ".claude/agents/reviewer.md", base)
+        self._put("localllm", ".claude/agents/reviewer.md", base + "상대경로 우선\n")
+        self._put("claude.vela.v0.1", ".claude/agents/reviewer.md", base + "ADR-023\n")
         self._put("claude", ".claude/agents/reviewer.md", "# reviewer\nphase0\n")   # 동결
 
     def _write_retro(self):
-        """축 {loop} — 미선언 축 변이(N3)의 대상."""
-        base, loop = "# retro\nbase\n", "# retro\nbase\nLoop 4\n"
-        self._put(None, ".claude/commands/retro.md", loop)
-        self._put("claude.gstack", ".claude/commands/retro.md", base)
-        for v in ("claude.loope", "localllm", "localllm.nem", "claude.aif"):
-            self._put(v, ".claude/commands/retro.md", loop)
+        """축 {d2} — 프로필 `(base)` 가 3 보유인 유일한 파일.
+
+        `reviewer.md` 의 `(base)` 는 {MAIN, loope} 2 보유라 "일부만 미러" 와 "미선언 축
+        분기" 를 구별할 수 없다. 여기서는 (base)={MAIN, loope, vela} 라서 vela 가 혼자
+        갈리는 모양(N3)이 성립한다.
+        """
+        base = "# retro\nbase\n"
+        for v in (None, "claude.loope", "claude.vela.v0.1"):
+            self._put(v, ".claude/commands/retro.md", base)
+        self._put("localllm", ".claude/commands/retro.md", base + "로컬 LLM 주석\n")
         self._put("claude", ".claude/commands/retro.md", "# retro\nphase0\n")
 
     def _write_freeze_manifest(self):
@@ -141,6 +148,14 @@ class OverlayFixture(unittest.TestCase):
         out = res.stdout
         blocks = [ln for ln in out.splitlines() if "| BLOCK |" in ln]
         return blocks, out
+
+
+class OverlayFixture(_FixtureBase):
+    """사고 재현(M*)과 음성 대조(N*) — 묶음의 본체.
+
+    fixture 는 `_FixtureBase` 가 짓는다. 분리한 이유는 **상속으로 케이스가 복제되면
+    "무엇이 잡았는가" 를 이름으로 지목할 수 없기 때문**이다 (F020 이 비싸게 배운 규율).
+    """
 
     # ── 0. fixture 자체가 성립하는가 ─────────────────────────────────
     def test_fixture_가_올바르고_기준선이_깨끗하다(self):
@@ -175,13 +190,17 @@ class OverlayFixture(unittest.TestCase):
         self.assertIn("오버레이 소실", "\n".join(blocks))
         self.assertIn("reviewer.md", "\n".join(blocks))
 
-    def test_M3_aif_의_의도된_차이가_지워지면_잡힌다(self):
-        """aif 2 사본만 loop 내용으로 되돌리는 — 미러 사고의 실제 모양."""
-        loop = (self.ht / "claude.loope" / "harness" / ".claude" / "agents" /
-                "reviewer.md").read_text(encoding="utf-8")
-        self._put("claude.aif", ".claude/agents/reviewer.md", loop)
+    def test_M3_한_변형의_의도된_차이가_지워지면_잡힌다(self):
+        """한 사본만 부모 내용으로 되돌리는 — 미러 사고의 실제 모양.
+
+        원래 aif 2 사본으로 썼다. aif 가 deprecated 로 빠진 뒤 **같은 모양을 vela 로**
+        옮겼다 — 되돌리는 대상이 바뀌었을 뿐 검출해야 하는 사실은 같다.
+        """
+        parent = (self.ht / "claude.loope" / "harness" / ".claude" / "agents" /
+                  "reviewer.md").read_text(encoding="utf-8")
+        self._put("claude.vela.v0.1", ".claude/agents/reviewer.md", parent)
         blocks, out = self._run("LINT-CO")
-        self.assertTrue(blocks, f"aif 차이 소실이 잡히지 않았다:\n{out}")
+        self.assertTrue(blocks, f"오버레이 차이 소실이 잡히지 않았다:\n{out}")
         self.assertIn("오버레이 소실", "\n".join(blocks))
 
     # ── M2: LINT-CO 가 **못 잡는다**는 사실을 고정한다 ───────────────
@@ -207,8 +226,7 @@ class OverlayFixture(unittest.TestCase):
         기대 해시 표였다면 여기서 갈래 수만큼 틀어진다. 파생 분할을 고른 이유가
         정확히 이것이다 — `reviewer.md` 는 리뷰어 행동을 조정할 때마다 바뀐다.
         """
-        for variant in (None, "claude.gstack", "claude.loope", "localllm",
-                        "localllm.nem", "claude.aif"):
+        for variant in (None, "claude.loope", "claude.vela.v0.1", "localllm"):
             base = self.root if variant is None else self.ht / variant / "harness"
             p = base / ".claude" / "agents" / "reviewer.md"
             p.write_text(p.read_text(encoding="utf-8") + "\n공통 규율 한 줄 추가\n",
@@ -218,11 +236,12 @@ class OverlayFixture(unittest.TestCase):
 
     # ── N2·N3: 부분 미러와 미선언 축 ─────────────────────────────────
     def test_N2_부분_미러가_잡힌다(self):
-        """같은 프로필(loop) 안에서 일부만 편집 — 수정이 갈 곳에 다 가지 않은 것."""
-        for variant in (None, "claude.loope"):
-            base = self.root if variant is None else self.ht / variant / "harness"
-            p = base / ".claude" / "agents" / "reviewer.md"
-            p.write_text(p.read_text(encoding="utf-8") + "\n여기만 고쳤다\n", encoding="utf-8")
+        """같은 프로필`(base)`={MAIN, loope} 안에서 **한쪽만** 편집.
+
+        수정이 갈 곳에 다 가지 않은 것 — 미러를 빠뜨렸을 때의 실제 모양이다.
+        """
+        p = self.root / ".claude" / "agents" / "reviewer.md"
+        p.write_text(p.read_text(encoding="utf-8") + "\n여기만 고쳤다\n", encoding="utf-8")
         blocks, out = self._run("LINT-CO")
         self.assertTrue(blocks, f"부분 미러가 잡히지 않았다:\n{out}")
         self.assertIn("선언 안 된 분기", "\n".join(blocks))
@@ -238,7 +257,7 @@ class OverlayFixture(unittest.TestCase):
         선언 없는 파일은 축 ∅ 이어야 하므로 **모든 비동결 트리에서 같아야 한다**.
         fail-open 이면 프로필이 서로 달라져 갈려도 통과한다.
         """
-        self._put("claude.gstack", ".claude/commands/handoff.md", "# handoff\nA\n")
+        self._put("claude.vela.v0.1", ".claude/commands/handoff.md", "# handoff\nA\n")
         self._put("claude.loope", ".claude/commands/handoff.md", "# handoff\nB\n")
         blocks, out = self._run("LINT-CO")
         self.assertTrue(blocks, f"선언 없는 파일이 갈렸는데 통과했다 — 기본값이 "
@@ -249,14 +268,14 @@ class OverlayFixture(unittest.TestCase):
     def test_두_트리만_공유하는_파일도_검사한다(self):
         """공유 임계(`len(m) >= 2`)를 고정한다 — 임계를 올리는 변이가 생존했다.
 
-        실트리에서 aif(2곳)·d2(3곳) 전용 파일이 정확히 그 구간이다. fixture 에 2 트리
+        실트리에서 `atl`(vela 전용) 파일이 정확히 그 구간이다. fixture 에 2 트리
         공유 파일이 없으면 임계가 아무것도 막지 않는다 (리뷰 SHOULD-7 / 변이 m7).
         """
-        self._put("claude.aif", ".claude/commands/aif-judge.md", "# aif\nA\n")
-        self._put("localllm.nem", ".claude/commands/aif-judge.md", "# aif\nB\n")
+        self._put("claude.loope", ".claude/commands/two-only.md", "# two\nA\n")
+        self._put("claude.vela.v0.1", ".claude/commands/two-only.md", "# two\nB\n")
         blocks, out = self._run("LINT-CO")
         self.assertTrue(blocks, f"2 트리만 공유하는 파일이 검사에서 빠졌다:\n{out}")
-        self.assertIn("aif-judge.md", "\n".join(blocks))
+        self.assertIn("two-only.md", "\n".join(blocks))
 
     def test_죽은_축_선언이_잡힌다(self):
         """축 안·밖 중 한쪽만 파일을 보유하면 그 선언은 아무것도 제약하지 않는다.
@@ -270,10 +289,10 @@ class OverlayFixture(unittest.TestCase):
         # `nw` 로 쓴 것과 같은 변이다.
         lintpy = self.root / ".claude" / "bin" / "lint.py"
         src = lintpy.read_text(encoding="utf-8")
-        old_decl = '".claude/agents/reviewer.md": {"loop", "aif"},'
+        old_decl = '".claude/agents/reviewer.md": {"d2", "atl"},'
         self.assertEqual(src.count(old_decl), 1, "선언을 못 찾았다")
         lintpy.write_text(
-            src.replace(old_decl, '".claude/agents/reviewer.md": {"loop", "aif", "nw"},', 1),
+            src.replace(old_decl, '".claude/agents/reviewer.md": {"d2", "atl", "nw"},', 1),
             encoding="utf-8")
         blocks, out = self._run("LINT-CO")
         self.assertTrue(blocks, f"죽은 축 선언이 잡히지 않았다:\n{out}")
@@ -286,7 +305,7 @@ class OverlayFixture(unittest.TestCase):
         """
         import os
         victim = self._put("claude.loope", ".claude/commands/locked.md", "x\n")
-        self._put("claude.gstack", ".claude/commands/locked.md", "x\n")
+        self._put("claude.vela.v0.1", ".claude/commands/locked.md", "x\n")
         os.chmod(victim, 0o000)
         try:
             blocks, out = self._run("LINT-CO")
@@ -312,7 +331,7 @@ class OverlayFixture(unittest.TestCase):
             if r.returncode != 0:
                 self.skipTest(f"git 사용 불가: {r.stderr[:120]}")
         # 커밋 **뒤에** 추적되지 않은 파일을 서로 다르게 둔다
-        self._put("claude.gstack", ".claude/commands/scratch.md", "A\n")
+        self._put("claude.vela.v0.1", ".claude/commands/scratch.md", "A\n")
         self._put("claude.loope", ".claude/commands/scratch.md", "B\n")
         blocks, out = self._run("LINT-CO")
         self.assertEqual(blocks, [],
@@ -321,13 +340,54 @@ class OverlayFixture(unittest.TestCase):
                          "git 리포인데 추적 목록을 못 얻었다")
 
     def test_N3_선언되지_않은_축으로_갈리면_잡힌다(self):
-        """`retro.md` 는 축 {loop} 로 선언돼 있다. loop 안에서 또 갈리면 미선언 축이다."""
-        self._put("localllm.nem", ".claude/commands/retro.md",
-                  "# retro\nbase\nLoop 4\nnem 전용 한 줄\n")
+        """`retro.md` 는 축 {d2} 로 선언돼 있다. vela 만 갈리면 `atl` — 미선언 축이다."""
+        self._put("claude.vela.v0.1", ".claude/commands/retro.md",
+                  "# retro\nbase\nvela 전용 한 줄\n")
         blocks, out = self._run("LINT-CO")
         self.assertTrue(blocks, f"미선언 축이 잡히지 않았다:\n{out}")
         self.assertIn("retro.md", "\n".join(blocks))
         self.assertIn("선언 안 된 분기", "\n".join(blocks))
+
+
+class DeprecatedStoreTest(_FixtureBase):
+    """`deprecated/` 보관소가 **스캔에 들어오지 않는다**.
+
+    제외를 두 겹으로 나눠 적는다 — **둘이 막는 모양이 다르기 때문**이다. 처음엔 하나로
+    적고 behavioral 테스트 하나를 붙였는데, `_CO_NON_VARIANT_DIRS = ()` 변이에서
+    **그 테스트가 생존**했다. 보관소가 빠지는 진짜 이유가 상수가 아니라 **깊이**였기
+    때문이다 (`_HT.iterdir()` 는 한 단, 보관된 변형은 `deprecated/<이름>/harness` 로 두 단).
+    상수만 적고 끝냈으면 **아무것도 막지 않는 가드**를 가드라고 부를 뻔했다.
+
+      깊이 (아래 A)  — 보관된 변형은 한 단 깊어 한 단 순회가 닿지 않는다.
+                       뒤집는 변경: 변형 탐색을 재귀로 바꾸는 것.
+      선언 (아래 B)  — `deprecated/harness/` 라는 퇴화형만은 깊이가 못 막는다.
+                       뒤집는 변경: `_CO_NON_VARIANT_DIRS = ()`.
+    """
+
+    def _dep(self, rel: str, text: str):
+        p = self.ht / "deprecated" / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+    def test_A_보관된_변형은_한_단_깊어_스캔에_닿지_않는다(self):
+        """실제 보관 모양 — `deprecated/<이름>/harness/`."""
+        self._dep("claude.gstack/harness/.claude/agents/reviewer.md",
+                  "# reviewer\n보관소에 남은 옛 내용\n")
+        blocks, out = self._run("LINT-CO")
+        self.assertEqual(blocks, [], f"보관소를 스캔했다:\n{out}")
+        self.assertNotIn("deprecated", out, "보관소가 검사 대상에 올라왔다")
+
+    def test_B_보관소가_변형_모양이어도_선언이_막는다(self):
+        """퇴화형 — `deprecated/harness/`. 깊이로는 못 막는 유일한 배치다.
+
+        있을 법하지 않은 모양이라 넘길 수도 있었지만, 넘기면 `_CO_NON_VARIANT_DIRS` 는
+        **아무 변이에도 죽지 않는 선언**이 된다. 가드를 적었으면 그 가드가 막는 입력이
+        최소 하나는 테스트에 있어야 한다.
+        """
+        self._dep("harness/.claude/agents/reviewer.md", "# reviewer\n퇴화형\n")
+        blocks, out = self._run("LINT-CO")
+        self.assertEqual(blocks, [], f"퇴화형 보관소를 스캔했다:\n{out}")
+        self.assertNotIn("deprecated", out, "보관소가 검사 대상에 올라왔다")
 
 
 class RealTreeCoverageTest(unittest.TestCase):
@@ -1145,9 +1205,12 @@ class OverlayDeclarationTest(unittest.TestCase):
 
     def test_MAIN_은_loope_프로필로_환산된다(self):
         """ADR-015: main ≡ loope. 환산하지 않으면 main 이 늘 '(base)' 로 읽힌다."""
-        self.assertEqual(self.lint._co_profile("MAIN", {"loop", "aif"}), frozenset({"loop"}))
-        self.assertEqual(self.lint._co_profile("claude.aif", {"loop", "aif"}),
-                         frozenset({"loop", "aif"}))
+        # loope 는 d2·atl 어디에도 없다 → MAIN 도 그래야 한다
+        self.assertEqual(self.lint._co_profile("MAIN", {"d2", "atl"}), frozenset())
+        self.assertEqual(self.lint._co_profile("localllm", {"d2", "atl"}),
+                         frozenset({"d2"}))
+        self.assertEqual(self.lint._co_profile("claude.vela.v0.1", {"d2", "atl"}),
+                         frozenset({"atl"}))
 
     def test_동결_변형은_CO_에_참여하지_않는다(self):
         self.assertEqual(set(self.lint._CO_FROZEN), {"claude", "openai"})

@@ -1009,8 +1009,11 @@ class EscalationEnforcementSiteTest(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         if (root / "src" / "harness_template").is_dir():
             drivers = [k for k in srcs if Path(k).name == "cycle_driver.py"]
-            self.assertGreaterEqual(len(drivers), 3,
-                                    f"cycle_driver 3 사본이 스캔에 없다: {drivers}")
+            # 2026-10-23 변형 축소로 d-2 보유 변형이 `localllm` 하나다 (전엔 3).
+            # 개수를 박지 않고 **1건 이상**만 요구한다 — 변형 수는 바뀌지만
+            # "드라이버가 스캔에 들어온다" 는 성질은 바뀌지 않는다.
+            self.assertGreaterEqual(len(drivers), 1,
+                                    f"cycle_driver 가 스캔에 없다: {drivers}")
         self.assertEqual(self._skipped, [],
                          "읽지 못한 파일이 있다 — 그 파일은 세 방향 **전부에서 면제**된다. "
                          f"비-UTF-8 이거나 권한이 없다: {self._skipped}")
