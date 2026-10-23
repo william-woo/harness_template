@@ -35,9 +35,19 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 >   print(len(lint._SCOPE_RULES), '행', len([r for r in lint._SCOPE_RULES if 'ssot' in r['scope']]), 'ssot')"
 > ```
 >
+> **표를 여기 복제하지 않는다.** 같은 사실의 사본이 셋이었고(코드 · 이 표 · `CLAUDE.md`
+> 의 rsync) 셋이 서로 달랐다. 지금 적용되는 ssot 제외는 코드가 출력한다:
+>
+> ```bash
+> python3 .claude/bin/lint.py mirror-excludes --scope ssot
+> ```
+>
+> 아래는 **왜** 그것들이 제외인지의 설명이고, 목록 자체가 아니다 (행이 늘면 위 명령이
+> 알려 주고 이 설명은 낡아도 해롭지 않다):
+>
 > | 제외 대상 | 종류 | 이유 | 더한 ADR |
 > |---|---|---|---|
-> | `state/` | 접두 | 런타임 상태 | 이 ADR |
+> | `state/checkpoints/` · `state/learnings.jsonl` · `state/analytics.jsonl` | 접두·정확 | **MAIN 전용 커밋 상태**. `state/` 를 통째로 빼던 것을 2026-10-23 에 좁혔다 — 그 바람에 `state/*/README.md` 같은 **전 변형 공유 문서**가 어느 검사기도 보지 않는 곳으로 떨어져 있었다 | 이 ADR |
 > | `design/` | 접두 | `design_pick.py apply` 의 프로젝트 로컬 산출물(tokens.json·backup). `references/` 는 `docs/design-references/` 와 중복이라 변형은 후자만 쓴다 | 이 ADR |
 > | `settings.json` · `settings.local.json` | 정확 | 머신 로컬 권한·훅 배선 | 이 ADR |
 > | `host.json` | 정확 | 프로젝트 로컬 agent_type·백업 설정 | 이 ADR |
@@ -45,8 +55,13 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 > | `atlassian-targets.json` | 정확 | 쓰기 허용 대상 — `settings.json` 과 같은 층위의 로컬 값 (3-C 철칙) | **ADR-023** |
 > | `hooks/pre-atlassian-write-check.sh` | 정확 | 위 목록을 강제하는 훅. 목록과 한 쌍 | **ADR-023** |
 >
-> 뒤 2 항목은 이 ADR 이 아니라 **ADR-023**(vela 계보·Atlassian)이 더했다. 역참조가 없어
-> 이 ADR 만 읽은 사람은 목록이 5종인 줄 안다.
+> 뒤 2 항목은 이 ADR 이 아니라 **ADR-023**(vela 계보·Atlassian)이 더했다. 역참조가
+> 없던 동안 이 ADR 만 읽은 사람은 목록이 더 짧은 줄 알았다.
+>
+> 설명에 없는 행도 있다 — 캐시·VCS(`__pycache__`·`.git`·`node_modules`·`.pytest_cache`·
+> `.venv`·`.mypy_cache`)와 `*.pyc`. 전부 생성물이고 git 추적 대상이 아니라 설명할 것이
+> 없다. **그것들도 표의 행이다** (손으로 적은 조건을 남기면 세 검사기가 각자 다르게
+> 적는다 — 실제로 그렇게 됐다).
 >
 > **규칙 — 가드 없는 제외는 금지한다.** 제외는 곧 *어떤 미러 검사도 보지 않는 파일*을
 > 만드는 일이다(F021 이 막은 밀반입 통로가 그 모양이었다). 제외를 더하는 ADR 은 **대체
@@ -61,8 +76,14 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 > → **`LINT-SSOT`** 검사기를 신설했다. `.claude/`·`docs/adr/` 를 **내용 해시**로
 > 비교하고 `CLAUDE.md` 는 **섹션 단위**로 본다(변형별 헤더 맞춤은 허용). drift 는 BLOCK.
 > `handoff` 전 `lint --strict` 가 이 게이트다.
-`settings.json`(사용자 권한 구성), `settings.local.json`(로컬 권한 누적), `host.json`(호스트 상태),
-`.claude/state/`(프로젝트 로컬 상태)는 loope 템플릿으로 덮지 않는다 — 이들은 SSOT 대상이 아니다.
+`settings.json`(사용자 권한 구성), `settings.local.json`(로컬 권한 누적), `host.json`(호스트
+상태)은 loope 템플릿으로 덮지 않는다.
+
+**`.claude/state/` 는 통째로 제외하지 않는다** (2026-10-23 정정). 제외되는 것은 MAIN 전용
+커밋 상태(`checkpoints/`·`learnings.jsonl`·`analytics.jsonl`)와 gitignore 된 런타임뿐이고,
+`state/*/README.md`·`.gitkeep` 같은 **커밋되는 공유 문서는 비교 대상**이다 (실측 9건).
+전엔 "`.claude/state/` 는 SSOT 대상이 아니다" 라고 적혀 있었는데, 그 서술 때문에 공유
+문서가 어느 가드도 보지 않는 곳에 있었다.
 
 ### 결정 3 — 미러 정책 재정의
 | 방향 | 정책 |

@@ -210,10 +210,15 @@ project-root/
 
 ```bash
 # main → claude.loope (1:1, 로컬 파일 제외)
-rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
-  --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
+# 제외 목록은 **손으로 적지 않는다** — lint.py 가 `_SCOPE_RULES` 에서 생성한다.
+rsync -a $(python3 .claude/bin/lint.py mirror-excludes --scope ssot) \
   .claude/ src/harness_template/claude.loope/harness/.claude/
 ```
+
+> 전엔 여기에 목록이 손으로 적혀 있었고 **코드와 달랐다** — `design/`·`bin/live_status.sh`·
+> `atlassian-targets.json`·Atlassian 훅 제외가 빠져 있어서, 그대로 돌리면 머신 로컬
+> **Atlassian 허용 목록이 loope 로 복사**된다 (3-C 철칙 위반). 같은 사실의 사본이
+> 셋(코드·ADR 표·이 명령)이었고 셋이 서로 달랐다.
 
 > ### ⚠️ 하위 변형에 **일괄 복사(rsync·cp)를 쓰지 않는다**
 >

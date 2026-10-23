@@ -1208,6 +1208,7 @@ _CONTENT_OVERLAY_AXES = {
 # 테스트가 **자동으로 따라온다** — 증인 없는 행은 그 자체로 BLOCK 이다.
 #
 #   kind     exact(정확 일치) / prefix(루트 상대 접두) / anydir(경로 성분 — 캐시·VCS 만)
+#            / suffix(확장자 — 생성물만)
 #   scope    이 행이 적용되는 검사기 — {"ssot", "co", "freeze"} 의 부분집합
 #            **이 열이 '파생' 이 지웠던 사실이다.** SSOT 의 제외는 "main→loope 로
 #            미러하지 않는다", CO 의 제외는 "어느 변형끼리도 비교하지 않는다" —
@@ -1218,10 +1219,16 @@ _CONTENT_OVERLAY_AXES = {
 #   outside  이 행이 **제외하면 안 되는 이웃** 경로 (≥1) — 통로를 한 칸 넓히는 변이를 잡는다
 _SCOPE_RULES = (
     # ── 캐시·VCS·외부 설치물: 트리 어디에 있든 건너뛴다 ────────────────────
+    dict(kind="suffix", pattern=".pyc", scope={"ssot", "co", "freeze"},
+         guard="없음 — 소스에서 생성되고 git 추적 대상도 아니다",
+         reason="Python 바이트코드 — 소스에서 생성되고 환경마다 다르다",
+         inside=[".claude/bin/lint.pyc"], outside=[".claude/bin/lint.py"]),
     dict(kind="anydir", pattern="__pycache__", scope={"ssot", "co", "freeze"},
          guard="없음 — 생성물이고 git 추적 대상도 아니다",
          reason="Python 바이트코드 캐시 — 소스에서 생성되고 환경마다 다르다",
-         inside=[".claude/bin/__pycache__/lint.cpython-310.pyc"],
+         # 증인이 `.pyc` 행에 **흡수되지 않도록** 비-.pyc 를 쓴다. `.pyc` 를 쓰면
+         # 어느 행이 잡았는지로 "죽은 행" 판정이 뒤집힌다 (테스트가 그걸 잡았다).
+         inside=[".claude/bin/__pycache__/cache.json"],
          outside=[".claude/bin/lint.py"]),
     dict(kind="anydir", pattern=".git", scope={"ssot", "co", "freeze"},
          guard="없음 — VCS 내부", reason="git 내부 메타데이터 — 미러 대상이 아니다",
@@ -1267,6 +1274,11 @@ _SCOPE_RULES = (
     # ── MAIN 전용 커밋 상태: loope 로 미러하지 않지만 **비교는 한다** ───────
     #    scope 에서 "co" 를 뺀 것이 핵심이다. 전엔 `state/` 접두 하나로 둘 다 빠져
     #    `.claude/state/*/README.md`(전 변형 공유 문서)가 무가드로 떨어졌다.
+    dict(kind="exact", pattern=".claude/state/lint-last.json", scope={"ssot", "co"},
+         guard="없음 — 이 검사기 자신의 결과 캐시다 (gitignore 와 같은 사실)",
+         reason="`lint report` 용 결과 캐시 — 돌릴 때마다 바뀐다",
+         inside=[".claude/state/lint-last.json"],
+         outside=[".claude/state/orch/README.md"]),
     dict(kind="prefix", pattern=".claude/state/checkpoints/", scope={"ssot"},
          guard="`LINT-CO` — 변형에 나타나면 보유 분할로 드러난다",
          reason="MAIN 전용 세션 인계 기록 — loope 로 미러하지 않는다",
@@ -1334,19 +1346,53 @@ _SCOPE_RULES = (
 )
 
 #: **양의 목록** — 각 경로류는 공유 파일을 1건 이상 내놓아야 한다. 0 이면 BLOCK.
-#: 증인은 "제외를 **더하는**" 방향을 막는다. 이것은 **범위가 무신호로 줄어드는** 반대
-#: 방향을 막는다 — 실측(mH): ssot 제외에 `hooks/` 를 더하면 파생으로
-#: LINT-CO 범위가 조용히 줄었는데 37 테스트와 `lint --strict` 가 **전부 통과**했다.
+#:
+#: 증인(`outside`)은 "제외를 **더하는**" 방향을 막고 이것은 "범위가 **무신호로 줄어드는**"
+#: 반대 방향을 막는다 — 실측(mH): 파생으로 `hooks/` 가 빠졌을 때 37 테스트와
+#: `lint --strict` 가 전부 통과했다.
+#:
+#: **관측과 양방향으로 강제한다** (`test_경로류_목록이_관측과_일치한다`). 전엔 8개만
+#: 적혀 있어 `rules/`·`rubrics/`·`.opencode/*` 를 제외로 지워도 아무도 몰랐다
+#: (실측 M2r·M3r·M8) — 아홉 번째 공회전 형태: *표는 데이터가 됐는데 표를 지키는 쪽은
+#: 다시 손으로 적은 이름 목록이다.* 새 경로류가 생기면 테스트가 등재를 강제하고,
+#: 등재된 경로류가 비면 검사기가 BLOCK 한다.
 _SCOPE_REQUIRED = {
+    ".claude/": "하네스 루트 직속 파일",
     ".claude/agents/": "에이전트 정의",
     ".claude/bin/": "헬퍼 스크립트",
     ".claude/commands/": "슬래시 커맨드",
     ".claude/hooks/": "훅 스크립트",
+    ".claude/policy/": "역할 지시 오버레이 (d-2)",
+    ".claude/rubrics/": "명시 rubric (loop 오버레이)",
     ".claude/rules/": "팀 규칙",
+    ".claude/schema/": "스키마 정의",
     ".claude/skills/": "스킬",
+    ".claude/state/": "커밋되는 상태 문서 (README·.gitkeep — 런타임은 표가 제외한다)",
+    ".opencode/": "OpenCode 루트 설정 (d-2)",
+    ".opencode/agent/": "render-agents 산출물 (d-2)",
+    ".opencode/commands/": "render-commands 산출물 (d-2)",
+    "docs/": "문서 루트 직속",
     "docs/adr/": "아키텍처 결정 기록",
+    "docs/design/": "상세 설계 문서",
+    "docs/design-references/": "디자인 레퍼런스 (design 오버레이)",
+    "docs/orch-examples/": "오케스트레이션 예시 (orch 오버레이)",
+    "docs/poc/": "d-2 측정 기록",
+    "docs/validation/": "검증 기록",
     "tests/": "테스트",
+    "tests/e2e/": "Playwright E2E",
+    "tests/suite/": "무인 스위트",
+    "(루트)": "리포 루트 직속 파일",
 }
+
+
+def _scope_class(rel: str) -> str:
+    """경로를 **경로류**로 접는다 — 양의 목록의 단위."""
+    parts = Path(rel).parts
+    if len(parts) > 2:
+        return "/".join(parts[:2]) + "/"
+    if len(parts) > 1:
+        return parts[0] + "/"
+    return "(루트)"
 
 
 def _scope_rules(scope: str) -> tuple:
@@ -1370,6 +1416,8 @@ def _scope_match(rel: str, scope: str):
         if kind == "exact" and rel == pat:
             return rule
         if kind == "prefix" and rel.startswith(pat):
+            return rule
+        if kind == "suffix" and rel.endswith(pat):
             return rule
     return None
 
@@ -2101,6 +2149,17 @@ def _ssot_excluded(rel: str, scoped: bool) -> bool:
 
 
 
+#: `_ssot_rel_files` 가 **제외로 떨군** 상대경로 (루트별). 양의 목록이 "제외해서 0건"
+#: 과 "원래 없어서 0건" 을 구별하는 데 쓴다 — 전자만 결함이다.
+_SSOT_DROPPED: dict = {}
+
+#: `git ls-files` 를 쓰지 못한 루트 — `check_ssot` 이 CONCERN 으로 보고한다.
+_SSOT_UNTRACKED: set = set()
+
+#: 미러 트리에서 발견한 심볼릭 링크 — `check_ssot` 이 BLOCK 한다.
+_SSOT_LINKS: set = set()
+
+
 def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다.
 
@@ -2115,11 +2174,19 @@ def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     if not root.exists():
         return out
     tracked = _co_tracked(root)
+    if tracked is None:
+        # 조용히 디스크로 내려가지 않는다 — CO 는 CONCERN 을 내는데 SSOT 만 침묵하면
+        # 같은 위험에 정책이 둘이 된다 (5차 SHOULD-1).
+        _SSOT_UNTRACKED.add(str(root))
+    dropped: set = set()
     for path in root.rglob("*"):
         # symlink 는 따라가지 않는다 — loope 쪽에 main 을 가리키는 링크를 두면
         # 해시가 같아 drift 가 가려진다 (재리뷰 NICE-1).
         if path.is_symlink():
-            out[str(path.relative_to(root))] = "<symlink — 미러에 심볼릭 링크 금지>"
+            # **링크 존재 자체가 BLOCK** 이다 (CO·FREEZE 와 통일). sentinel digest 로만
+            # 두면 양쪽에 같은 링크를 둘 때 값이 같아 **0 BLOCK** 이 된다(실측) —
+            # 메시지는 "미러에 심볼릭 링크 금지" 인데 동작은 "비대칭이면 금지" 였다.
+            _SSOT_LINKS.add(f"{root.name}:{path.relative_to(root)}")
             continue
         if not path.is_file():
             continue
@@ -2127,12 +2194,14 @@ def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
         if tracked is not None and rel not in tracked:
             continue        # 로컬 산출물 — 미러 계약 밖이다
         if _ssot_excluded(rel, scoped):
-            continue
+            dropped.add(rel)   # **제외로 빠진 것**만 따로 센다 — 양의 목록이
+            continue           # "제외해서 0건" 과 "원래 없어서 0건" 을 구별한다
         try:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
         except OSError:
             continue
         out[rel] = digest
+    _SSOT_DROPPED[str(root)] = dropped
     return out
 
 
@@ -2186,8 +2255,8 @@ def _co_walk(root: Path, scope: str = "co"):
             elif q.is_dir():
                 if q.name not in skip:
                     stack.append(q)
-            elif q.is_file() and q.suffix != ".pyc":
-                yield q
+            elif q.is_file():
+                yield q         # `.pyc` 제외도 표가 한다 (`suffix` 행)
 
 
 def _co_collect() -> tuple:
@@ -2285,8 +2354,9 @@ def check_content_overlay() -> list:
     # 경로류가 통째로 비면 여기서 막힌다. 증인(`outside`)은 "제외를 더하는" 방향을
     # 막고 이것은 "범위가 무신호로 줄어드는" 반대 방향을 막는다 — 실측(mH): 파생으로
     # `hooks/` 가 빠졌을 때 37 테스트와 `lint --strict` 가 **전부 통과**했다.
+    seen_classes = {_scope_class(r) for r in shared}
     for prefix, label in sorted(_SCOPE_REQUIRED.items()):
-        if not any(r.startswith(prefix) for r in shared):
+        if prefix not in seen_classes:
             bad += 1
             results.append(_issue(checker, BLOCK, prefix,
                                   f"{label} 경로류의 공유 파일이 0건이다 — 제외가 "
@@ -2469,8 +2539,7 @@ def check_freeze() -> list:
                 continue
             if not q.is_file():
                 continue
-            if q.suffix == ".pyc":
-                continue
+
             # 건너뛰기는 **표의 `freeze` scope** 가 정한다. 손으로 적은
             # `any(x in q.parts for x in ("state", …))` 는 `LINT-SSOT`·`LINT-CO` 가
             # 각각 한 번씩 고친 bare-name 밀반입 통로와 같은 모양이었다 — 실측:
@@ -2732,6 +2801,8 @@ def check_ssot() -> list:
     """
     results = []
     checker = "LINT-SSOT"
+    _SSOT_UNTRACKED.clear()
+    _SSOT_LINKS.clear()
     loope = (_PROJECT_ROOT / "src" / "harness_template" / "claude.loope" / "harness")
     if not loope.exists():
         results.append(_issue(checker, INFO, "claude.loope/", "변형 없음 — 검사 생략"))
@@ -2757,9 +2828,39 @@ def check_ssot() -> list:
         for rel in differing:
             results.append(_issue(checker, BLOCK, f"{label}{rel}",
                                   "내용 drift — ADR-015 의 main ≡ loope invariant 위반"))
+        # **양의 목록을 SSOT 에도 적용한다.** 전엔 `check_content_overlay` 에서만 썼고,
+        # 그래서 ssot 제외를 한 칸 넓혀 `rules/`·`rubrics/` 를 통째로 지워도 56 테스트와
+        # `lint --strict` 가 전부 통과했다 (실측 M2r·M3rb). `rules/` 에는 F021 1차
+        # 리뷰가 drift 로 지목했던 `coding-standards.md` 가 있다.
+        # "같은 위험에 검사기마다 경계가 다르면 약한 쪽으로 샌다" 가 여기에도 적용된다.
+        seen = {_scope_class(f"{label}{rel}") for rel in main_files}
+        for prefix, why in sorted(_SCOPE_REQUIRED.items()):
+            if not prefix.startswith(label) or prefix == label:
+                continue        # 이 쌍이 보는 범위 밖
+            # **제외로 빈 것만** 결함이다. 오버레이 전용 경로류(`policy/`·`schema/`)는
+            # main·loope 에 정당하게 없고, 미추적 파일만 있는 디렉토리도 비어 있는 것이
+            # 정상이다. 그래서 "디렉토리가 있는가" 가 아니라 **"제외가 떨궜는가"** 를 본다.
+            dropped = (_SSOT_DROPPED.get(str(main_root), set())
+                       | _SSOT_DROPPED.get(str(var_root), set()))
+            if not any(_scope_class(f"{label}{r}") == prefix for r in dropped):
+                continue
+            if prefix not in seen:
+                results.append(_issue(checker, BLOCK, prefix,
+                                      f"{why} 경로류를 ssot 제외가 통째로 떨궜다 — "
+                                      "main↔loope 비교에 1건도 남지 않았다"))
         if not (only_main or only_var or differing):
             results.append(_issue(checker, PASS, label,
                                   f"main ≡ loope OK ({len(main_files)} 파일)"))
+
+    if _SSOT_LINKS:
+        results.append(_issue(checker, BLOCK, "symlink",
+                              f"{len(_SSOT_LINKS)}건 — 미러에 심볼릭 링크를 두지 않는다. "
+                              f"양쪽에 같은 링크를 두면 drift 가 사라진다: "
+                              f"{sorted(_SSOT_LINKS)[:5]}"))
+    if _SSOT_UNTRACKED:
+        results.append(_issue(checker, CONCERN, "git 추적 목록 없음",
+                              f"{sorted(_SSOT_UNTRACKED)} 에서 `git ls-files` 를 쓰지 못해 "
+                              "디스크를 그대로 훑었다 — 로컬 산출물이 섞일 수 있다"))
 
     # CLAUDE.md 는 변형별 헤더가 다를 수 있으므로 **본문 섹션** 단위로 비교한다.
     main_md = _PROJECT_ROOT / "CLAUDE.md"
@@ -3487,6 +3588,34 @@ def cmd_report(args) -> int:  # noqa: ARG001
 # 진입점
 # ---------------------------------------------------------------------------
 
+def cmd_mirror_excludes(args) -> int:
+    """미러에서 빼야 할 경로를 `rsync --exclude` 인자로 출력한다.
+
+    **문서에 제외 목록을 복제하지 않기 위해서다.** `CLAUDE.md` 의 미러링 명령이
+    `--exclude='state/'` 처럼 손으로 적힌 목록을 들고 있었고, 그것이 코드와 어긋났다 —
+    `design/`·`bin/live_status.sh`·`atlassian-targets.json`·훅 제외가 **빠져 있어서**
+    그대로 돌리면 머신 로컬 Atlassian 허용 목록이 loope 로 복사된다 (5차 MUST-1).
+    같은 사실의 세 번째 사본이었다 (코드 · ADR 표 · 이 rsync).
+
+    출력은 `.claude/` 기준 상대 경로다 — 미러 명령이 `.claude/` 를 복사하기 때문이다.
+    """
+    pats = []
+    for rule in _scope_rules(args.scope):
+        pat = rule["pattern"]
+        if rule["kind"] == "anydir":
+            pats.append(pat)
+            continue
+        if rule["kind"] == "suffix":
+            pats.append(f"*{pat}")
+            continue
+        if not pat.startswith(".claude/"):
+            continue        # `.claude/` 밖은 이 명령이 다루는 미러 대상이 아니다
+        pats.append(pat[len(".claude/"):])
+    for pat in sorted(set(pats)):
+        print(f"--exclude={pat}")
+    return 0
+
+
 def main() -> int:
     """
     lint.py 메인 진입점.
@@ -3530,6 +3659,12 @@ def main() -> int:
     # report
     subparsers.add_parser("report", help="캐시된 마지막 실행 결과 표시")
 
+    # mirror-excludes
+    mx = subparsers.add_parser(
+        "mirror-excludes",
+        help="main→loope 미러에서 빼야 할 경로 (rsync --exclude 인자로 그대로 쓴다)")
+    mx.add_argument("--scope", default="ssot", choices=("ssot", "co", "freeze"))
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -3538,6 +3673,8 @@ def main() -> int:
         return cmd_regenerate_index(args)
     elif args.command == "report":
         return cmd_report(args)
+    elif args.command == "mirror-excludes":
+        return cmd_mirror_excludes(args)
     else:
         parser.print_help()
         return 0

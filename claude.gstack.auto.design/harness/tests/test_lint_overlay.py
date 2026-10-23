@@ -373,6 +373,23 @@ class RealTreeCoverageTest(unittest.TestCase):
                          "의도된 오버레이면 `_CONTENT_OVERLAY_AXES` 에, 변형 로컬이면 "
                          "`_CO_VARIANT_LOCAL` 에 **사유와 함께** 등재하라")
 
+    def test_경로류_목록이_관측과_일치한다(self):
+        """**아홉 번째 공회전 형태** — 표는 데이터가 됐는데 지키는 쪽은 손 목록이다.
+
+        `_SCOPE_REQUIRED` 가 8개만 적혀 있을 때 `rules/`·`rubrics/`·`.opencode/*` 를
+        제외로 지워도 56 테스트와 `lint --strict` 가 전부 통과했다 (실측 M2r·M3r·M8).
+        데이터가 늘면 목록은 조용히 낡는다.
+
+        그래서 **양방향**이다 — 새 경로류가 생기면 여기서 등재를 강제하고, 등재된
+        경로류가 비면 검사기가 BLOCK 한다. (사라지는 방향은 검사기 몫이라 여기서
+        단언하지 않는다 — 두 곳에 같은 로직을 두면 여섯 번째 형태가 된다.)
+        """
+        files, *_ = self.lint._co_collect()
+        observed = {self.lint._scope_class(r) for r, m in files.items() if len(m) >= 2}
+        self.assertEqual(sorted(observed - set(self.lint._SCOPE_REQUIRED)), [],
+                         "관측되는 경로류가 `_SCOPE_REQUIRED` 에 없다 — 등재하라. "
+                         "등재하지 않으면 그 경로류는 제외로 통째로 지워져도 조용하다")
+
     def test_제외가_사유와_가드_없이_늘지_않는다(self):
         """제외는 곧 *어떤 검사도 보지 않는 파일*을 만드는 일이다 (ADR-015 결정 2).
 
@@ -501,7 +518,7 @@ class ScopeRuleTableTest(unittest.TestCase):
                 for field in ("kind", "pattern", "scope", "reason", "guard",
                               "inside", "outside"):
                     self.assertIn(field, rule, f"필수 필드 누락: {field}")
-                self.assertIn(rule["kind"], ("exact", "prefix", "anydir"))
+                self.assertIn(rule["kind"], ("exact", "prefix", "anydir", "suffix"))
                 self.assertTrue(rule["scope"] <= {"ssot", "co", "freeze"},
                                 f"알 수 없는 scope: {rule['scope']}")
                 self.assertTrue(rule["scope"], "scope 가 비었다 — 아무 데도 적용되지 않는다")
@@ -598,6 +615,28 @@ class ScopeWiringTest(unittest.TestCase):
                          "이 scope 를 선언한 행이 있는데 `_scope_match` 를 그 scope 로 "
                          "부르는 코드가 없다 — 증인이 아무도 안 쓰는 뷰에 증언한다")
 
+    def test_scope_인자는_전부_리터럴이다(self):
+        """`_scope_match_args` 는 **리터럴만** 센다 — 그 한계를 명시한다.
+
+        변수나 f-string 으로 부르면 선언 집합이 안 덮여 위 테스트가 실패하므로
+        보수적(안전한) 방향이지만, 한계를 적어 두지 않으면 다음 사람이 "왜 안 잡히지"
+        를 묻게 된다. 리터럴이 아닌 호출이 생기면 **여기서** 먼저 알린다.
+        """
+        bad = []
+        for node in ast.walk(ast.parse(self.src)):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
+            if name != "_scope_match" or len(node.args) < 2:
+                continue
+            if not (isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)):
+                bad.append(node.lineno)
+        self.assertEqual(bad, [],
+                         "scope 인자가 리터럴이 아니다 — 배선 검증이 그 호출을 못 본다. "
+                         f"리터럴로 쓰거나 검증기를 확장하라: 줄 {bad}")
+
     def test_호출되는_scope_는_전부_표에_선언돼_있다(self):
         """반대 방향 — 오타난 scope 로 부르면 **항상 None** 이라 조용히 통과한다."""
         declared = {sc for r in self.lint._SCOPE_RULES for sc in r["scope"]}
@@ -611,9 +650,20 @@ class ScopeWiringTest(unittest.TestCase):
         `src/` 접두는 주석만 달고 표 밖에 있었다 — `("src/", "docs/design/")` 로 한 칸
         넓혀도 아무 테스트도 죽지 않았다 (4차 MUST-1b).
         """
-        collectors = ("_co_collect", "_ssot_rel_files")
+        # 수집기 이름을 **박지 않는다** — 세 번째 수집기(F038 존재 축)가 생기면
+        # 손 목록은 조용히 낡는다. 아홉 번째 공회전 형태의 전형이라, 수집기를
+        # "`_co_tracked` 를 부르는 함수" 로 **도출**한다 (둘 다 그걸 부른다).
+        tree = ast.parse(self.src)
+        collectors = {
+            fn.name for fn in ast.walk(tree)
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and any(getattr(c.func, "id", getattr(c.func, "attr", None)) == "_co_tracked"
+                    for c in ast.walk(fn) if isinstance(c, ast.Call))
+        }
+        self.assertGreaterEqual(len(collectors), 2,
+                                f"수집기를 못 찾았다 — 도출이 공회전한다: {collectors}")
         offenders = []
-        for fn in ast.walk(ast.parse(self.src)):
+        for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             if fn.name not in collectors:
@@ -665,6 +715,20 @@ class ScopeWitnessFixtureTest(unittest.TestCase):
             capture_output=True, text=True, cwd=str(self.root))
         return "\n".join(l for l in res.stdout.splitlines() if "| BLOCK |" in l)
 
+    @staticmethod
+    def _targets(out: str) -> set:
+        """BLOCK 행의 **항목 열**만 뽑는다.
+
+        부분문자열로 보면 `README.md` 증인이 `.claude/state/orch/README.md` 의 BLOCK 에
+        걸린다 — 실제로 그렇게 거짓 실패가 났다. 증인 판정은 정확 일치여야 한다.
+        """
+        out_set = set()
+        for line in out.splitlines():
+            parts = [c.strip() for c in line.split("|")]
+            if len(parts) > 4 and parts[2] == "BLOCK":
+                out_set.add(parts[3])
+        return out_set
+
     def test_증인_경계가_실제_검사에서_지켜진다(self):
         """`inside` 는 제외되고 `outside` 는 **갈리면 BLOCK** 이어야 한다.
 
@@ -678,12 +742,12 @@ class ScopeWitnessFixtureTest(unittest.TestCase):
             for path in rule["inside"]:
                 with self.subTest(rule=rule["pattern"], inside=path):
                     self._put_all(path, "A\n", "B\n")
-                    self.assertNotIn(path, self._blocks(),
+                    self.assertNotIn(path, self._targets(self._blocks()),
                                      "제외되어야 할 경로가 BLOCK 됐다")
             for path in rule["outside"]:
                 with self.subTest(rule=rule["pattern"], outside=path):
                     self._put_all(path, "A\n", "B\n")
-                    self.assertIn(path, self._blocks(),
+                    self.assertIn(path, self._targets(self._blocks()),
                                   "제외하면 안 되는 이웃인데 BLOCK 이 안 났다 — "
                                   "통로가 한 칸 넓다")
 
@@ -780,6 +844,10 @@ class SsotWitnessFixtureTest(unittest.TestCase):
         for base in (self.root / "docs" / "adr", self.lhar / "docs" / "adr"):
             base.mkdir(parents=True, exist_ok=True)
             (base / "ADR-001-x.md").write_text("# x\n", encoding="utf-8")
+        # 양의 목록이 지키는 경로류를 fixture 가 실제로 갖게 한다 — 없으면 "제외가
+        # 통째로 떨궜다" 를 **테스트에서** 재현할 수 없고 실트리 lint 에만 의존한다.
+        for cls in ("rules", "rubrics", "agents"):
+            self._put_pair(f"{cls}/keep.md", "same\n", "same\n")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -805,6 +873,56 @@ class SsotWitnessFixtureTest(unittest.TestCase):
     def test_기준선이_깨끗하다(self):
         self.assertEqual(self._blocks(), "", "fixture 기준선이 더럽다")
 
+    def test_git_추적_밖_파일은_SSOT_비교에서도_빠진다(self):
+        """CO 와 **같은 경계**다 — 안 그러면 한쪽을 고칠 때 다른 쪽이 터진다.
+
+        실측: `_ssot_excluded` 를 표에 배선하는 순간 gitignored 31건(`*.lock`·
+        `sessions.db`·`backup-last.json` …)이 "main 에만 존재" 로 쏟아졌다. 그런데
+        이 경계를 **테스트가 한 번도 태우지 않았다** — SSOT fixture 가 전부 비-git
+        디렉토리라 `tracked=None` 경로만 돌았다 (5차 MUST-2b).
+        """
+        import subprocess as sp
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+               "PATH": os.environ["PATH"]}
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "t"]):
+            r = sp.run(cmd, cwd=str(self.root), capture_output=True, env=env)
+            if r.returncode != 0:
+                self.skipTest(f"git 사용 불가: {r.stderr[:120]}")
+        self.assertEqual(self._blocks(), "", "git 리포 기준선이 더럽다")
+        # 커밋 **뒤에** main 에만 둔 미추적 파일 → 비교 대상이 아니다
+        (self.root / ".claude" / "state").mkdir(parents=True, exist_ok=True)
+        (self.root / ".claude" / "state" / "runtime.lock").write_text("x", encoding="utf-8")
+        self.assertEqual(self._blocks(), "",
+                         "git 추적 밖 파일이 'main 에만 존재' 로 잡혔다")
+        # 같은 파일을 **추적시키면** 잡혀야 한다
+        r = sp.run(["git", "add", "-f", ".claude/state/runtime.lock"],
+                   cwd=str(self.root), capture_output=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr[:200])
+        self.assertIn("runtime.lock", self._blocks(),
+                      "추적되는데도 비교에서 빠졌다 — 경계가 너무 넓다")
+
+    def test_ssot_제외가_경로류를_통째로_떨구면_BLOCK_이다(self):
+        """양의 목록이 **SSOT 에도** 있어야 한다.
+
+        전엔 `check_content_overlay` 에서만 썼고, 그래서 ssot 제외를 한 칸 넓혀
+        `rules/`·`rubrics/` 를 통째로 지워도 56 테스트와 `lint --strict` 가 전부
+        통과했다 (실측 M2r·M3rb). `rules/` 에는 F021 1차 리뷰가 drift 로 지목했던
+        `coding-standards.md` 가 있다.
+        """
+        lintpy = self.root / ".claude" / "bin" / "lint.py"
+        src = lintpy.read_text(encoding="utf-8")
+        old = '    return _scope_match(full, "ssot") is not None'
+        self.assertEqual(src.count(old), 1, "배선 지점을 못 찾았다")
+        lintpy.write_text(
+            src.replace(old, old + ' or full.startswith(".claude/rules/")', 1),
+            encoding="utf-8")
+        out = self._blocks()
+        self.assertIn(".claude/rules/", out,
+                      "ssot 제외가 경로류를 통째로 떨궜는데 조용하다")
+        self.assertIn("통째로 떨궜다", out)
+
     def test_ssot_증인_경계가_실제_검사에서_지켜진다(self):
         """`inside` 는 drift 해도 조용하고, `outside` 는 drift 하면 BLOCK 이다."""
         checked = 0
@@ -819,7 +937,7 @@ class SsotWitnessFixtureTest(unittest.TestCase):
                     continue        # fixture 가 돌리는 바이너리 — 위 주석 참조
                 with self.subTest(rule=rule["pattern"], inside=path):
                     self._put_pair(rel, "A\n", "B\n")
-                    self.assertNotIn(path, self._blocks(),
+                    self.assertNotIn(path, ScopeWitnessFixtureTest._targets(self._blocks()),
                                      "제외되어야 할 경로가 BLOCK 됐다")
                     checked += 1
             for path in rule["outside"]:
@@ -830,7 +948,7 @@ class SsotWitnessFixtureTest(unittest.TestCase):
                     continue        # fixture 가 돌리는 바이너리 — 위 주석 참조
                 with self.subTest(rule=rule["pattern"], outside=path):
                     self._put_pair(rel, "A\n", "B\n")
-                    self.assertIn(path, self._blocks(),
+                    self.assertIn(path, ScopeWitnessFixtureTest._targets(self._blocks()),
                                   "제외하면 안 되는 이웃인데 BLOCK 이 안 났다 — "
                                   "ssot 통로가 한 칸 넓다")
                     checked += 1
@@ -869,12 +987,34 @@ class GateFailureTest(unittest.TestCase):
                              capture_output=True, text=True, cwd=str(self.root))
         return res.returncode, res.stdout
 
-    def test_게이트_검사기가_죽으면_BLOCK_이고_strict_가_막는다(self):
-        self._inject_raise("check_content_overlay")
-        code, out = self._run("LINT-CO")
-        self.assertEqual(code, 1, f"게이트 검사기가 죽었는데 통과했다:\n{out}")
-        self.assertIn("| BLOCK |", out)
-        self.assertIn("검사기 실행 실패", out)
+    #: 게이트여야 하는 검사기 — **여기 적는 것이 계약이다.** 코드의 `_GATE_CHECKERS`
+    #: 와 양방향으로 대조하므로, 한쪽만 고치면 이 이름으로 실패한다.
+    _EXPECTED_GATES = {"LINT-SSOT", "LINT-MR", "LINT-CO", "LINT-FREEZE",
+                       "LINT-ATL", "LINT-DOC"}
+
+    def test_게이트_집합이_계약과_같다(self):
+        """집합이 **조용히** 줄면 그 검사기는 죽어도 통과한다.
+
+        전엔 아래 테스트가 검사기 **이름 둘을 박아** 두었고, 그래서 `LINT-DOC` 을
+        집합에서 빼도 56건이 전부 통과했다(실측 M7b). "`GateFailureTest` 가 집합을
+        순회하므로 자동으로 따라온다" 고 적은 것은 **거짓이었다** — 아홉 번째 공회전
+        형태(표는 데이터가 됐는데 지키는 쪽은 손으로 적은 이름 목록)의 실례다.
+        """
+        self.assertEqual(set(_load_lint()._GATE_CHECKERS), self._EXPECTED_GATES)
+
+    def test_게이트_검사기는_전부_죽으면_strict_가_막는다(self):
+        """**집합을 순회**한다 — 게이트가 하나 늘면 이 테스트가 자동으로 따라온다."""
+        lint = _load_lint()
+        for checker_id in sorted(self._EXPECTED_GATES):
+            fn = lint._CHECKERS.get(checker_id)
+            self.assertIsNotNone(fn, f"{checker_id} 가 등록부에 없다")
+            with self.subTest(checker=checker_id):
+                shutil.copy2(_LINT, self.lint)       # 매번 깨끗한 사본에서
+                self._inject_raise(fn[1].__name__)
+                code, out = self._run(checker_id)
+                self.assertEqual(code, 1, f"{checker_id} 가 죽었는데 통과했다:\n{out}")
+                self.assertIn("| BLOCK |", out)
+                self.assertIn("검사기 실행 실패", out)
 
     def test_비게이트_검사기는_죽어도_INFO_다(self):
         """훅의 관용은 훅의 것이지 게이트 검사기의 것이 아니다 — 경계를 고정한다."""
