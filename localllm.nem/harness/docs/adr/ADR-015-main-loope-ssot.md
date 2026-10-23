@@ -23,14 +23,16 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 
 ### 결정 2 — 로컬 파일은 승격에서 제외 (머신/프로젝트 로컬)
 
-> **개정 (2026-10-20, F021 에스컬레이션)** — 제외 목록의 SSOT 는 **코드**다.
-> `lint.py` 의 `_SSOT_EXCLUDE_PREFIXES`(접두) 와 `_SSOT_EXCLUDE_EXACT`(정확 일치) 가
-> 정의이고 아래 표는 그 **설명**이다. **개수를 적지 않는다** — 2026-09-22 판의 "5종" 은
-> ADR-023 이 2 항목을 더한 날 낡았고 아무도 알아채지 못했다. 세려면 센다:
+> **개정 (2026-10-23, F021 4차)** — 제외의 SSOT 는 **`_SCOPE_RULES` 한 표**다.
+> 아래 표는 그 **설명**이다. 전엔 여기가 `_SSOT_EXCLUDE_*` 를 정의라 하고 결정 5 는
+> `_SCOPE_RULES` 라 해서 **한 ADR 안에 정의가 둘**이었다 — 그리고 실제로 `_ssot_excluded`
+> 가 옛 상수를 읽고 있어 `scope` 열이 선언일 뿐 배선이 아니었다 (4차 MUST-1).
+> **개수를 적지 않는다** — 2026-09-22 판의 "5종" 은 ADR-023 이 2 항목을 더한 날 낡았고
+> 아무도 알아채지 못했다. 세려면 센다:
 >
 > ```bash
 > python3 -c "import sys; sys.path.insert(0,'.claude/bin'); import lint; \
->   print('prefix', len(lint._SSOT_EXCLUDE_PREFIXES), '/ exact', len(lint._SSOT_EXCLUDE_EXACT))"
+>   print(len(lint._SCOPE_RULES), '행', len([r for r in lint._SCOPE_RULES if 'ssot' in r['scope']]), 'ssot')"
 > ```
 >
 > | 제외 대상 | 종류 | 이유 | 더한 ADR |
@@ -137,7 +139,7 @@ repro·artifact 6건이 3 사본 중 1곳에만)와 미가드 내용 오버레�
 
 여기서는 **해시가 정답**이다 — 해시 표의 결함("자주 바뀌는 파일에 쓰면 regenerate 를 부른다")
 은 자주 바뀌는 대상에서만 생기는데, 동결 대상은 정의상 안 바뀐다.
-`.claude/freeze-manifest.json` 이 경로마다 `sha256` 과 `reason`(`phase0` | `karpathy` **둘뿐**)
+`.claude/freeze-manifest.json` 이 경로마다 `sha256` 과 `reason`(`phase0` | `karpathy` — <!-- lint:len _FREEZE_REASONS -->2<!-- /lint --> 종)
 을 둔다. **`regenerate` 서브커맨드를 만들지 않는다** — 만드는 순간 이 검사기는 공회전한다.
 
 Karpathy 예외는 검사기가 "이해" 하지 않는다. 예외는 **매니페스트를 거쳐 간다** — 동기화

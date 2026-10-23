@@ -1321,6 +1321,12 @@ _SCOPE_RULES = (
          reason="생성 vault — 변형 로컬 입력(feature_list·ADR 집합)에서 생성되므로 "
                 "노드 내용 자체가 다르다 (`related:` 링크·인덱스 노드 수)",
          inside=["wiki/index.md"], outside=["docs/adr/ADR-007-llm-wiki-knowledge-graph.md"]),
+    dict(kind="prefix", pattern="src/", scope={"co"},
+         guard="변형으로 **따로** 센다 — 메인의 `src/harness_template/` 은 루트 목록에 "
+               "올라가고, 그 밖의 `src/` 는 하네스가 아니라 사용자 소스다",
+         reason="메인의 템플릿 트리 자신 — 변형 루트로 중복 집계되면 안 된다",
+         inside=["src/harness_template/claude.loope/harness/CLAUDE.md", "src/gstack/app.py"],
+         outside=["docs/design/F007-design-review-checklist.md", "tests/test_lint_overlay.py"]),
     dict(kind="prefix", pattern="tests/suite/results/", scope={"co"},
          guard="없음 — 변형·모델마다 다른 것이 **결과**다",
          reason="무인 스위트 실측 로그",
@@ -1329,7 +1335,7 @@ _SCOPE_RULES = (
 
 #: **양의 목록** — 각 경로류는 공유 파일을 1건 이상 내놓아야 한다. 0 이면 BLOCK.
 #: 증인은 "제외를 **더하는**" 방향을 막는다. 이것은 **범위가 무신호로 줄어드는** 반대
-#: 방향을 막는다 — 실측(mH): `_SSOT_EXCLUDE_PREFIXES` 에 `hooks/` 를 더하면 파생으로
+#: 방향을 막는다 — 실측(mH): ssot 제외에 `hooks/` 를 더하면 파생으로
 #: LINT-CO 범위가 조용히 줄었는데 37 테스트와 `lint --strict` 가 **전부 통과**했다.
 _SCOPE_REQUIRED = {
     ".claude/agents/": "에이전트 정의",
@@ -2071,49 +2077,44 @@ def check_mirror_regression() -> list:
 # LINT-SSOT: main ≡ claude.loope (ADR-015 invariant)
 # ---------------------------------------------------------------------------
 
-# ADR-015 결정 2 의 제외 목록 — 머신·프로젝트 로컬이라 미러 대상이 아니다.
-#
-# **루트 상대 경로로 고정한다.** 예전엔 이름 집합을 경로 성분 전체와 대조해서,
-# `state`·`design` 이라는 **이름의 디렉토리가 어디에 있든** 그 아래 전부가 검사에서
-# 빠졌다. 실측: loope 에만 `.claude/agents/design/evil.md`·`.claude/skills/state/SKILL.md`·
-# `.claude/commands/host.json`·`.claude/bin/live_status.sh` 를 넣어도 **0 BLOCK**.
-# 제외 목록이 곧 밀반입 통로였다 (F021 재리뷰 MUST-1).
-_SSOT_EXCLUDE_PREFIXES = (
-    "state/",          # 프로젝트 로컬 런타임 상태
-    "design/",         # design_pick 산출물 (tokens.json·backup)
-)
-_SSOT_EXCLUDE_EXACT = {
-    "settings.json", "settings.local.json", "host.json",
-    "bin/live_status.sh",   # 머신 로컬 관측 도구
-    # 3-C 철칙 — 이 작업 트리가 쓸 수 있는 Atlassian 대상은 `settings.json` 과 같은
-    # 층위의 **머신·프로젝트 로컬** 값이다. 배포본(vela)의 사본은 빈 목록이어야 하고
-    # 그것은 LINT-ATL 이 따로 강제한다. 훅은 코드라 원래 같아야 하므로, 이 제외가
-    # 훅을 고치는 통로가 되지 않도록 LINT-ATL 이 **vela 사본과 바이트 동일**을 본다.
-    "atlassian-targets.json",
-    "hooks/pre-atlassian-write-check.sh",
-}
-
+# ADR-015 결정 2 의 제외 목록은 **`_SCOPE_RULES` 한 표**다 (위). 전엔 여기에
+# `_SSOT_EXCLUDE_PREFIXES`/`_SSOT_EXCLUDE_EXACT` 가 따로 있었고, `scope` 열을 도입하면서
+# `_ssot_excluded` 를 표의 뷰로 바꾼 뒤에도 **정의만 남아** 있었다. 죽은 상수는 그 자체가
+# 함정이다 — 거기에 행을 더하면 아무 일도 일어나지 않는데 더한 사람은 더했다고 믿는다
+# (실측 mH: `hooks/` 를 더해도 51 테스트·`lint --strict` 전부 통과). 그래서 지웠다.
 
 def _ssot_excluded(rel: str, scoped: bool) -> bool:
-    """이 상대경로가 미러 비교에서 빠지는가 (루트 기준 **정확 일치/접두**).
+    """이 상대경로가 main↔loope 비교에서 빠지는가 — **표의 `ssot` 뷰**다.
 
-    `scoped` 는 제외 목록이 이 쌍에 적용되는지다. 목록은 `.claude/` 를 기준으로
-    쓰였으므로 다른 쌍(`docs/adr/`)에 그대로 걸면 안 된다 — 실제로 걸었더니
-    `docs/adr/design/ADR-099.md` 가 `design/` 접두에 걸려 **검사에서 빠졌다**
-    (테스트가 잡은, 이 수정 자신의 구멍이다).
+    전엔 `_SSOT_EXCLUDE_*` 를 직접 읽었고, 그래서 `_SCOPE_RULES` 의 `scope` 열이
+    **선언일 뿐 배선이 아니었다**. 표는 `.claude/state/*/README.md` 를 ssot 의
+    `outside` 증인(=제외하면 안 됨)으로 들고 있는데 실제 함수는 True 를 냈다 —
+    증인이 **아무도 호출하지 않는 뷰**에 대해 증언하고 있었다. 그래서 3차에서 잡은
+    mH 가 방향만 바꿔(CO→SSOT) 그대로 생존했다 (4차 MUST-1).
+
+    `scoped` 는 경로가 `.claude/` 기준(True)인지 루트 기준(False)인지다 — 표는 루트
+    기준이므로 `.claude/` 를 붙여 맞춘다.
     """
-    if scoped and (rel in _SSOT_EXCLUDE_EXACT or rel.startswith(_SSOT_EXCLUDE_PREFIXES)):
-        return True
-    # 캐시는 쌍과 무관하게 제외 — 환경별로 다르고 내용도 무의미하다
-    return "__pycache__" in Path(rel).parts or rel.endswith(".pyc")
+    full = f".claude/{rel}" if scoped else rel
+    return _scope_match(full, "ssot") is not None
+
+
 
 
 def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
-    """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다."""
+    """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다.
+
+    **git 추적 경계**는 `LINT-CO` 와 같다 — 미러는 추적되는 내용에 대한 계약이다.
+    전엔 디스크를 그대로 걷어서, `_ssot_excluded` 를 표의 뷰로 배선하자마자
+    gitignored 런타임 31건(`state/*.lock`·`sessions.db`·`backup-last.json` …)이
+    "main 에만 존재" 로 쏟아졌다. 같은 위험에 검사기마다 경계가 다르면 한쪽을
+    고칠 때 다른 쪽이 터진다 (4차 MUST-1 배선 주의).
+    """
     import hashlib
     out = {}
     if not root.exists():
         return out
+    tracked = _co_tracked(root)
     for path in root.rglob("*"):
         # symlink 는 따라가지 않는다 — loope 쪽에 main 을 가리키는 링크를 두면
         # 해시가 같아 drift 가 가려진다 (재리뷰 NICE-1).
@@ -2123,6 +2124,8 @@ def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
         if not path.is_file():
             continue
         rel = str(path.relative_to(root))
+        if tracked is not None and rel not in tracked:
+            continue        # 로컬 산출물 — 미러 계약 밖이다
         if _ssot_excluded(rel, scoped):
             continue
         try:
@@ -2211,8 +2214,6 @@ def _co_collect() -> tuple:
             untracked_roots.append(name)
         for q in _co_walk(root, "co"):
             rel = str(q.relative_to(root))
-            if rel.startswith("src/"):
-                continue        # 메인의 템플릿 트리 자신 — 변형으로 따로 센다
             if tracked is not None and rel not in tracked:
                 continue        # 로컬 산출물 — 미러 계약 밖이다
             if _scope_match(rel, "co") is not None:
@@ -2457,7 +2458,16 @@ def check_freeze() -> list:
         if not base.is_dir():
             continue
         for q in sorted(base.rglob("*")):
-            if not q.is_file() or q.is_symlink():
+            if q.is_symlink():
+                # 조용히 건너뛰지 않는다. SSOT·CO 를 통일한 근거("같은 위험에 검사기마다
+                # 정책이 다르면 약한 쪽으로 샌다")가 FREEZE 에도 적용된다 — 실측: 일반
+                # 파일 `slipped.md` 는 BLOCK 인데 같은 자리에 링크를 두면 0 BLOCK 이었다.
+                bad += 1
+                results.append(_issue(checker, BLOCK, str(q.relative_to(_PROJECT_ROOT)),
+                                      "동결 트리에 심볼릭 링크가 있다 — 해시 대조를 "
+                                      "우회한다"))
+                continue
+            if not q.is_file():
                 continue
             if q.suffix == ".pyc":
                 continue
@@ -2518,13 +2528,13 @@ def check_doc_symbols() -> list:
     bindir = _CLAUDE_DIR / "bin"
     if not bindir.is_dir():
         return [_issue(checker, INFO, ".claude/bin/", "코드 디렉토리 없음 — 검사 생략")]
-    # 메인 + **변형**의 bin 전부. 문서는 오버레이 전용 심볼도 인용한다
-    # (예: ADR-016 의 `_CC_NORMALIZE` 는 d-2 오버레이 `opencode.py` 에 있다).
-    # 메인만 보면 정당한 인용을 거짓 BLOCK 한다.
-    scan = sorted(bindir.rglob("*.py"))
-    if _HT.exists():
-        scan += sorted(_HT.glob("*/harness/.claude/bin/**/*.py"))
-    for q in scan:   # host_adapters/ 같은 하위 패키지도
+    # **메인 bin 만** 본다 (하위 패키지 포함). 처음엔 "문서가 오버레이 전용 심볼도
+    # 인용한다" 며 변형 bin 까지 합집합으로 봤는데, 그 근거로 든 예(ADR-016 의
+    # opencode 어댑터 상수)가 **메인에도 있어** 틀렸다. 실측: 문서가 인용하는 23개
+    # 전부 메인에서 해결되고, 변형에만 있는 인용은 **0개**다. 합집합으로 두면
+    # 변형 전용 심볼 52개가 메인 문서에서 조용히 통과하는 통로가 된다.
+    # 변형 전용 심볼을 정말 인용해야 할 날이 오면 그때 **그 변형의 문서**로 좁힌다.
+    for q in sorted(bindir.rglob("*.py")):   # host_adapters/ 같은 하위 패키지도
         try:
             tree = ast.parse(q.read_text(encoding="utf-8"))
         except (OSError, SyntaxError):
@@ -2567,12 +2577,7 @@ def check_doc_symbols() -> list:
                     f"`{name}` 을 인용하는데 `.claude/bin/*.py` 에 없다 — 개명됐거나 "
                     "오타다. 문서가 코드보다 앞서가면 다음 사람이 그 이름을 찾는다"))
         for name, written in provenance.findall(text):
-            obj = None
-            for mod_sym, _f in symbols.items():
-                if mod_sym == name:
-                    obj = name
-                    break
-            if obj is None:
+            if name not in symbols:
                 bad += 1
                 results.append(_issue(checker, BLOCK, rel,
                                       f"`lint:len {name}` 의 심볼이 코드에 없다"))
@@ -2580,8 +2585,13 @@ def check_doc_symbols() -> list:
             actual = _doc_symbol_len(name)
             if actual is None:
                 bad += 1
-                results.append(_issue(checker, BLOCK, rel,
-                                      f"`{name}` 의 길이를 잴 수 없다 (컨테이너가 아니다)"))
+                # 길이는 **이 모듈**의 심볼만 잴 수 있다 (존재 검사는 bin 전체).
+                # 그 비대칭을 사유에 적는다 — 전엔 "컨테이너가 아니다" 라고만 해서
+                # 다른 모듈 심볼에 달았을 때 엉뚱한 곳을 고치게 했다.
+                results.append(_issue(
+                    checker, BLOCK, rel,
+                    f"`{name}` 의 길이를 잴 수 없다 — `lint.py` 자신의 컨테이너 심볼만 "
+                    f"잴 수 있다 (존재 검사는 `.claude/bin/**` 전체, 길이는 이 모듈)"))
             elif int(written) != actual:
                 bad += 1
                 results.append(_issue(
@@ -2797,7 +2807,8 @@ def check_ssot() -> list:
 
 #: 이 검사기들이 **죽으면 BLOCK** 이다. 나머지(참고용·휴리스틱)는 INFO 로 둔다.
 #: 판정 기준: 그 검사기가 없으면 **통과하면 안 되는 것이 통과하는가**.
-_GATE_CHECKERS = frozenset({"LINT-SSOT", "LINT-MR", "LINT-CO", "LINT-FREEZE", "LINT-ATL"})
+_GATE_CHECKERS = frozenset({"LINT-SSOT", "LINT-MR", "LINT-CO", "LINT-FREEZE",
+                            "LINT-ATL", "LINT-DOC"})
 
 _CHECKERS = {
     "LINT-FL": ("feature_list 정합성", check_fl),

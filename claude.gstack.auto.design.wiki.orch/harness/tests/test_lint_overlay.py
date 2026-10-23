@@ -15,6 +15,7 @@ fixture 규율 (F020 이 비싸게 배운 것, `docs/reviews/F020-disposition.md
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -553,6 +554,82 @@ class ScopeRuleTableTest(unittest.TestCase):
                                        f"{hit['pattern'] if hit else None})")
 
 
+class ScopeWiringTest(unittest.TestCase):
+    """**여덟 번째 공회전 형태** — 표가 자기 소비자를 *선언만* 하고 검증하지 않는다.
+
+    `scope` 열은 "이 행을 누가 읽는가" 의 **주장**이다. 증인 테스트는 그 주장을
+    `_scope_match` 라는 뷰에 대해서만 확인한다. **뷰를 아무도 안 부르면 증인은 전부
+    참이면서 아무것도 지키지 않는다.**
+
+    실측으로 그렇게 됐다: `scope={"ssot"}` 행 4개를 두었는데 `_ssot_excluded` 는
+    여전히 옛 상수를 읽고 있었고, `_scope_match(…, "ssot")` 호출은 **0곳**이었다.
+    표는 `.claude/state/*/README.md` 를 ssot 의 `outside` 증인(=제외하면 안 됨)으로
+    들고 있었는데 실제 함수는 True 를 냈다 — 증인이 **아무도 호출하지 않는 뷰**에
+    대해 증언한 것이다. 그래서 3차에서 잡은 mH 가 방향만 바꿔(CO→SSOT) 생존했다.
+
+    닫는 방법은 "scope 값 ↔ 실제 호출" 을 **scope 이름으로** 확인하는 것이고,
+    그러면 행 추가뿐 아니라 **scope 추가**에도 배선이 강제된다.
+    """
+
+    def setUp(self):
+        self.lint = _load_lint()
+        self.src = _LINT.read_text(encoding="utf-8")
+
+    def _scope_match_args(self) -> set:
+        """소스에서 `_scope_match(…, "<scope>")` 의 두 번째 인자 리터럴을 모은다."""
+        found = set()
+        for node in ast.walk(ast.parse(self.src)):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
+            if name != "_scope_match" or len(node.args) < 2:
+                continue
+            arg = node.args[1]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                found.add(arg.value)
+        return found
+
+    def test_선언된_scope_는_전부_실제로_호출된다(self):
+        """선언만 하고 배선하지 않으면 그 행들은 **아무것도 지키지 않는다**."""
+        declared = {sc for r in self.lint._SCOPE_RULES for sc in r["scope"]}
+        called = self._scope_match_args()
+        self.assertEqual(sorted(declared - called), [],
+                         "이 scope 를 선언한 행이 있는데 `_scope_match` 를 그 scope 로 "
+                         "부르는 코드가 없다 — 증인이 아무도 안 쓰는 뷰에 증언한다")
+
+    def test_호출되는_scope_는_전부_표에_선언돼_있다(self):
+        """반대 방향 — 오타난 scope 로 부르면 **항상 None** 이라 조용히 통과한다."""
+        declared = {sc for r in self.lint._SCOPE_RULES for sc in r["scope"]}
+        self.assertEqual(sorted(self._scope_match_args() - declared), [],
+                         "표에 없는 scope 로 부른다 — 그 호출은 영원히 아무것도 제외하지 "
+                         "않는다(오타의 전형적 증상)")
+
+    def test_제외_판정이_표_밖의_조건을_쓰지_않는다(self):
+        """표가 **통로를 전부 열거**한다는 주장을 소스에서 확인한다.
+
+        `src/` 접두는 주석만 달고 표 밖에 있었다 — `("src/", "docs/design/")` 로 한 칸
+        넓혀도 아무 테스트도 죽지 않았다 (4차 MUST-1b).
+        """
+        collectors = ("_co_collect", "_ssot_rel_files")
+        offenders = []
+        for fn in ast.walk(ast.parse(self.src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if fn.name not in collectors:
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                attr = getattr(node.func, "attr", None)
+                if attr == "startswith" and node.args:
+                    seg = ast.get_source_segment(self.src, node) or ""
+                    offenders.append(f"{fn.name}: {seg[:60]}")
+        self.assertEqual(offenders, [],
+                         "수집기가 표를 거치지 않고 직접 경로 접두를 검사한다 — "
+                         f"`_SCOPE_RULES` 에 행으로 올려라: {offenders}")
+
+
 class ScopeWitnessFixtureTest(unittest.TestCase):
     """증인 경로를 **실제 검사기**에 태운다 — 데이터 순회만으로는 동작을 못 본다."""
 
@@ -675,6 +752,89 @@ class ScopeWitnessFixtureTest(unittest.TestCase):
         out = self._blocks()
         self.assertIn("symlink", out,
                       "링크가 조용히 빠졌다 — 사본이 늘 같아 보여 부분 미러가 사라진다")
+
+
+class SsotWitnessFixtureTest(unittest.TestCase):
+    """`scope={"ssot"}` 행을 **실제 `check_ssot` 에** 태운다.
+
+    4차 리뷰: co 행만 fixture 가 태우고 ssot 전용 행은 어느 실제 검사기도 지나지
+    않았다. 증인이 `_scope_match` 라는 뷰에 대해서만 참이면, 그 뷰를 아무도 안 부를 때
+    **전부 참이면서 아무것도 지키지 않는다** (여덟 번째 공회전 형태).
+    `ScopeWiringTest` 가 "불리는가" 를 정적으로 보고, 여기서는 "불러서 맞는가" 를 본다.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".claude" / "bin").mkdir(parents=True)
+        shutil.copy2(_LINT, self.root / ".claude" / "bin" / "lint.py")
+        self.lint = _load_lint()
+        self.loope = (self.root / "src" / "harness_template" / "claude.loope"
+                      / "harness" / ".claude")
+        self.loope.mkdir(parents=True)
+        (self.loope / "bin").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_LINT, self.loope / "bin" / "lint.py")
+        self.lhar = self.loope.parent        # …/claude.loope/harness
+        for base in (self.root, self.lhar):
+            (base / "CLAUDE.md").write_text("# h\n\n## 공통\n같다\n", encoding="utf-8")
+        for base in (self.root / "docs" / "adr", self.lhar / "docs" / "adr"):
+            base.mkdir(parents=True, exist_ok=True)
+            (base / "ADR-001-x.md").write_text("# x\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    #: fixture 자신이 돌리는 바이너리 — 증인으로 덮으면 검사기가 빈 파일이 되어
+    #: **출력이 통째로 사라진다**. 실제로 그렇게 13건이 "BLOCK 이 안 났다" 로 보였다.
+    _SELF = "bin/lint.py"
+
+    def _put_pair(self, rel_under_claude: str, a: str, b: str):
+        self.assertNotEqual(rel_under_claude, self._SELF, "fixture 자신을 덮었다")
+        for base, body in ((self.root / ".claude", a), (self.loope, b)):
+            q = base / rel_under_claude
+            q.parent.mkdir(parents=True, exist_ok=True)
+            q.write_text(body, encoding="utf-8")
+
+    def _blocks(self) -> str:
+        res = subprocess.run(
+            [sys.executable, str(self.root / ".claude" / "bin" / "lint.py"),
+             "check", "--only", "LINT-SSOT"],
+            capture_output=True, text=True, cwd=str(self.root))
+        return "\n".join(l for l in res.stdout.splitlines() if "| BLOCK |" in l)
+
+    def test_기준선이_깨끗하다(self):
+        self.assertEqual(self._blocks(), "", "fixture 기준선이 더럽다")
+
+    def test_ssot_증인_경계가_실제_검사에서_지켜진다(self):
+        """`inside` 는 drift 해도 조용하고, `outside` 는 drift 하면 BLOCK 이다."""
+        checked = 0
+        for rule in self.lint._SCOPE_RULES:
+            if "ssot" not in rule["scope"]:
+                continue
+            for path in rule["inside"]:
+                if not path.startswith(".claude/"):
+                    continue        # `check_ssot` 의 `.claude/` 쌍이 보는 범위만
+                rel = path[len(".claude/"):]
+                if rel == self._SELF:
+                    continue        # fixture 가 돌리는 바이너리 — 위 주석 참조
+                with self.subTest(rule=rule["pattern"], inside=path):
+                    self._put_pair(rel, "A\n", "B\n")
+                    self.assertNotIn(path, self._blocks(),
+                                     "제외되어야 할 경로가 BLOCK 됐다")
+                    checked += 1
+            for path in rule["outside"]:
+                if not path.startswith(".claude/"):
+                    continue
+                rel = path[len(".claude/"):]
+                if rel == self._SELF:
+                    continue        # fixture 가 돌리는 바이너리 — 위 주석 참조
+                with self.subTest(rule=rule["pattern"], outside=path):
+                    self._put_pair(rel, "A\n", "B\n")
+                    self.assertIn(path, self._blocks(),
+                                  "제외하면 안 되는 이웃인데 BLOCK 이 안 났다 — "
+                                  "ssot 통로가 한 칸 넓다")
+                    checked += 1
+        self.assertGreater(checked, 0, "ssot 증인을 하나도 안 태웠다 — 공회전이다")
 
 
 class GateFailureTest(unittest.TestCase):
