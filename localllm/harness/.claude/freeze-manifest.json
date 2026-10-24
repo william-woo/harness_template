@@ -5,215 +5,215 @@
     "karpathy": "phase-agnostic 보편 디시플린 동기화 (4원칙 제목을 포함해야 한다)"
   },
   "files": {
-    "src/harness_template/claude/harness/.claude/agents/architect.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/agents/architect.md": {
       "sha256": "0473849257088026cf003a5b968c27533379400735e6d7bdc00c9fbeafa7b9d7",
       "reason": "karpathy"
     },
-    "src/harness_template/claude/harness/.claude/agents/developer.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/agents/developer.md": {
       "sha256": "bafbe42fa830b62c8bd9c63a29a48ad3ee9193573efab8454ebbe9a85b74f097",
       "reason": "karpathy"
     },
-    "src/harness_template/claude/harness/.claude/agents/planner.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/agents/planner.md": {
       "sha256": "db1b2d4a7d4c767e57474bc71bf10354eba676216f262e5036ea05d223d8f2b4",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/agents/qa.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/agents/qa.md": {
       "sha256": "c2830f23f0376cdae3dbe65767ec7354c31c827600410be8bc22c5120a833600",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/agents/reviewer.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/agents/reviewer.md": {
       "sha256": "af467742ecf1339958b6d28fd9a5ededbc609217bf31737fbb601a12bb1c1d4b",
       "reason": "karpathy"
     },
-    "src/harness_template/claude/harness/.claude/commands/handoff.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/commands/handoff.md": {
       "sha256": "3f2f9b3dcd1b04ae0bd25359d846d06bac0e7c5626dfe55e2237429f7acddeac",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/commands/init-project.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/commands/init-project.md": {
       "sha256": "336a86bd5b13c3d33e4b4b215199cd4d12ba99b337f1a718a332a213141c7e00",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/commands/start-session.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/commands/start-session.md": {
       "sha256": "7b413508ceb692051d5006864d3c4c71a17055c822d408caf9e43732a4668eeb",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/commands/status.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/commands/status.md": {
       "sha256": "ec99f90dcccde136c6ca63255de6cd007aa31d34ae4be17106571d159f0ca1c8",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/hooks/post-write-check.sh": {
+    "src/harness_template/deprecated/claude/harness/.claude/hooks/post-write-check.sh": {
       "sha256": "937598566d3d024e9bc117e1e2c0170b4873a7993763f0c8d9b811cdcd863da4",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/hooks/pre-bash-check.sh": {
+    "src/harness_template/deprecated/claude/harness/.claude/hooks/pre-bash-check.sh": {
       "sha256": "ad2879dbb7e2c33ac79f17b55321d0935bfe74148c42e658caa327d9b4a04888",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/hooks/pre-write-check.sh": {
+    "src/harness_template/deprecated/claude/harness/.claude/hooks/pre-write-check.sh": {
       "sha256": "2c7618c8051fdc6e8a04d780a0fbbd38384f03224c17c60436e4acf0922f8bd5",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/hooks/session-end.sh": {
+    "src/harness_template/deprecated/claude/harness/.claude/hooks/session-end.sh": {
       "sha256": "b07540b83963c368e508b4099cc125a65b89fd991f8300979f77f0e457d3bc79",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/rules/coding-standards.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/rules/coding-standards.md": {
       "sha256": "28c9b0a2d33d24e6c9e3b79464259e7c9bb6c1b19a8061834b82e3c239e071c9",
       "reason": "karpathy"
     },
-    "src/harness_template/claude/harness/.claude/rules/git-conventions.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/rules/git-conventions.md": {
       "sha256": "b7f178710a0772b0acdd2d1e92aeef28abab069f68cfd995c74d76485c5346ad",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/settings.json": {
+    "src/harness_template/deprecated/claude/harness/.claude/settings.json": {
       "sha256": "ad8004789bb03fdce9508b0e897596be1d2f26abf59ea1ec8a8a68ff489a3d32",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/skills/coding/SKILL.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/skills/coding/SKILL.md": {
       "sha256": "74a4235afbccae8172bc5125f9c2f903512c13540f9da242a46f848600e91e07",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.claude/skills/planning/SKILL.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/skills/planning/SKILL.md": {
       "sha256": "35d9ae3ef93870a8551fe8a0db42a3559704a1616ef9072ab4f0698457d6b618",
       "reason": "karpathy"
     },
-    "src/harness_template/claude/harness/.claude/skills/testing/SKILL.md": {
+    "src/harness_template/deprecated/claude/harness/.claude/skills/testing/SKILL.md": {
       "sha256": "acfe57911520a1eefd24c16a08013f795c65ace4adecf860f8e701fbe8826be2",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/.gitignore": {
+    "src/harness_template/deprecated/claude/harness/.gitignore": {
       "sha256": "b2447ef69515e6b2945016755644bb2a64a35a249939424fee498475473170ca",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/CLAUDE.md": {
+    "src/harness_template/deprecated/claude/harness/CLAUDE.md": {
       "sha256": "a58faec92e80050030250e430d080c1342e81547d4e1d4962d3bf94c799c40e5",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/README.md": {
+    "src/harness_template/deprecated/claude/harness/README.md": {
       "sha256": "fb961b424f8d28ac5709b207fe75d141bb10d8250eb2b2d3eb2340e9ed6ed1f0",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/claude-progress.txt": {
+    "src/harness_template/deprecated/claude/harness/claude-progress.txt": {
       "sha256": "6e0617f0ec48d3be965173b14fe24fb3105b2a629b56729fbca999c69c791eaf",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/docs/adr/ADR-000-template.md": {
+    "src/harness_template/deprecated/claude/harness/docs/adr/ADR-000-template.md": {
       "sha256": "6e2d385008e484534988bee70ea9b8013c79df047c9e1982faef0ff378c0a308",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/feature_list.json": {
+    "src/harness_template/deprecated/claude/harness/feature_list.json": {
       "sha256": "56254e0ff3325327c9600a74e558ac4905448defd068ed00ce807e79404395a5",
       "reason": "phase0"
     },
-    "src/harness_template/claude/harness/init.sh": {
+    "src/harness_template/deprecated/claude/harness/init.sh": {
       "sha256": "3b4fbe1341816aeeb20354f2aecd6bb62fc352a582c9c433f14aafc2bb2cc465",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/config.toml": {
+    "src/harness_template/deprecated/openai/harness/.codex/config.toml": {
       "sha256": "987ab76d9c1e3d3f61020021b14078935b6bc3fd54e4843716dca2749d631d0b",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/prompts/handoff.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/prompts/handoff.md": {
       "sha256": "509f5171c5cdc2fb30ff0b8f881033e72cab5468cd2cec8767e2c2a74d716c02",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/prompts/init-project.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/prompts/init-project.md": {
       "sha256": "86d455f6fe1ebc9cd5b6ba000467636a1db4ba9f3b50b7ebc0fa7234d7b3d4f3",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/prompts/role.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/prompts/role.md": {
       "sha256": "cec2f14441a92e6a681cfdd47440d1906a4b70e070c69e46242175a6411c2a6a",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/prompts/start-session.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/prompts/start-session.md": {
       "sha256": "f14d745f55fdf4e46f67fae6e635df93b9f7f9c871dcd66ec7cf0cd15922136e",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/prompts/status.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/prompts/status.md": {
       "sha256": "04d7a6f45c428dd246918063d5fa307fcc3d1e0c81471cec959f567756636183",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/roles/architect.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/roles/architect.md": {
       "sha256": "84f538c4ea334a1f924c1ec657c66f9c079ba81633fd9dd14b20061acef54659",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/roles/developer.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/roles/developer.md": {
       "sha256": "ffcaad7bdda2e3c46076151503428063bd85165faa5b795bc17d1e6d90447919",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/roles/planner.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/roles/planner.md": {
       "sha256": "892df069dbd6672b28e93ed1b80957d6ea00aebfc6ad1c8d4e19f0511060502e",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/roles/qa.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/roles/qa.md": {
       "sha256": "51b85b5f75b403ef789c0e64eb434a33143d9fb8f815eea8b05a125d5c96a114",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/roles/reviewer.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/roles/reviewer.md": {
       "sha256": "dfd9b3ee3a3a282297b1dae000bd7a43ca8869537d03c248d88680cf223e9ecb",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/rules/coding-standards.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/rules/coding-standards.md": {
       "sha256": "a9a33840cfafcba85861cf74629e17891a828f08e114e3dac92cef6a2c78fccc",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/rules/git-conventions.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/rules/git-conventions.md": {
       "sha256": "b7f178710a0772b0acdd2d1e92aeef28abab069f68cfd995c74d76485c5346ad",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/scripts/post-write-check.sh": {
+    "src/harness_template/deprecated/openai/harness/.codex/scripts/post-write-check.sh": {
       "sha256": "f2327d02032a5ebad2abbd1ed7a7ffcbba743d453197812e89aae4c00bb656e8",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/scripts/pre-bash-check.sh": {
+    "src/harness_template/deprecated/openai/harness/.codex/scripts/pre-bash-check.sh": {
       "sha256": "61007388e6c31f3e175963ac4ba0eeafceae9930800518ae843f675c14e68484",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/scripts/pre-write-check.sh": {
+    "src/harness_template/deprecated/openai/harness/.codex/scripts/pre-write-check.sh": {
       "sha256": "5801951fb60559a123381e585a8450bcbdacb8f6afa1a4086a0158c4828a1ced",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/scripts/session-end.sh": {
+    "src/harness_template/deprecated/openai/harness/.codex/scripts/session-end.sh": {
       "sha256": "197753f845a321e3973f246f0f9ff2132f71cd2f99790aac6647186a50a01df0",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/skills/coding/SKILL.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/skills/coding/SKILL.md": {
       "sha256": "ef94be1c0327b237eb8d11f904b85e31fa8b9b12f70b05f0b933cf73195896ee",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.codex/skills/planning/SKILL.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/skills/planning/SKILL.md": {
       "sha256": "92c2e3a4a1ba51566253c050ed9cf2676f06e970b3f9c389840c172a153d7b81",
       "reason": "karpathy"
     },
-    "src/harness_template/openai/harness/.codex/skills/testing/SKILL.md": {
+    "src/harness_template/deprecated/openai/harness/.codex/skills/testing/SKILL.md": {
       "sha256": "f7649e32d9c0fc06f49b28ae47f4ec801dbfea23009408451cdde2fae005a8a4",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/.gitignore": {
+    "src/harness_template/deprecated/openai/harness/.gitignore": {
       "sha256": "44629441f2993751b157f9fec1b7eb22062eb4c011ceaaec36407070d6183823",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/AGENTS.md": {
+    "src/harness_template/deprecated/openai/harness/AGENTS.md": {
       "sha256": "6c436c8f5eff06496ad614e9f3456d6819e4d2dc39b72b84e0f91e6197bc9acb",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/README.md": {
+    "src/harness_template/deprecated/openai/harness/README.md": {
       "sha256": "cf8b96f9497f86a1724a2d9f252db8304bb77356e35766bec01d4ede3febf30b",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/codex-progress.txt": {
+    "src/harness_template/deprecated/openai/harness/codex-progress.txt": {
       "sha256": "993173c3d76b6795e0f7bd5c98a2e3c11f05266054885a2e735ef21599f47fbe",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/docs/adr/ADR-000-template.md": {
+    "src/harness_template/deprecated/openai/harness/docs/adr/ADR-000-template.md": {
       "sha256": "6e2d385008e484534988bee70ea9b8013c79df047c9e1982faef0ff378c0a308",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/feature_list.json": {
+    "src/harness_template/deprecated/openai/harness/feature_list.json": {
       "sha256": "56254e0ff3325327c9600a74e558ac4905448defd068ed00ce807e79404395a5",
       "reason": "phase0"
     },
-    "src/harness_template/openai/harness/init.sh": {
+    "src/harness_template/deprecated/openai/harness/init.sh": {
       "sha256": "969c6bd2967ea72f4f482a50ec12f814da7bc299b0a02cd97981b8e01ad8f2fa",
       "reason": "phase0"
     }

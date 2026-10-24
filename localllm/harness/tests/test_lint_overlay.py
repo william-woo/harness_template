@@ -549,6 +549,40 @@ class FreezeManifestTest(unittest.TestCase):
                 finally:
                     (d / "slipped.md").unlink()
 
+    def test_보관소로_옮겨도_동결은_계속_강제된다(self):
+        """**보관과 동결은 서로 끄지 않는다.**
+
+        2026-10-23 에 baseline 을 `deprecated/` 로 옮기면서 이 검사기를 "동결 대상이
+        활성 트리에 없다" 는 이유로 INFO 로 내렸다. **틀린 판단이었다** — 매니페스트
+        53 경로의 해시가 접두만 바꾸면 53/53 그대로 맞았다. 공짜 가드를 버린 것이다.
+
+        보관소가 면제받는 것은 **drift 검사**("뒤처졌는가")뿐이고, 동결은 반대 방향의
+        사실("바뀌면 안 된다")이다. 아무도 손대지 않을 곳일수록 그 가드는 싸다.
+
+        변이: `check_freeze` 에 "활성 트리에 없으면 INFO 로 조기 반환" 을 되돌리면
+        이 테스트가 떨어진다.
+        """
+        # 트리째 **옮긴다** (`git mv` 와 같은 모양). 파일만 옮기면 빈 `claude/harness/`
+        # 가 남아 `is_dir()` 이 참이고, 조기 반환 변이가 **생존한다** — 실제로 처음
+        # 판이 그랬다. 재현하려는 조건은 "동결 트리가 활성 위치에 **없다**" 이다.
+        ht = self.root / "src" / "harness_template"
+        (ht / "deprecated").mkdir(parents=True)
+        (ht / "claude").rename(ht / "deprecated" / "claude")
+        self.assertFalse((ht / "claude").exists(), "fixture 가 이동을 재현하지 못했다")
+        moved = (ht / "deprecated" / "claude" / "harness" / ".claude" /
+                 "agents" / "developer.md")
+        self.assertTrue(moved.is_file())
+        self.target = moved
+        self._manifest("karpathy")      # 경로만 새 위치로, 해시는 그대로
+        self.assertEqual(self._blocks(), [], "보관소의 동결 파일을 검사하지 않았다")
+
+        # 그리고 **그 자리에서 바뀌면 여전히 BLOCK 이어야** 한다 — 위 단언만으로는
+        # "아무것도 안 보고 통과" 와 구별되지 않는다 (기준선이 깨끗한 것과 같은 모양).
+        moved.write_text("# developer\n## Simplicity First\n누가 손댔다\n", encoding="utf-8")
+        blocks = self._blocks()
+        self.assertTrue(blocks, "보관소 안의 동결 파일이 바뀌었는데 통과했다")
+        self.assertIn("동결 파일이 바뀌었다", "\n".join(blocks))
+
     def test_매니페스트가_비었으면_공회전하지_않는다(self):
         (self.root / ".claude" / "freeze-manifest.json").write_text(
             json.dumps({"files": {}}), encoding="utf-8")
@@ -983,6 +1017,118 @@ class SsotWitnessFixtureTest(unittest.TestCase):
                       "ssot 제외가 경로류를 통째로 떨궜는데 조용하다")
         self.assertIn("통째로 떨궜다", out)
 
+    def test_표를_거치지_않는_우회도_양의_목록이_잡는다(self):
+        """**가드가 감시 대상의 자기 신고에 의존하면 안 된다** (열 번째 공회전 형태).
+
+        위 테스트는 제외를 **표에 배선해서** 넓힌다 — 그러면 `_SSOT_DROPPED` 장부에
+        기록이 남아 장부 기반 판정도 잡았다. 그러나 표를 **건너뛰고** 직접 `continue`
+        하면 장부는 비고, 판정은 "떨군 게 없으니 결함도 없다" 로 조용히 통과했다
+        (6차 MUST-1 / 61 테스트·lint 전부 침묵).
+
+        그래서 판정의 비교항을 장부가 아니라 **git 모집단**으로 바꿨다. git 추적 목록은
+        검사기가 못 건드리는 독립 사실이라 이 통로가 막힌다.
+
+        변이: 모집단을 다시 `_SSOT_DROPPED` 로 돌리면 이 테스트가 떨어진다.
+        """
+        import subprocess as sp
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+               "PATH": os.environ["PATH"]}
+        self._put_pair("rules/coding-standards.md", "같다\n", "같다\n")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "t"]):
+            r = sp.run(cmd, cwd=str(self.root), capture_output=True, env=env)
+            if r.returncode != 0:
+                self.skipTest(f"git 사용 불가: {r.stderr[:120]}")
+        self.assertEqual(self._blocks(), "", "git 리포 기준선이 더럽다")
+
+        lintpy = self.root / ".claude" / "bin" / "lint.py"
+        src = lintpy.read_text(encoding="utf-8")
+        anchor = "        if _ssot_excluded(rel, scoped):"
+        self.assertEqual(src.count(anchor), 1, "우회를 꽂을 지점을 못 찾았다")
+        lintpy.write_text(src.replace(
+            anchor,
+            '        if scoped and rel.startswith("rules/"):\n'
+            '            continue\n' + anchor, 1), encoding="utf-8")
+        out = self._blocks()
+        self.assertIn(".claude/rules/", out,
+                      "표를 거치지 않는 우회가 경로류를 통째로 비웠는데 조용하다 — "
+                      "판정이 다시 자기 신고에 의존한다")
+        self.assertIn("통째로 떨궜다", out)
+
+    def test_label_과_같은_경로류도_양의_목록에_든다(self):
+        """`docs/adr` 쌍은 `prefix == label` 이라 목록 **전체**가 skip 됐었다.
+
+        그 한 조각 때문에 ADR 23건을 통째로 제외해도 "0 파일 OK" PASS 가 났다
+        (6차 MUST-1 의 두 번째 구멍). 장부 의존과 **겹쳐서** 이중으로 죽어 있었다.
+
+        변이: `if not prefix.startswith(label)` 에 `or prefix == label` 을 되돌리면
+        이 테스트가 떨어진다.
+        """
+        import subprocess as sp
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+               "PATH": os.environ["PATH"]}
+        for side in (self.root, self.lhar):   # main 루트 ↔ …/claude.loope/harness
+            p = side / "docs" / "adr" / "ADR-001-x.md"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("# ADR-001\n같다\n", encoding="utf-8")
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "-c", "commit.gpgsign=false", "commit", "-qm", "t"]):
+            r = sp.run(cmd, cwd=str(self.root), capture_output=True, env=env)
+            if r.returncode != 0:
+                self.skipTest(f"git 사용 불가: {r.stderr[:120]}")
+        self.assertEqual(self._blocks(), "", "git 리포 기준선이 더럽다")
+
+        lintpy = self.root / ".claude" / "bin" / "lint.py"
+        src = lintpy.read_text(encoding="utf-8")
+        old = "    out = {}\n    if not root.exists():\n        return out"
+        self.assertEqual(src.count(old), 1, "수집기를 못 찾았다")
+        lintpy.write_text(src.replace(
+            old, "    out = {}\n    if not root.exists() or not scoped:\n        return out",
+            1), encoding="utf-8")
+        out = self._blocks()
+        self.assertIn("docs/adr/", out,
+                      "docs/adr 를 통째로 떨궜는데 조용하다 — "
+                      "`prefix == label` 경로류가 양의 목록 밖이다")
+
+    def test_SSOT_에_symlink_가_있으면_BLOCK_이다(self):
+        """양쪽에 **같은** 링크를 둬도 BLOCK 이어야 한다.
+
+        sentinel digest 로만 두면 양쪽 값이 같아 drift 가 0 BLOCK 으로 사라진다
+        (실측). 메시지는 "미러에 심볼릭 링크 금지" 인데 동작은 "비대칭이면 금지"
+        였던 적이 있다 — CO·FREEZE 와 정책을 통일한 것이 이 판정이다.
+
+        6차 MUST-3 이 "테스트 0건" 으로 지목한 둘 중 하나다. 손으로 찾은 것을
+        `tests/mutation_guard.py` 가 변경 귀속 범위에서 **자동으로** 다시 찾았다.
+        """
+        for base in (self.root / ".claude", self.loope):
+            (base / "linked.md").symlink_to(base / "keep-target.md")
+            (base / "keep-target.md").write_text("같다\n", encoding="utf-8")
+        out = self._blocks()
+        self.assertIn("symlink", out,
+                      "양쪽에 같은 링크를 뒀더니 조용하다 — 값 비교로 퇴화했다")
+        self.assertIn("심볼릭 링크를 두지 않는다", out)
+
+    def test_git_없이_디스크를_훑으면_조용하지_않다(self):
+        """강등을 **말한다**. CO 는 CONCERN 을 내는데 SSOT 만 침묵하면 같은 위험에
+        정책이 둘이 된다 (5차 SHOULD-1). 이 fixture 는 git 리포가 아니므로 늘 강등이다.
+
+        6차 MUST-3 이 지목한 둘 중 나머지.
+        """
+        res = subprocess.run(
+            [sys.executable, str(self.root / ".claude" / "bin" / "lint.py"),
+             "check", "--only", "LINT-SSOT"],
+            capture_output=True, text=True, cwd=str(self.root))
+        row = next((l for l in res.stdout.splitlines() if "git 추적 목록 없음" in l), "")
+        self.assertTrue(row,
+                        "git 없이 디스크를 훑으면서 아무 말도 하지 않았다 — 조용한 강등이다")
+        # **라벨까지 본다.** 메시지만 단언하면 `CONCERN`→`INFO` 강등이 통과한다 —
+        # 실제로 `tests/mutation_guard.py` 가 그 변이의 생존을 잡아냈다. INFO 는
+        # 보고서에서 눈에 띄지 않으므로 "말했다" 고 하기 어렵다.
+        self.assertIn("| CONCERN |", row,
+                      f"강등이 INFO 로 내려가 묻혔다: {row.strip()[:120]}")
+
     def test_ssot_증인_경계가_실제_검사에서_지켜진다(self):
         """`inside` 는 drift 해도 조용하고, `outside` 는 drift 하면 BLOCK 이다."""
         checked = 0
@@ -1222,3 +1368,66 @@ class OverlayDeclarationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MirrorCommandTest(unittest.TestCase):
+    """`CLAUDE.md` 의 미러 명령이 **검사기와 같은 집합**을 복사하는가 (6차 MUST-2).
+
+    전 판은 `--exclude` 패턴을 출력했고, 그 패턴으로는 "git 이 추적하는 것만" 이라는
+    경계를 **표현할 수 없었다**. 그래서 rsync 가 113 파일을 복사하는 동안 검사기는 83
+    파일만 비교했고, 차집합 30건(`sessions.db`·`verify-loop/*.json`·`.F0xx.lock` 등)이
+    미러 계약 밖에서 흘러 다녔다. 5차 MUST-1 과 같은 클래스 — 그때는 Atlassian 2건만
+    닫고 **메커니즘은 남겼다**.
+
+    **문서의 명령을 실제로 실행한다.** 상수끼리 비교하면 "둘 다 같은 함수를 부른다" 는
+    동어반복이 되고, 문서가 낡아도 통과한다 (여덟 번째 공회전 형태). 여기서는
+    `CLAUDE.md` 에서 명령을 **뽑아** rsync 를 돌리고, 도착한 파일 집합을 본다.
+    """
+
+    def setUp(self):
+        self.lint = _load_lint()
+        if shutil.which("rsync") is None:
+            self.skipTest("rsync 없음")
+
+    def _documented_command(self) -> str:
+        """`CLAUDE.md` 의 미러 명령을 **문서에서 뽑는다** — 테스트가 다시 적지 않는다."""
+        text = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        for block in text.split("```bash")[1:]:
+            body = block.split("```")[0]
+            if "mirror-files" in body and "rsync" in body:
+                return "\n".join(l for l in body.splitlines()
+                                 if l.strip() and not l.lstrip().startswith("#"))
+        self.fail("CLAUDE.md 에 mirror-files 를 쓰는 rsync 명령이 없다 — "
+                  "문서가 코드와 갈렸거나 명령이 사라졌다")
+
+    def test_문서의_미러_명령이_검사기와_같은_집합을_복사한다(self):
+        cmd = self._documented_command()
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "mirror" / ".claude"
+            dest.mkdir(parents=True)
+            # 문서의 목적지를 임시 디렉토리로 바꾼다 — 진짜 loope 를 건드리지 않는다
+            run = cmd.replace("src/harness_template/claude.loope/harness/.claude/",
+                              str(dest) + "/")
+            self.assertIn(str(dest), run, "목적지 치환 실패 — 문서의 경로가 바뀌었다")
+            r = subprocess.run(["bash", "-c", run], cwd=str(_ROOT),
+                               capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, f"문서의 명령이 실패했다:\n{r.stderr[:600]}")
+            copied = {str(q.relative_to(dest)) for q in dest.rglob("*") if q.is_file()}
+
+        expected = set(self.lint._ssot_rel_files(self.lint._CLAUDE_DIR, True))
+        self.assertTrue(expected, "검사기 비교 집합이 비었다 — 대조가 공회전이다")
+        self.assertEqual(copied, expected,
+                         f"문서의 명령과 검사기의 경계가 다르다 — "
+                         f"명령만 복사 {sorted(copied - expected)[:5]} / "
+                         f"검사기만 비교 {sorted(expected - copied)[:5]}")
+
+    def test_미러_대상에_머신_로컬_파일이_없다(self):
+        """경계가 같아도 **그 경계가 틀렸으면** 소용없다.
+
+        5차 MUST-1 이 지목한 구체적 위험을 이름으로 고정한다 — 머신 로컬 Atlassian
+        허용 목록이 loope 로 복사되면 3-C 철칙(허락한 대상에만 쓴다)이 깨진다.
+        """
+        files = set(self.lint._ssot_rel_files(self.lint._CLAUDE_DIR, True))
+        for leak in ("atlassian-targets.json", "settings.json", "settings.local.json",
+                     "host.json", "bin/live_status.sh"):
+            self.assertNotIn(leak, files, f"머신 로컬 파일이 미러 대상이다: {leak}")

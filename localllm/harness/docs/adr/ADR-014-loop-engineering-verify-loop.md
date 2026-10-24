@@ -81,12 +81,13 @@ Loop 2 의 산출(verify-loop 트레이스)이 Loop 4(트레이스→분석→ha
   `.claude/state/verify-loop/`.
 - 신규(Loop 4): `hill_climb.py`, `hill-climb.md` (결정 7).
 - 변경: reviewer.md/qa.md(record 연동), product-cycle.md(검증 단계 훅). 이 ADR, LINT-MR-13(6파일).
-  > 변형 수 서술 주의: 이 ADR 작성 시점엔 loope 1곳이었으나, 계보 승격으로 지금은 **7곳**이
-  > loop 오버레이를 보유한다 (loope·localllm×3·aif·vela). 전체 매트릭스는 **16 변형**이다
-  > (`src/harness_template/` 아래 `harness/` 또는 `.codex/` 를 가진 디렉토리 실측 —
-  > baseline `claude/` 와 `openai/` 포함, `.git` 제외). 디렉토리를 이름만으로 세면
-  > `.git` 이 끼어 하나 더 나온다 — 실제로 이 줄을 고치다 그렇게 틀렸다.
-  > 이 숫자는 세 번 낡았다. 세어서 적고, 센 방법을 함께 적는다.
+  > 변형 수 서술 주의: 이 ADR 작성 시점엔 loope 1곳이었고, 계보 승격으로 7곳까지 늘었다가,
+  > 2026-10-23 축소로 **활성 3곳**(loope·vela·localllm)이 loop 오버레이를 보유한다.
+  > 나머지는 `src/harness_template/deprecated/` 에 있다. **개수를 여기 적지 않는다** —
+  > 세려면 `lint.py` 의 `_VARIANTS_WITH_LOOP` 를 보고, 전체 변형은
+  > `ls -d src/harness_template/*/harness` 로 센다 (디렉토리를 이름만으로 세면
+  > `.git` 이 끼어 하나 더 나온다 — 실제로 이 줄을 고치다 그렇게 틀렸다).
+  > **이 숫자는 네 번 낡았다.** 그래서 이제 적지 않는다.
 - 미채택: LangChain 라이브러리 + Loop 3·4 의 LangSmith 방식 (우리는 로컬 retro/learn/analytics 로 대체).
 - 검증 (테스트 **이름**으로 — 건수는 적지 않는다. 세 번 낡았고 적을 때마다 또 낡는다.
   세려면 `grep -c '^    def test_' tests/test_verify_loop.py`):

@@ -110,7 +110,7 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 | 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| **`claude.loope/`** ★ 활성 | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외 — 목록은 `python3 .claude/bin/lint.py mirror-excludes` 가 `_SCOPE_RULES` 에서 **생성**한다 |
+| **`claude.loope/`** ★ 활성 | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외 — 미러할 목록은 `python3 .claude/bin/lint.py mirror-files` 가 출력한다 (검사기가 비교하는 그 집합) |
 | **`claude.vela.v0.1/`** 활성 | loope 1:1 + Atlassian 오버레이 (MR-15) |
 | **`localllm/`** 활성 | loope 1:1 + d-2 오버레이 (MR-9) |
 | ~~`claude.productmgr/`~~ | deprecated — main − loop 오버레이였다 |
@@ -223,15 +223,22 @@ project-root/
 
 ```bash
 # main → claude.loope (1:1, 로컬 파일 제외)
-# 제외 목록은 **손으로 적지 않는다** — lint.py 가 `_SCOPE_RULES` 에서 생성한다.
-rsync -a $(python3 .claude/bin/lint.py mirror-excludes --scope ssot) \
+# 목록은 **손으로 적지 않는다** — 검사기가 비교하는 그 집합을 코드가 출력한다.
+rsync -a --files-from=<(python3 .claude/bin/lint.py mirror-files --scope ssot) \
   .claude/ src/harness_template/claude.loope/harness/.claude/
 ```
 
-> 전엔 여기에 목록이 손으로 적혀 있었고 **코드와 달랐다** — `design/`·`bin/live_status.sh`·
-> `atlassian-targets.json`·Atlassian 훅 제외가 빠져 있어서, 그대로 돌리면 머신 로컬
-> **Atlassian 허용 목록이 loope 로 복사**된다 (3-C 철칙 위반). 같은 사실의 사본이
-> 셋(코드·ADR 표·이 명령)이었고 셋이 서로 달랐다.
+> **왜 제외가 아니라 포함인가**: `--exclude` 패턴으로는 "git 이 추적하는 것만" 이라는
+> 경계를 **표현할 수 없다**. 그래서 전 판(제외 목록을 내던 서브커맨드)은 표만 읽고 검사기는
+> `표 ∩ git추적` 을 봐서 두 경계가 갈렸다 — 실측 rsync **113** vs 검사기 **83**,
+> 차집합 30건이 전부 gitignored(`sessions.db`·`verify-loop/*.json`·`.F0xx.lock` 등).
+> 포함 목록으로 바꾸니 83 = 83 이다. 소비자가 둘이어도 경계는 하나다.
+>
+> 그 전엔 목록이 아예 손으로 적혀 있었고 **코드와 달랐다** — `atlassian-targets.json`
+> 제외가 빠져 있어서, 그대로 돌리면 머신 로컬 **Atlassian 허용 목록이 loope 로 복사**된다
+> (3-C 철칙 위반). 같은 사실의 사본이 셋이었고 셋이 서로 달랐다.
+>
+> `--delete` 는 쓰지 않는다. loope 에만 있는 파일은 `check_ssot` 이 BLOCK 으로 잡는다.
 
 > ### ⚠️ 하위 변형에 **일괄 복사(rsync·cp)를 쓰지 않는다**
 >

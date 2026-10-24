@@ -39,7 +39,7 @@ loope 는 가장 완전한 스택(auto+design+wiki+orch+hermes+pm+loop)이며 PR
 > 의 rsync) 셋이 서로 달랐다. 지금 적용되는 ssot 제외는 코드가 출력한다:
 >
 > ```bash
-> python3 .claude/bin/lint.py mirror-excludes --scope ssot
+> python3 .claude/bin/lint.py mirror-files --scope ssot   # 미러할 파일 (포함 목록)
 > ```
 >
 > 아래는 **왜** 그것들이 제외인지의 설명이고, 목록 자체가 아니다 (행이 늘면 위 명령이

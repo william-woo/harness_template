@@ -2142,6 +2142,28 @@ _SSOT_UNTRACKED: set = set()
 _SSOT_LINKS: set = set()
 
 
+def _ssot_population(root: Path) -> set:
+    """이 트리에 **무엇이 있는가** — 제외를 적용하기 **전**의 모집단.
+
+    양의 목록(`_SCOPE_REQUIRED`) 판정의 비교항이다. 전엔 `_SSOT_DROPPED`(제외가 떨군
+    것을 스스로 적는 장부)를 썼는데, 그러면 **표를 거치지 않는 우회는 장부에 아무것도
+    남기지 않아** 판정이 통째로 빠져나갔다 (열 번째 공회전 형태, 6차 MUST-1).
+
+    그래서 여기서는 **다시 센다** — 수집기에게 "뭘 떨궜니" 를 묻지 않고 git·파일시스템에
+    "뭐가 있니" 를 묻는다. 경계는 `_ssot_rel_files` 와 같다 (git 추적, 없으면 디스크):
+    경계가 둘이면 약한 쪽으로 샌다는 것이 이 Feature 가 네 번 배운 것이다.
+    """
+    if not root.exists():
+        return set()
+    tracked = _co_tracked(root)
+    if tracked is not None:
+        return set(tracked)
+    # git 이 없는 트리(테스트 fixture 등)에서도 판정은 살아 있어야 한다. 강등 자체는
+    # `_SSOT_UNTRACKED` 가 CONCERN 으로 말한다 — 여기서 또 말하지 않는다.
+    return {str(q.relative_to(root)) for q in root.rglob("*")
+            if q.is_file() and not q.is_symlink()}
+
+
 def _ssot_rel_files(root: Path, scoped: bool = True) -> dict:
     """미러 비교 대상 파일을 상대경로 → 내용 해시로 모은다.
 
@@ -2458,17 +2480,14 @@ def check_freeze() -> list:
     checker = "LINT-FREEZE"
     if not _HT.exists():
         return [_issue(checker, INFO, "src/harness_template/", "템플릿 트리 없음 — 검사 생략")]
-    # 동결 대상이 **활성 트리에 없으면** 이 검사기는 할 일이 없다. 2026-10-23 에
-    # `claude/`(baseline)·`openai/` 를 `deprecated/` 로 옮기면서 그렇게 됐다.
-    # **숨기지 않고 INFO 로 말한다** — 그 스냅샷들은 지금 어느 해시 가드도 받지 않는다.
-    # 되살릴 때는 `deprecated/README.md` 의 절차대로 매니페스트 경로부터 맞춘다.
-    active = [b for b in (_HT / "claude" / "harness", _HT / "openai" / "harness")
-              if b.is_dir()]
-    if not active:
-        return [_issue(checker, INFO, "src/harness_template/deprecated/",
-                       "동결 대상(baseline `claude/` · `openai/`)이 deprecated 로 "
-                       "이동했다 — 해시 가드 없음. 되살리려면 매니페스트 경로를 "
-                       "먼저 맞춘다 (`deprecated/README.md`)")]
+    # **보관(`deprecated/`)과 동결은 서로 끄지 않는다.** 2026-10-23 에 baseline
+    # `claude/`·`openai/` 를 보관소로 옮겼을 때 이 검사기를 INFO 로 내렸는데, 그것은
+    # 틀린 판단이었다 — 매니페스트 53 경로의 해시가 **접두만 바꾸면 53/53 그대로
+    # 맞았다**(실측). 공짜로 유지되는 가드를 포기한 것이다.
+    #
+    # 보관소가 면제받는 것은 **drift 검사**(LINT-MR/CO/SSOT — "뒤처졌는가")뿐이다.
+    # 동결은 반대 방향의 사실("바뀌면 안 된다")이고, 아무도 손대지 않을 보관소야말로
+    # 그 가드가 가장 싸다. 매니페스트가 가리키는 곳에 파일이 있으면 그대로 검사한다.
     if not _FREEZE_MANIFEST.is_file():
         return [_issue(checker, BLOCK, ".claude/freeze-manifest.json",
                        "동결 매니페스트가 없다 — 동결이 강제되지 않는다 (ADR-015 결정 6)")]
@@ -2829,16 +2848,28 @@ def check_ssot() -> list:
         # 리뷰가 drift 로 지목했던 `coding-standards.md` 가 있다.
         # "같은 위험에 검사기마다 경계가 다르면 약한 쪽으로 샌다" 가 여기에도 적용된다.
         seen = {_scope_class(f"{label}{rel}") for rel in main_files}
+        # **모집단은 git 이 센다 — 검사기 자신이 아니다.**
+        #
+        # 전엔 `_SSOT_DROPPED`(제외가 떨군 것을 스스로 적는 장부)로 판정했다. 그러면
+        # **표를 거치지 않는 우회는 장부에 아무것도 남기지 않아** 양의 목록이 그대로
+        # 빠져나간다 — 가드가 **감시 대상의 자기 신고**에 의존한 것이다 (열 번째 공회전
+        # 형태, 6차 MUST-1). 실측: `_ssot_rel_files` 에 `rules/` 를 직접 `continue` 로
+        # 꽂으면 장부는 비고 61 테스트·lint 전부 침묵했다.
+        #
+        # git 추적 목록은 검사기가 못 건드리는 **독립 사실**이라 그 통로가 막힌다.
+        # 오버레이 전용 경로류(`policy/`·`schema/`)와 미추적만 있는 디렉토리는 모집단에
+        # 애초에 없어 **정의상** 면제된다 — 장부가 흉내 내던 것을 모집단이 그냥 만족한다.
+        population = {_scope_class(f"{label}{rel}")
+                      for r in (main_root, var_root)
+                      for rel in _ssot_population(r)}
         for prefix, why in sorted(_SCOPE_REQUIRED.items()):
-            if not prefix.startswith(label) or prefix == label:
+            # `or prefix == label` 이 있었다. 그 한 조각이 `docs/adr` 쌍(label 과 prefix 가
+            # 같다)의 **경로류 전체**를 목록 밖에 뒀고, ADR 23건을 통째로 제외해도
+            # "0 파일 OK" PASS 가 났다 (6차 MUST-1 의 두 번째 구멍).
+            if not prefix.startswith(label):
                 continue        # 이 쌍이 보는 범위 밖
-            # **제외로 빈 것만** 결함이다. 오버레이 전용 경로류(`policy/`·`schema/`)는
-            # main·loope 에 정당하게 없고, 미추적 파일만 있는 디렉토리도 비어 있는 것이
-            # 정상이다. 그래서 "디렉토리가 있는가" 가 아니라 **"제외가 떨궜는가"** 를 본다.
-            dropped = (_SSOT_DROPPED.get(str(main_root), set())
-                       | _SSOT_DROPPED.get(str(var_root), set()))
-            if not any(_scope_class(f"{label}{r}") == prefix for r in dropped):
-                continue
+            if prefix not in population:
+                continue        # 원래 없는 것은 결함이 아니다
             if prefix not in seen:
                 results.append(_issue(checker, BLOCK, prefix,
                                       f"{why} 경로류를 ssot 제외가 통째로 떨궜다 — "
@@ -3583,31 +3614,24 @@ def cmd_report(args) -> int:  # noqa: ARG001
 # 진입점
 # ---------------------------------------------------------------------------
 
-def cmd_mirror_excludes(args) -> int:
-    """미러에서 빼야 할 경로를 `rsync --exclude` 인자로 출력한다.
+def cmd_mirror_files(args) -> int:
+    """미러할 파일을 `rsync --files-from` 입력으로 출력한다 (`.claude/` 기준 상대경로).
 
-    **문서에 제외 목록을 복제하지 않기 위해서다.** `CLAUDE.md` 의 미러링 명령이
-    `--exclude='state/'` 처럼 손으로 적힌 목록을 들고 있었고, 그것이 코드와 어긋났다 —
-    `design/`·`bin/live_status.sh`·`atlassian-targets.json`·훅 제외가 **빠져 있어서**
-    그대로 돌리면 머신 로컬 Atlassian 허용 목록이 loope 로 복사된다 (5차 MUST-1).
-    같은 사실의 세 번째 사본이었다 (코드 · ADR 표 · 이 rsync).
+    **제외 목록이 아니라 포함 목록인 이유**: `--exclude` 패턴으로는 "git 이 추적하는
+    것만" 이라는 경계를 **표현할 수 없다**. 그래서 전 판(제외 목록을 내던 쪽)은 표만 읽고
+    검사기는 `표 ∩ git추적` 을 봐서 두 경계가 갈렸다 — 실측 rsync 113 vs 검사기 83,
+    차집합 30건이 전부 gitignored(`sessions.db`·`verify-loop/*.json`·`.F0xx.lock`·
+    `backup-last.json`·`live-status.md`). 5차 MUST-1 과 같은 클래스이고, 그때는
+    Atlassian 2건만 닫고 **메커니즘은 남겨 뒀다** (6차 MUST-2).
 
-    출력은 `.claude/` 기준 상대 경로다 — 미러 명령이 `.claude/` 를 복사하기 때문이다.
+    이제 출력은 `_ssot_rel_files` 의 키 — **검사기가 비교하는 바로 그 집합**이다.
+    소비자가 둘이어도 경계는 하나다.
+
+    loope 에만 있는 파일은 이 목록으로 지워지지 않지만, 그것은 `check_ssot` 이
+    "loope 에만 존재" BLOCK 으로 이미 잡는다 — `--delete` 를 권하지 않는 이유다.
     """
-    pats = []
-    for rule in _scope_rules(args.scope):
-        pat = rule["pattern"]
-        if rule["kind"] == "anydir":
-            pats.append(pat)
-            continue
-        if rule["kind"] == "suffix":
-            pats.append(f"*{pat}")
-            continue
-        if not pat.startswith(".claude/"):
-            continue        # `.claude/` 밖은 이 명령이 다루는 미러 대상이 아니다
-        pats.append(pat[len(".claude/"):])
-    for pat in sorted(set(pats)):
-        print(f"--exclude={pat}")
+    for rel in sorted(_ssot_rel_files(_CLAUDE_DIR, args.scope == "ssot")):
+        print(rel)
     return 0
 
 
@@ -3654,11 +3678,12 @@ def main() -> int:
     # report
     subparsers.add_parser("report", help="캐시된 마지막 실행 결과 표시")
 
-    # mirror-excludes
-    mx = subparsers.add_parser(
-        "mirror-excludes",
-        help="main→loope 미러에서 빼야 할 경로 (rsync --exclude 인자로 그대로 쓴다)")
-    mx.add_argument("--scope", default="ssot", choices=("ssot", "co", "freeze"))
+    # mirror-files
+    mf = subparsers.add_parser(
+        "mirror-files",
+        help="main→loope 미러 대상 파일 (rsync --files-from 입력). "
+             "검사기가 비교하는 **그 집합**이라 경계가 하나다")
+    mf.add_argument("--scope", default="ssot", choices=("ssot", "co"))
 
     args = parser.parse_args()
 
@@ -3668,8 +3693,8 @@ def main() -> int:
         return cmd_regenerate_index(args)
     elif args.command == "report":
         return cmd_report(args)
-    elif args.command == "mirror-excludes":
-        return cmd_mirror_excludes(args)
+    elif args.command == "mirror-files":
+        return cmd_mirror_files(args)
     else:
         parser.print_help()
         return 0

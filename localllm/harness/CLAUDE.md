@@ -101,7 +101,7 @@ PROCEED / CONSULT / ESCALATE 5초 내 결정. CONSULT 면 Reviewer/Architect 추
 
 | 변형 | 메인 → 변형 미러 정책 |
 |---|---|
-| **`claude.loope/`** ★ 활성 | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외 — 목록은 `python3 .claude/bin/lint.py mirror-excludes` 가 `_SCOPE_RULES` 에서 **생성**한다 |
+| **`claude.loope/`** ★ 활성 | **전체 1:1 미러** (새 invariant). 단 로컬 파일 제외 — 미러할 목록은 `python3 .claude/bin/lint.py mirror-files` 가 출력한다 (검사기가 비교하는 그 집합) |
 | **`claude.vela.v0.1/`** 활성 | loope 1:1 + Atlassian 오버레이 (MR-15) |
 | **`localllm/`** 활성 | loope 1:1 + d-2 오버레이 (MR-9) |
 | ~~`claude.productmgr/`~~ | deprecated — main − loop 오버레이였다 |
@@ -214,11 +214,19 @@ project-root/
 
 ```bash
 # main → claude.loope (1:1, 로컬 파일 제외)
-rsync -a --exclude='__pycache__' --exclude='*.pyc' --exclude='state/' \
-  --exclude='settings.json' --exclude='settings.local.json' --exclude='host.json' \
+# 목록은 **손으로 적지 않는다** — 검사기가 비교하는 그 집합을 코드가 출력한다.
+rsync -a --files-from=<(python3 .claude/bin/lint.py mirror-files --scope ssot) \
   .claude/ src/harness_template/claude.loope/harness/.claude/
-# 하위 변형(productmgr/hermes/orch/...)은 LINT-MR 오버레이 목록 기준으로 제외 미러
+# 하위 변형은 LINT-MR 오버레이 목록 기준으로 제외 미러
 ```
+
+> **왜 제외가 아니라 포함인가**: `--exclude` 패턴으로는 "git 이 추적하는 것만" 이라는
+> 경계를 **표현할 수 없다**. 위에 손으로 적혀 있던 6개 제외에는 `atlassian-targets.json`
+> 이 빠져 있어서, 그대로 돌리면 머신 로컬 **Atlassian 허용 목록이 loope 로 복사**된다
+> (3-C 철칙 위반). 포함 목록으로 바꾸면 rsync 가 복사하는 집합과 검사기가 비교하는
+> 집합이 **같은 하나**가 된다 (실측 83 = 83, 전엔 113 vs 83).
+>
+> `--delete` 는 쓰지 않는다. loope 에만 있는 파일은 `check_ssot` 이 BLOCK 으로 잡는다.
 
 > **F020 meta-dev 오버레이는 폐기** — F021 전면 승격(main≡loope, ADR-015)에 흡수됨.
 

@@ -79,7 +79,11 @@ _ESCALATION_THRESHOLD = 3  # NEEDS REVISION N회 → 에스컬레이션 (reviewe
 
 # grader 종류 (LangChain: 결정론 grader vs LLM-judge grader).
 # 결정론 = 프로그램이 pass/fail 판정 / judge = 에이전트가 판단.
-_DETERMINISTIC = {"lint", "design-review", "qa-browser", "test"}
+# `mutation` 은 `tests/mutation_guard.py` 다 — "이번 변경이 만든 판정 중 아무
+# 테스트도 요구하지 않는 것이 있는가". F021 에서 **세 라운드 연속** 같은 결함이
+# 그 지적을 고친 커밋에서 재발했고, 세 번 다 처방이 산문이라 샜다 (3차 MUST-1 ·
+# 5차 MUST-2 · 6차 MUST-3). 결정론 grader 로 두어 루프에 기록이 남게 한다.
+_DETERMINISTIC = {"lint", "design-review", "qa-browser", "test", "mutation"}
 _JUDGE = {"reviewer", "qa"}
 # 에스컬레이션 처리자 — 재검토를 **수행한** 역할이고, 판정을 낸 역할과 달라야 한다.
 # 루프를 닫지는 못한다 (판정은 judge 의 몫) — 예산을 갱신할 뿐이다 (ADR-024 결정 3).
